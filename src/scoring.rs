@@ -179,8 +179,8 @@ pub fn effective_scores(
     reports
 }
 
-/// Helper: compute raw score from a slice of references.
-fn raw_score_from_refs(attestations: &[&Attestation]) -> i32 {
+/// Compute raw score from a slice of attestation references.
+pub fn raw_score_from_refs(attestations: &[&Attestation]) -> i32 {
     let superseded_ids: HashSet<&str> = attestations
         .iter()
         .filter_map(|a| a.supersedes.as_deref())

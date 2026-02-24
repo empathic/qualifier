@@ -1,6 +1,7 @@
 use chrono::Utc;
 use clap::Args as ClapArgs;
 use std::io::{self, BufRead};
+use std::path::Path;
 
 use crate::attestation::{self, Attestation, Kind};
 use crate::qual_file;
@@ -42,6 +43,10 @@ pub struct Args {
     #[arg(long)]
     pub supersedes: Option<String>,
 
+    /// Explicit .qual file to write to (overrides layout resolution)
+    #[arg(long)]
+    pub file: Option<String>,
+
     /// Read JSONL attestations from stdin (batch mode)
     #[arg(long)]
     pub stdin: bool,
@@ -70,7 +75,8 @@ pub fn run(args: Args) -> crate::Result<()> {
         .or_else(detect_author)
         .unwrap_or_else(|| "unknown".into());
 
-    let qual_path = format!("{}.qual", args.artifact);
+    let qual_path =
+        qual_file::resolve_qual_path(&args.artifact, args.file.as_deref().map(Path::new))?;
 
     let att = attestation::finalize(Attestation {
         artifact: args.artifact.clone(),
@@ -108,8 +114,8 @@ fn run_batch() -> crate::Result<()> {
         let mut att: Attestation = serde_json::from_str(trimmed)?;
         att = attestation::finalize(att);
 
-        let qual_path = format!("{}.qual", att.artifact);
-        qual_file::append(qual_path.as_ref(), &att)?;
+        let qual_path = qual_file::resolve_qual_path(&att.artifact, None)?;
+        qual_file::append(&qual_path, &att)?;
         count += 1;
     }
 

@@ -33,16 +33,13 @@ pub fn run(args: Args) -> crate::Result<()> {
         .as_deref()
         .ok_or_else(|| crate::Error::Validation("artifact is required (or use --all)".into()))?;
 
-    let qual_path = format!("{artifact}.qual");
-    let qual_path = Path::new(&qual_path);
+    let qual_path = qual_file::find_qual_file_for(artifact).ok_or_else(|| {
+        crate::Error::Validation(format!(
+            "No .qual file found containing attestations for '{artifact}'"
+        ))
+    })?;
 
-    if !qual_path.exists() {
-        return Err(crate::Error::Validation(format!(
-            "No .qual file found for '{artifact}'"
-        )));
-    }
-
-    let qf = qual_file::parse(qual_path)?;
+    let qf = qual_file::parse(&qual_path)?;
     compact_one(&qf, args.snapshot, args.dry_run)?;
 
     Ok(())

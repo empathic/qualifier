@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 
 use crate::attestation::{self, Attestation, Kind};
@@ -38,10 +40,12 @@ pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult) {
     (pruned_file, result)
 }
 
-/// Collapse all attestations into a single epoch attestation.
+/// Collapse all attestations into epoch attestations — one per distinct artifact.
 ///
-/// The epoch attestation's score equals the raw score of all non-superseded
-/// attestations, preserving the scoring invariant.
+/// Each epoch attestation's score equals the raw score of its artifact's
+/// non-superseded attestations, preserving the scoring invariant.
+/// For single-artifact `.qual` files this produces one epoch (same as before).
+/// For multi-artifact `.qual` files this produces one epoch per artifact.
 pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
     let before = qual_file.attestations.len();
 
@@ -56,40 +60,52 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
         );
     }
 
-    let raw = scoring::raw_score(&qual_file.attestations);
+    // Group attestations by their artifact field
+    let mut by_artifact: HashMap<&str, Vec<&Attestation>> = HashMap::new();
+    for att in &qual_file.attestations {
+        by_artifact
+            .entry(att.artifact.as_str())
+            .or_default()
+            .push(att);
+    }
 
-    // Collect IDs of all attestations being compacted
-    let epoch_refs: Vec<String> = qual_file
-        .attestations
-        .iter()
-        .map(|a| a.id.clone())
-        .collect();
+    let mut epoch_attestations = Vec::new();
+    for (artifact, atts) in &by_artifact {
+        let raw = scoring::raw_score_from_refs(atts);
+        let epoch_refs: Vec<String> = atts.iter().map(|a| a.id.clone()).collect();
+        let count = atts.len();
 
-    let epoch = attestation::finalize(Attestation {
-        artifact: qual_file.artifact.clone(),
-        kind: Kind::Epoch,
-        score: raw,
-        summary: format!("Compacted from {} attestations", before),
-        detail: None,
-        suggested_fix: None,
-        tags: vec!["epoch".into()],
-        author: "qualifier/compact".into(),
-        created_at: Utc::now(),
-        supersedes: None,
-        epoch_refs: Some(epoch_refs),
-        id: String::new(),
-    });
+        let epoch = attestation::finalize(Attestation {
+            artifact: artifact.to_string(),
+            kind: Kind::Epoch,
+            score: raw,
+            summary: format!("Compacted from {} attestations", count),
+            detail: None,
+            suggested_fix: None,
+            tags: vec!["epoch".into()],
+            author: "qualifier/compact".into(),
+            created_at: Utc::now(),
+            supersedes: None,
+            epoch_refs: Some(epoch_refs),
+            id: String::new(),
+        });
+        epoch_attestations.push(epoch);
+    }
 
+    // Sort by artifact name for deterministic output
+    epoch_attestations.sort_by(|a, b| a.artifact.cmp(&b.artifact));
+
+    let after = epoch_attestations.len();
     let snapshot_file = QualFile {
         path: qual_file.path.clone(),
         artifact: qual_file.artifact.clone(),
-        attestations: vec![epoch],
+        attestations: epoch_attestations,
     };
 
     let result = CompactResult {
         before,
-        after: 1,
-        pruned: before - 1,
+        after,
+        pruned: before - after,
     };
 
     (snapshot_file, result)
@@ -323,5 +339,64 @@ mod tests {
         assert_eq!(result.pruned, 0);
         assert_eq!(snapped.attestations[0].kind, Kind::Epoch);
         assert_eq!(snapped.attestations[0].score, 40);
+    }
+
+    #[test]
+    fn test_snapshot_multi_artifact() {
+        let a1 = make_att("src/a.rs", Kind::Praise, 40, "good");
+        let a2 = make_att("src/a.rs", Kind::Concern, -10, "meh");
+        let b1 = make_att("src/b.rs", Kind::Pass, 20, "ok");
+
+        let qf = QualFile {
+            path: PathBuf::from("src/.qual"),
+            artifact: "src/".into(),
+            attestations: vec![a1, a2, b1],
+        };
+
+        let (snapped, result) = snapshot(&qf);
+
+        assert_eq!(result.before, 3);
+        assert_eq!(result.after, 2); // one epoch per artifact
+        assert_eq!(result.pruned, 1);
+
+        // Find epochs by artifact (sorted by artifact name)
+        let epoch_a = snapped
+            .attestations
+            .iter()
+            .find(|a| a.artifact == "src/a.rs")
+            .unwrap();
+        let epoch_b = snapped
+            .attestations
+            .iter()
+            .find(|a| a.artifact == "src/b.rs")
+            .unwrap();
+
+        assert_eq!(epoch_a.kind, Kind::Epoch);
+        assert_eq!(epoch_a.score, 30); // 40 + -10
+        assert_eq!(epoch_a.epoch_refs.as_ref().unwrap().len(), 2);
+
+        assert_eq!(epoch_b.kind, Kind::Epoch);
+        assert_eq!(epoch_b.score, 20);
+        assert_eq!(epoch_b.epoch_refs.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_prune_multi_artifact() {
+        let a1 = make_att("src/a.rs", Kind::Concern, -10, "issue");
+        let a2 = make_superseding("src/a.rs", 5, &a1.id);
+        let b1 = make_att("src/b.rs", Kind::Pass, 20, "ok");
+
+        let qf = QualFile {
+            path: PathBuf::from("src/.qual"),
+            artifact: "src/".into(),
+            attestations: vec![a1, a2.clone(), b1.clone()],
+        };
+
+        let (pruned, result) = prune(&qf);
+
+        assert_eq!(result.before, 3);
+        assert_eq!(result.after, 2); // a1 pruned, a2 + b1 remain
+        assert!(pruned.attestations.iter().any(|a| a.id == a2.id));
+        assert!(pruned.attestations.iter().any(|a| a.id == b1.id));
     }
 }

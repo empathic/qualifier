@@ -2,7 +2,7 @@ use clap::Args as ClapArgs;
 use std::path::Path;
 use std::process::Command;
 
-use crate::qual_file::detect_vcs;
+use crate::qual_file::{self, detect_vcs};
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -11,15 +11,12 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
-    let qual_path = format!("{}.qual", args.artifact);
-    let qual_path = Path::new(&qual_path);
-
-    if !qual_path.exists() {
-        return Err(crate::Error::Validation(format!(
-            "No .qual file found for '{}'",
+    let qual_path = qual_file::find_qual_file_for(&args.artifact).ok_or_else(|| {
+        crate::Error::Validation(format!(
+            "No .qual file found containing attestations for '{}'",
             args.artifact
-        )));
-    }
+        ))
+    })?;
 
     let vcs = detect_vcs(Path::new("."));
 

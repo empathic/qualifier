@@ -105,8 +105,8 @@ fn test_attest_and_show_roundtrip() {
     assert!(stdout.contains("[+40]") || stdout.contains("[40]"));
     assert!(stdout.contains("lib.rs"));
 
-    // Verify the qual file was created
-    let qual_path = dir.path().join("lib.rs.qual");
+    // Verify the qual file was created (directory-level .qual for root artifacts)
+    let qual_path = dir.path().join(".qual");
     assert!(qual_path.exists(), "qual file should be created");
 
     // Show it back
@@ -438,4 +438,212 @@ fn test_multiple_attestations_accumulate() {
         entry["raw_score"], 20,
         "scores should accumulate: 30 + -10 = 20"
     );
+}
+
+// --- flexible .qual file layout ---
+
+#[test]
+fn test_attest_writes_to_directory_qual_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "src/foo.rs",
+            "--kind",
+            "pass",
+            "--summary",
+            "looks good",
+            "--author",
+            "test@test.com",
+        ],
+    );
+
+    assert_eq!(code, 0, "attest should succeed");
+
+    // Should write to src/.qual, NOT src/foo.rs.qual
+    let dir_qual = dir.path().join("src/.qual");
+    let one_to_one = dir.path().join("src/foo.rs.qual");
+    assert!(dir_qual.exists(), "should create directory-level .qual");
+    assert!(!one_to_one.exists(), "should NOT create 1:1 .qual file");
+}
+
+#[test]
+fn test_attest_respects_existing_1to1_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+    // Pre-create a 1:1 .qual file
+    std::fs::write(dir.path().join("src/foo.rs.qual"), "").unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "src/foo.rs",
+            "--kind",
+            "pass",
+            "--summary",
+            "looks good",
+            "--author",
+            "test@test.com",
+        ],
+    );
+
+    assert_eq!(code, 0);
+
+    // Should write to existing 1:1 file
+    let content = std::fs::read_to_string(dir.path().join("src/foo.rs.qual")).unwrap();
+    assert!(
+        !content.is_empty(),
+        "should have written to existing 1:1 file"
+    );
+
+    // Directory .qual should NOT be created
+    let dir_qual = dir.path().join("src/.qual");
+    assert!(
+        !dir_qual.exists(),
+        "should not create dir .qual when 1:1 exists"
+    );
+}
+
+#[test]
+fn test_attest_file_flag_override() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "src/foo.rs",
+            "--kind",
+            "praise",
+            "--summary",
+            "nice",
+            "--author",
+            "test@test.com",
+            "--file",
+            "custom.qual",
+        ],
+    );
+
+    assert_eq!(code, 0);
+
+    let custom = dir.path().join("custom.qual");
+    assert!(custom.exists(), "--file should write to specified path");
+
+    // Neither default paths should exist
+    assert!(!dir.path().join("src/.qual").exists());
+    assert!(!dir.path().join("src/foo.rs.qual").exists());
+}
+
+#[test]
+fn test_show_finds_attestation_in_directory_qual() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+    // Attest writes to src/.qual by default
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "src/bar.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "30",
+            "--summary",
+            "clean code",
+            "--author",
+            "test@test.com",
+        ],
+    );
+
+    // Show should find it via discovery
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", "src/bar.rs"]);
+
+    assert_eq!(code, 0, "show should find attestation in directory .qual");
+    assert!(stdout.contains("src/bar.rs"));
+    assert!(stdout.contains("30"));
+}
+
+#[test]
+fn test_score_accumulates_across_layouts() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+    // First attestation → goes to src/.qual
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "src/mixed.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "40",
+            "--summary",
+            "good",
+            "--author",
+            "test@test.com",
+        ],
+    );
+
+    // Pre-create a 1:1 file and write a second attestation via --file
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "src/mixed.rs",
+            "--kind",
+            "concern",
+            "--score=-10",
+            "--summary",
+            "needs work",
+            "--author",
+            "test@test.com",
+            "--file",
+            "src/mixed.rs.qual",
+        ],
+    );
+
+    // Score should see both (40 + -10 = 30)
+    let (stdout, _, code) = run_qualifier(dir.path(), &["score", "--format", "json"]);
+    assert_eq!(code, 0);
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let arr = parsed.as_array().unwrap();
+    let entry = arr
+        .iter()
+        .find(|e| e["artifact"] == "src/mixed.rs")
+        .unwrap();
+    assert_eq!(
+        entry["raw_score"], 30,
+        "scores should accumulate across layouts: 40 + -10 = 30"
+    );
+}
+
+#[test]
+fn test_attest_creates_parent_dirs() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // src/deep/ doesn't exist yet
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "src/deep/module.rs",
+            "--kind",
+            "pass",
+            "--summary",
+            "ok",
+            "--author",
+            "test@test.com",
+        ],
+    );
+
+    assert_eq!(code, 0, "attest should create parent dirs as needed");
+    assert!(dir.path().join("src/deep/.qual").exists());
 }

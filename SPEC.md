@@ -284,10 +284,28 @@ qualifier compact src/parser.rs --snapshot  # collapse to single epoch
 A `.qual` file is a UTF-8 encoded file where each line is a complete JSON
 object representing one attestation. This is JSONL (JSON Lines).
 
-**Placement:** `.qual` files live alongside the artifacts they describe.
-A file `src/parser.rs` has its qualifications in `src/parser.rs.qual`.
-A directory-level qualification file (e.g. `src/.qual`) applies to the
-directory as a whole, treated as its own artifact.
+**Placement:** A `.qual` file can contain attestations for any artifacts
+in its directory or subdirectories. The `artifact` field in each JSON
+attestation line is the authoritative identifier — not the filename.
+
+**Layout strategies:**
+
+| Strategy | Example | Pros | Cons |
+|----------|---------|------|------|
+| **Per-directory** (recommended) | `src/.qual` for files in `src/` | Clean tree, fewer files, good merge behavior | Slightly more merge contention than 1:1 |
+| Per-file | `src/parser.rs.qual` | Maximum merge isolation | Noisy file tree, many small files |
+| Per-project | `.qual` at repo root | Simplest setup | High merge contention in teams |
+
+The **recommended** layout is one `.qual` file per directory, containing
+attestations for files directly in that directory. `qualifier attest`
+defaults to this layout, writing to `{dir}/.qual`. If a 1:1 file
+(`{artifact}.qual`) already exists, `qualifier attest` writes there
+instead for backwards compatibility. The `--file` flag overrides the
+target file explicitly.
+
+All layouts are backwards-compatible and can coexist in the same project.
+Discovery scans all `.qual` files regardless of layout, and scoring uses
+the `artifact` field from each attestation line to associate scores.
 
 **Rules:**
 - Each line MUST be a valid JSON object conforming to the attestation schema.
@@ -402,6 +420,9 @@ returns an error.
 When `--score` is omitted, the CLI uses the recommended default score for the
 given kind (see section 2.3.1). For example, `--kind blocker` without
 `--score` defaults to -50.
+
+`--file <path>` writes the attestation to a specific `.qual` file instead
+of using the default layout resolution (see 2.7).
 
 When `--author` is omitted, defaults to the VCS user identity (see 7.4).
 
@@ -637,11 +658,16 @@ author from VCS configuration:
 ## 8. File Discovery
 
 Qualifier discovers `.qual` files by walking the directory tree from the
-project root. It associates each `.qual` file with its artifact by stripping
-the `.qual` suffix:
+project root. Each `.qual` file may contain attestations for multiple
+artifacts. The `artifact` field in each attestation JSON line is the
+authoritative identifier — the file path is not used to determine which
+artifact an attestation belongs to.
 
-- `src/parser.rs.qual` -> artifact `src/parser.rs`
-- `src/.qual` -> artifact `src/` (directory-level)
+File path conventions for reference:
+
+- `src/parser.rs.qual` — 1:1 layout (one file per artifact)
+- `src/.qual` — per-directory layout (one file for all artifacts in `src/`)
+- `.qual` — per-project layout (one file at the repo root)
 
 The project root is determined by searching upward for VCS markers (`.git`,
 `.hg`, `.jj`, `.pijul`, `_FOSSIL_`, `.svn`) or a `qualifier.graph.jsonl`
