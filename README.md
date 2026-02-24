@@ -14,7 +14,7 @@ Qualifier provides an in-repo format for not only tracking code quality at scale
 while you run toward that deadline, but gives a clear way to improve the system
 as you go (or when you have the time again!).
 
-(Mascot is rhe Koalafier climbing a qualifier flag and nibbling it)
+(Mascot is the Koalafier climbing a qualifier flag and nibbling it)
 
 # Thoughts on implementation
 * .qual files are VCS-friendly JSONL qualifier attestations, suggested fixes, etc.
