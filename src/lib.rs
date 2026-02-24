@@ -21,6 +21,9 @@ pub enum Error {
 
     #[error("{0}")]
     Validation(String),
+
+    #[error("{0}")]
+    CheckFailed(String),
 }
 
 /// Library-wide result type.

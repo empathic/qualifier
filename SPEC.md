@@ -54,6 +54,33 @@ correspond to a logical unit in the codebase:
 Qualifier does not enforce a naming scheme. The names are opaque strings.
 Conventions are a project-level decision.
 
+#### 2.1.1 Artifact Renames
+
+Qualifier identifies artifacts by their qualified name. Renaming an artifact
+(e.g., `src/parser.rs` to `src/ast_parser.rs`) requires the following steps:
+
+1. Rename the `.qual` file to match the new artifact name
+   (`src/parser.rs.qual` -> `src/ast_parser.rs.qual`).
+2. Update the `qualifier.graph.jsonl` to reference the new name wherever the
+   old name appeared (both as `artifact` and in `depends_on` arrays).
+3. **Note:** Attestations inside the renamed `.qual` file still contain
+   `"artifact": "src/parser.rs"` in their JSON. Since attestation IDs are
+   content-addressed, changing the `artifact` field would change the ID,
+   breaking supersession chains.
+
+The RECOMMENDED workflow after a rename is:
+
+1. Rename the `.qual` file and update the graph file.
+2. Run `qualifier compact <new-name> --snapshot` to collapse history into a
+   fresh epoch under the new name.
+3. Commit the rename, graph update, and compacted file together.
+
+Alternatively, re-attest the artifact under its new name and let the old
+attestations age out through compaction.
+
+> **Note:** Tooling to automate artifact renames is out of scope for v0.1 but
+> is anticipated as a future `qualifier rename` command.
+
 ### 2.2 Attestation
 
 An **attestation** is a single, immutable quality signal about an artifact.
@@ -71,6 +98,7 @@ Attestations are the atoms of the system. Each attestation records:
 | `author`      | string     | yes      | Who or what created this attestation |
 | `created_at`  | string     | yes      | RFC 3339 timestamp |
 | `supersedes`  | string     | no       | ID of a prior attestation this replaces |
+| `epoch_refs`  | string[]   | no       | IDs of compacted attestations (epoch only; see 2.6.1) |
 | `id`          | string     | yes      | Unique attestation ID (see 2.5) |
 
 ### 2.3 Attestation Kinds
@@ -89,10 +117,40 @@ implementations MUST support them and MAY define additional kinds.
 | `waiver`      | An acknowledged issue explicitly accepted (with rationale) |
 | `epoch`       | Synthetic compaction summary (see 2.6.1) |
 
+#### 2.3.1 Recommended Score Ranges
+
+The following table provides RECOMMENDED default scores for each kind.
+Implementations and users MAY deviate, but SHOULD maintain sign consistency:
+positive kinds SHOULD have positive scores, and negative kinds SHOULD have
+negative scores.
+
+| Kind          | Default Score | Recommended Range | Sign |
+|---------------|---------------|-------------------|------|
+| `pass`        | +20           | +10 to +50        | positive |
+| `fail`        | -20           | -10 to -50        | negative |
+| `blocker`     | -50           | -30 to -100       | negative |
+| `concern`     | -10           | -5 to -30         | negative |
+| `praise`      | +30           | +10 to +50        | positive |
+| `suggestion`  | -5            | -5 to -15         | negative |
+| `waiver`      | +10           | 0 to +30          | positive |
+| `epoch`       | (computed)    | n/a               | any |
+
+When the `--score` flag is omitted from `qualifier attest`, the CLI SHOULD
+use the default score for the given kind. The `--score` flag always takes
+precedence over defaults.
+
+These are guidance, not constraints. Implementations MUST NOT reject an
+attestation solely because its score falls outside the recommended range.
+
 ### 2.4 Supersession
 
 Attestations are immutable once written. To "update" a signal, you write a new
 attestation with a `supersedes` field pointing to the prior attestation's `id`.
+
+The superseding and superseded attestations MUST refer to the same artifact.
+An attestation for artifact A MUST NOT supersede an attestation for artifact B.
+Implementations MUST reject attestations that violate this constraint during
+validation.
 
 When computing scores, a superseded attestation MUST be excluded from the
 calculation. Only the latest attestation in a supersession chain contributes.
@@ -102,9 +160,61 @@ cycles.
 
 ### 2.5 Attestation IDs
 
-An attestation ID is a lowercase hex-encoded BLAKE3 hash of the canonical
-serialization of the attestation (with the `id` field set to the empty string
-during hashing). This makes IDs deterministic and content-addressed.
+An attestation ID is a lowercase hex-encoded BLAKE3 hash of the **Qualifier
+Canonical Form (QCF)** of the attestation, with the `id` field set to the
+empty string `""` during hashing. This makes IDs deterministic and
+content-addressed.
+
+#### 2.5.1 Qualifier Canonical Form (QCF)
+
+To ensure that every implementation — regardless of language or JSON library —
+produces identical bytes for the same attestation, the canonical serialization
+MUST obey the following rules:
+
+1. **Field order.** Fields MUST appear in exactly this order:
+
+   `artifact`, `kind`, `score`, `summary`, `detail`, `suggested_fix`, `tags`,
+   `author`, `created_at`, `supersedes`, `epoch_refs`, `id`
+
+2. **Absent optional fields.** Optional fields whose value is absent (null,
+   None, etc.) MUST be omitted from the serialization entirely. Likewise,
+   `tags` MUST be omitted when the array is empty. The omittable fields are:
+   `detail`, `suggested_fix`, `tags` (when empty), `supersedes`, and
+   `epoch_refs`.
+
+3. **Whitespace.** No whitespace between tokens. No space after `:` or `,`.
+   No trailing newline. The output is a single compact JSON line.
+
+4. **No trailing commas.** Standard JSON — no trailing commas in objects or
+   arrays.
+
+5. **String encoding.** Strings use JSON's standard escaping (RFC 8259
+   Section 7). Implementations MUST NOT add escapes beyond what JSON
+   requires (e.g., do not escape `/`).
+
+6. **Number encoding.** `score` is serialized as a bare integer with no
+   leading zeros, no decimal point, and no exponent notation. Negative
+   values use a leading `-`.
+
+7. **`id` field.** During hashing, `id` MUST be set to `""` (the empty
+   string), not omitted. This is the sole exception to the omission rule:
+   `id` is always present.
+
+**Example.** Given an attestation with `detail: None`, `suggested_fix: None`,
+`tags: []`, `supersedes: None`, `epoch_refs: None`, the QCF is:
+
+```json
+{"artifact":"src/parser.rs","kind":"concern","score":-30,"summary":"Panics on malformed input","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":""}
+```
+
+Note that `detail`, `suggested_fix`, `tags`, `supersedes`, and `epoch_refs`
+are omitted because they are absent/empty.
+
+> **Rationale.** This scheme matches the behavior of the Rust reference
+> implementation's `serde_json::to_string` with `#[serde(skip_serializing_if)]`
+> annotations. It is simpler than RFC 8785 (JSON Canonicalization Scheme) and
+> sufficient for Qualifier's needs. Implementations in other languages MUST
+> replicate this exact byte sequence.
 
 ### 2.6 Compaction
 
@@ -247,7 +357,11 @@ MUST detect and reject cycles.
 
 ## 4. CLI Interface
 
-The CLI binary is named `qualifier` (or `qual` as a short alias).
+The CLI binary is named `qualifier`.
+
+> **Tip:** Users who want a shorter command can create a shell alias
+> (e.g., `alias qual=qualifier`) or a symlink. A future packaging enhancement
+> may ship `qual` as a built-in alias.
 
 ### 4.1 Core Commands
 
@@ -260,6 +374,7 @@ qualifier graph [--format dot|json]        Visualize the dependency graph
 qualifier check [--min-score <n>]          CI gate: exit non-zero if below threshold
 qualifier compact <artifact> [options]     Compact a .qual file (prune/snapshot)
 qualifier init                             Initialize qualifier in a repo
+qualifier blame <artifact>                 Per-line VCS attribution for a .qual file
 ```
 
 ### 4.2 `qualifier attest`
@@ -277,7 +392,16 @@ qualifier attest src/parser.rs \
   --author "alice@example.com"
 ```
 
-When run without `--summary`, opens `$EDITOR` for interactive entry.
+`--summary` is required in non-interactive mode. When omitted, the command
+returns an error.
+
+> **Future:** A planned enhancement will open `$EDITOR` for interactive entry
+> when `--summary` is omitted and stdin is a TTY. This is not yet implemented
+> in the reference implementation.
+
+When `--score` is omitted, the CLI uses the recommended default score for the
+given kind (see section 2.3.1). For example, `--kind blocker` without
+`--score` defaults to -50.
 
 When `--author` is omitted, defaults to the VCS user identity (see 7.4).
 
@@ -288,7 +412,7 @@ qualifier show src/parser.rs
 
   src/parser.rs
   Raw score:       10
-  Effective score: -20 (limited by lib/crypto @ -20)
+  Effective score: -20 (limited by lib/crypto)
 
   Attestations (2):
     [-30] concern  "Panics on malformed input"        alice  2026-02-24
@@ -302,9 +426,9 @@ qualifier score
 
   ARTIFACT              RAW    EFF   STATUS
   lib/crypto            -20    -20   ██░░░░░░░░  blocker
-  lib/auth               60    -20   ██░░░░░░░░  limited by lib/crypto
+  lib/auth               60    -20   ██░░░░░░░░  blocker
   lib/http               80     80   ████████░░  healthy
-  bin/server             45    -20   ██░░░░░░░░  limited by lib/crypto
+  bin/server             45    -20   ██░░░░░░░░  blocker
 ```
 
 ### 4.5 `qualifier check`
@@ -367,6 +491,53 @@ qualifier init
   No VCS detected — skipping merge configuration (see SPEC.md section 7)
 ```
 
+### 4.9 Configuration
+
+Qualifier uses layered configuration. Each layer overrides the one below it.
+Precedence (highest wins):
+
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 (highest) | CLI flags | `--graph path/to/graph.jsonl` |
+| 2 | Environment variables | `QUALIFIER_GRAPH`, `QUALIFIER_AUTHOR`, `QUALIFIER_FORMAT`, `QUALIFIER_MIN_SCORE` |
+| 3 | Project config | `.qualifier.toml` in the project root |
+| 4 | User config | `~/.config/qualifier/config.toml` |
+| 5 (lowest) | Built-in defaults | See below |
+
+**Configuration keys:**
+
+| Key         | CLI flag       | Env var              | Default |
+|-------------|----------------|----------------------|---------|
+| `graph`     | `--graph`      | `QUALIFIER_GRAPH`    | `qualifier.graph.jsonl` |
+| `author`    | `--author`     | `QUALIFIER_AUTHOR`   | VCS identity (see 7.4) |
+| `format`    | `--format`     | `QUALIFIER_FORMAT`   | `human` |
+| `min_score` | `--min-score`  | `QUALIFIER_MIN_SCORE`| `0` |
+
+**Example `.qualifier.toml`:**
+
+```toml
+graph = "build/deps.graph.jsonl"
+author = "ci-bot@example.com"
+format = "human"
+min_score = 0
+```
+
+### 4.10 `qualifier blame`
+
+Delegates to the underlying VCS blame/annotate command for the artifact's
+`.qual` file. This shows who added each attestation and when.
+
+```
+qualifier blame src/parser.rs
+```
+
+VCS support:
+- **Git:** delegates to `git blame src/parser.rs.qual`
+- **Mercurial:** delegates to `hg annotate src/parser.rs.qual`
+- **Other:** prints guidance to run the VCS blame command manually
+
+See also Section 7.3.
+
 ## 5. Library API
 
 The `qualifier` crate exposes its library API from `src/lib.rs`. Library
@@ -376,10 +547,14 @@ avoid pulling in CLI dependencies.
 ```rust
 // qualifier::attestation
 pub struct Attestation { /* fields per spec section 2.2 */ }
-pub enum Kind { Pass, Fail, Blocker, Concern, Praise, Suggestion, Waiver, Custom(String) }
+pub enum Kind { Pass, Fail, Blocker, Concern, Praise, Suggestion, Waiver, Epoch, Custom(String) }
+pub fn generate_id(attestation: &Attestation) -> String;
+pub fn validate(attestation: &Attestation) -> Vec<String>;
+pub fn validate_supersession_targets(attestations: &[Attestation]) -> Vec<String>;
+pub fn finalize(attestation: Attestation) -> Attestation;
 
 // qualifier::qual_file
-pub struct QualFile { pub path: PathBuf, pub attestations: Vec<Attestation> }
+pub struct QualFile { pub path: PathBuf, pub artifact: String, pub attestations: Vec<Attestation> }
 pub fn parse(path: &Path) -> Result<QualFile>;
 pub fn append(path: &Path, attestation: &Attestation) -> Result<()>;
 pub fn discover(root: &Path) -> Result<Vec<QualFile>>;
@@ -419,7 +594,7 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
 
 `.qual` files SHOULD be committed to version control. Qualifier is
 VCS-agnostic by design — the append-only JSONL format is friendly to any
-system that tracks text files (Git, Mercurial, Jess, Pijul, Fossil,
+system that tracks text files (Git, Mercurial, Jujutsu, Pijul, Fossil,
 Subversion, etc.).
 
 ### 7.1 General Principles
@@ -457,7 +632,7 @@ author from VCS configuration:
 
 - Git: `git config user.email`
 - Mercurial: `hg config ui.username`
-- Fallback: `$USER@$(hostname)` or prompts
+- Fallback: `$USER@localhost`
 
 ## 8. File Discovery
 
@@ -485,31 +660,38 @@ friends behind a default `cli` feature so they don't pollute library builds.
 ```toml
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:comfy-table"]
+cli = ["dep:clap", "dep:comfy-table", "dep:figment"]
 ```
 
 ```
 qualifier/
 ├── Cargo.toml
-├── src/
-│   ├── lib.rs              # Public library API — re-exports core modules
-│   ├── attestation.rs      # Attestation type, ID generation, validation
-│   ├── qual_file.rs        # .qual file parsing, appending, discovery
-│   ├── graph.rs            # Dependency graph loading, cycle detection
-│   ├── scoring.rs          # Raw + effective score computation
-│   └── bin/                # CLI binary (behind "cli" feature)
-│       ├── main.rs
-│       ├── commands/       # One module per subcommand
-│       │   ├── attest.rs
-│       │   ├── show.rs
-│       │   ├── score.rs
-│       │   ├── ls.rs
-│       │   ├── check.rs
-│       │   ├── graph.rs
-│       │   └── init.rs
-│       └── output.rs       # Human + JSON output formatting
-├── qualifier.graph.jsonl   # Example / self-hosted graph
-└── SPEC.md                 # This document
+├── SPEC.md                    # This document
+├── qualifier.graph.jsonl      # Example / self-hosted graph
+└── src/
+    ├── lib.rs                 # Public library API — re-exports core modules
+    ├── attestation.rs         # Attestation type, ID generation, validation
+    ├── qual_file.rs           # .qual file parsing, appending, discovery
+    ├── graph.rs               # Dependency graph loading, cycle detection
+    ├── scoring.rs             # Raw + effective score computation
+    ├── compact.rs             # Compaction: prune and snapshot operations
+    ├── bin/
+    │   └── qualifier.rs       # Binary entry point (calls cli::run)
+    └── cli/                   # CLI module (behind "cli" feature)
+        ├── mod.rs             # Clap parser, command dispatch
+        ├── config.rs          # Configuration loading (figment)
+        ├── output.rs          # Human + JSON output formatting
+        └── commands/          # One module per subcommand
+            ├── mod.rs
+            ├── attest.rs
+            ├── show.rs
+            ├── score.rs
+            ├── ls.rs
+            ├── check.rs
+            ├── compact.rs
+            ├── graph_cmd.rs
+            ├── init.rs
+            └── blame.rs
 ```
 
 Library consumers disable the default feature to avoid CLI dependencies:
@@ -529,7 +711,8 @@ qualifier = { version = "0.1", default-features = false }
 | `blake3`    | Attestation ID hashing |
 | `chrono`    | RFC 3339 timestamp handling |
 | `petgraph`  | Dependency graph representation and cycle detection |
-| `comfy-table` or `tabled` | Terminal table output |
+| `comfy-table` | Terminal table output |
+| `figment`   | Layered configuration (TOML + env vars) |
 
 ## 11. Future Considerations (Out of Scope for v0.1)
 
@@ -544,6 +727,10 @@ These are explicitly **not** part of v0.1 but are anticipated:
 - **Remote qualifier servers:** Aggregation across multiple repositories.
 - **Decay:** Time-based score decay to encourage re-qualification of stale
   attestations.
+- **`qualifier rename`:** Automated artifact rename with `.qual` file and
+  graph migration (see section 2.1.1).
+- **`$EDITOR` interactive mode:** Open an editor for attestation creation
+  when `--summary` is omitted (see section 4.2).
 
 ---
 

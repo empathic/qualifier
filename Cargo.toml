@@ -11,7 +11,7 @@ categories = ["command-line-utilities", "development-tools"]
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:comfy-table"]
+cli = ["dep:clap", "dep:comfy-table", "dep:figment"]
 
 [dependencies]
 blake3 = "1"
@@ -24,7 +24,12 @@ thiserror = "2"
 # CLI-only dependencies
 clap = { version = "4", features = ["derive"], optional = true }
 comfy-table = { version = "7", optional = true }
+figment = { version = "0.10", features = ["toml", "env"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 [[bin]]
 name = "qualifier"
+path = "src/bin/qualifier.rs"
 required-features = ["cli"]
