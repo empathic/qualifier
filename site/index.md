@@ -250,4 +250,4 @@ Qualifier is a Rust crate with a library and a CLI:
 | `qualifier` crate  | Library API for tools, agents, and editor plugins          |
 | Dependency graph   | `qualifier.graph.jsonl` — feeds the propagation engine     |
 
-See [Format](/format/) for the file spec, [CLI](/cli/) for command reference, or the full [Specification](/spec/).
+See [Format](/format/) for the file spec or [CLI](/cli/) for command reference.

@@ -1,5 +1,5 @@
-// Qualifier Score Explorer — interactive dependency graph visualization
-// Uses D3.js + dagre-d3 for graph layout and rendering
+// Qualifier Scoring Page — table, graph, and cross-linking
+// Three outputs: algorithm explanation (static HTML), score table, dependency graph
 
 (function () {
   "use strict";
@@ -7,62 +7,52 @@
   var QC = window.QualifierCore;
   if (!QC) return;
 
-  var canvas = document.getElementById("scoring-canvas");
-
+  // --- DOM references ---
   var graphInput = document.getElementById("graph-input");
   var qualInput = document.getElementById("qual-input");
   var computeBtn = document.getElementById("scoring-compute-btn");
-  if (!canvas || !graphInput || !qualInput || !computeBtn) return;
+  var tableContainer = document.getElementById("score-table-container");
+  var canvas = document.getElementById("scoring-canvas");
+  if (!graphInput || !qualInput || !computeBtn || !tableContainer || !canvas) return;
 
+  // --- State ---
   var currentScores = null;
   var currentAdj = null;
+  var expandedArtifact = null;
   var svgEl = null;
   var gEl = null;
   var zoomBehavior = null;
-  var detailPanel = null;
 
-  // --- Colors ---
-  var COLORS = {
-    healthy: { fill: "#34d39920", stroke: "#34d399" },
-    ok: { fill: "#34d39920", stroke: "#34d399" },
-    concern: { fill: "#f8717120", stroke: "#f87171" },
-    blocker: { fill: "#f8717120", stroke: "#f87171" },
-    unqualified: { fill: "#1b1f2a", stroke: "#6b7394" },
-  };
-
-  function getColor(status) {
-    return COLORS[status] || COLORS.unqualified;
+  // --- Helpers ---
+  function escapeHtml(s) {
+    if (!s) return "";
+    return s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   }
 
-  // --- Score bar as small rectangles ---
-  function miniBar(score, width, height) {
-    width = width || 60;
-    height = height || 6;
-    var normalized = Math.round(((score + 100) / 200) * width);
-    normalized = Math.max(0, Math.min(width, normalized));
-    var svg = "";
-    svg +=
-      '<rect x="0" y="0" width="' +
-      width +
-      '" height="' +
-      height +
-      '" fill="#1b1f2a" stroke="#252a3866" stroke-width="0.5"/>';
-    if (normalized > 0) {
-      var barColor = score >= 0 ? "#34d399" : "#f87171";
-      svg +=
-        '<rect x="0" y="0" width="' +
-        normalized +
-        '" height="' +
-        height +
-        '" fill="' +
-        barColor +
-        '" opacity="0.6"/>';
-    }
-    return svg;
+  function escapeAttr(s) {
+    if (!s) return "";
+    return s
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
-  // --- Render graph ---
-  function render() {
+  function statusBadgeClass(status) {
+    if (status === "blocker" || status === "concern") return "negative";
+    if (status === "ok" || status === "healthy") return "positive";
+    return "neutral";
+  }
+
+  // ============================================================
+  // COMPUTE — main entry point
+  // ============================================================
+
+  function compute() {
     var graphText = graphInput.value;
     var qualText = qualInput.value;
 
@@ -73,15 +63,242 @@
 
     currentScores = scores;
     currentAdj = adj;
+    expandedArtifact = null;
 
-    // Clear existing
+    renderTable(scores);
+    renderGraph(scores, adj);
+  }
+
+  // ============================================================
+  // SCORE TABLE — the star of the page
+  // ============================================================
+
+  function renderTable(scores) {
+    var entries = [];
+    for (var art in scores) {
+      var s = scores[art];
+      entries.push({
+        artifact: art,
+        raw: s.raw,
+        effective: s.effective,
+        status: QC.scoreStatus(s.effective),
+        limitingPath: s.limitingPath,
+        attestations: s.attestations,
+      });
+    }
+
+    // Sort: effective ascending, then raw ascending
+    entries.sort(function (a, b) {
+      if (a.effective !== b.effective) return a.effective - b.effective;
+      return a.raw - b.raw;
+    });
+
+    var html = '<table class="score-table">';
+    html += "<thead><tr>";
+    html += "<th>Artifact</th>";
+    html += '<th class="col-score">Raw</th>';
+    html += '<th class="col-score">Eff</th>';
+    html += "<th>Status</th>";
+    html += '<th class="col-bar"></th>';
+    html += "</tr></thead>";
+    html += "<tbody>";
+
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      var rawClass = e.raw > 0 ? "positive" : e.raw < 0 ? "negative" : "zero";
+      var effClass =
+        e.effective > 0 ? "positive" : e.effective < 0 ? "negative" : "zero";
+      var rawSign = e.raw > 0 ? "+" : "";
+      var effSign = e.effective > 0 ? "+" : "";
+      var badgeClass = statusBadgeClass(e.status);
+      var barPct = Math.round(((e.effective + 100) / 200) * 100);
+      var barClass = e.effective >= 0 ? "positive" : "negative";
+
+      html +=
+        '<tr class="st-row" data-artifact="' +
+        escapeAttr(e.artifact) +
+        '">';
+
+      // Artifact name + limiting path hint
+      html += '<td class="st-artifact">' + escapeHtml(e.artifact);
+      if (e.limitingPath) {
+        html +=
+          '<div class="st-limited-by">limited by ' +
+          escapeHtml(e.limitingPath[0]) +
+          "</div>";
+      }
+      html += "</td>";
+
+      // Raw score
+      html +=
+        '<td class="st-score ' + rawClass + '">' + rawSign + e.raw + "</td>";
+
+      // Effective score
+      html +=
+        '<td class="st-score ' +
+        effClass +
+        '">' +
+        effSign +
+        e.effective +
+        "</td>";
+
+      // Status badge
+      html +=
+        '<td class="st-status"><span class="kind-badge ' +
+        badgeClass +
+        '">' +
+        e.status +
+        "</span></td>";
+
+      // Bar
+      html +=
+        '<td class="st-bar"><span class="st-bar-track"><span class="st-bar-fill ' +
+        barClass +
+        '" style="width:' +
+        barPct +
+        '%"></span></span></td>';
+
+      html += "</tr>";
+    }
+
+    html += "</tbody></table>";
+    tableContainer.innerHTML = html;
+
+    // Wire click listeners
+    var rows = tableContainer.querySelectorAll("tr.st-row");
+    for (var j = 0; j < rows.length; j++) {
+      rows[j].addEventListener(
+        "click",
+        (function (row) {
+          return function () {
+            toggleExpansion(row.getAttribute("data-artifact"));
+          };
+        })(rows[j]),
+      );
+    }
+  }
+
+  // ============================================================
+  // ROW EXPANSION — inline attestation detail
+  // ============================================================
+
+  function toggleExpansion(artifact) {
+    // Remove any existing expansion row
+    var existing = tableContainer.querySelector("tr.st-expansion-row");
+    if (existing) existing.remove();
+
+    // Remove highlight from all rows
+    var allRows = tableContainer.querySelectorAll("tr.st-row");
+    for (var i = 0; i < allRows.length; i++) {
+      allRows[i].classList.remove("st-row-highlight");
+    }
+
+    // If clicking the same row, just collapse
+    if (expandedArtifact === artifact) {
+      expandedArtifact = null;
+      return;
+    }
+
+    expandedArtifact = artifact;
+
+    // Find the target row
+    var targetRow = null;
+    for (var k = 0; k < allRows.length; k++) {
+      if (allRows[k].getAttribute("data-artifact") === artifact) {
+        targetRow = allRows[k];
+        break;
+      }
+    }
+    if (!targetRow) return;
+    targetRow.classList.add("st-row-highlight");
+
+    // Build expansion content
+    var s = currentScores[artifact];
+    var html = '<div class="st-expansion">';
+    html +=
+      '<div class="st-expansion-title">Attestations for ' +
+      escapeHtml(artifact) +
+      "</div>";
+
+    if (!s || s.attestations.length === 0) {
+      html += '<p class="st-no-attestations">No attestations recorded.</p>';
+    } else {
+      for (var j = 0; j < s.attestations.length; j++) {
+        var a = s.attestations[j];
+        var scoreClass = a.score >= 0 ? "positive" : "negative";
+        var sign = a.score >= 0 ? "+" : "";
+
+        html += '<div class="st-attestation">';
+        html +=
+          '<span class="st-attestation-score ' +
+          scoreClass +
+          '">[' +
+          sign +
+          a.score +
+          "]</span>";
+        html +=
+          '<span class="kind-badge ' +
+          (a.score >= 0 ? "positive" : "negative") +
+          '">' +
+          escapeHtml(a.kind) +
+          "</span>";
+        html +=
+          '<span class="st-attestation-summary">' +
+          escapeHtml(a.summary) +
+          "</span>";
+        html +=
+          '<span class="st-attestation-meta">' +
+          escapeHtml(a.author || "") +
+          " &middot; " +
+          escapeHtml((a.created_at || "").substring(0, 10)) +
+          "</span>";
+
+        if (a.suggested_fix) {
+          html +=
+            '<div class="st-attestation-fix">Fix: ' +
+            escapeHtml(a.suggested_fix) +
+            "</div>";
+        }
+        html += "</div>";
+      }
+    }
+    html += "</div>";
+
+    // Create and insert expansion row
+    var tr = document.createElement("tr");
+    tr.className = "st-expansion-row";
+    var td = document.createElement("td");
+    td.setAttribute("colspan", "5");
+    td.innerHTML = html;
+    tr.appendChild(td);
+    targetRow.parentNode.insertBefore(tr, targetRow.nextSibling);
+  }
+
+  // ============================================================
+  // GRAPH → TABLE LINKING
+  // ============================================================
+
+  function scrollToAndHighlight(artifact) {
+    toggleExpansion(artifact);
+
+    var allRows = tableContainer.querySelectorAll("tr.st-row");
+    for (var i = 0; i < allRows.length; i++) {
+      if (allRows[i].getAttribute("data-artifact") === artifact) {
+        allRows[i].scrollIntoView({ behavior: "smooth", block: "center" });
+        break;
+      }
+    }
+  }
+
+  // ============================================================
+  // DEPENDENCY GRAPH — dagre-d3 visualization
+  // ============================================================
+
+  function renderGraph(scores, adj) {
+    // Clear existing canvas content (keep controls)
     var controlsEl = canvas.querySelector(".scoring-controls");
     canvas.innerHTML = "";
     if (controlsEl) canvas.appendChild(controlsEl);
-    if (detailPanel) {
-      detailPanel.remove();
-      detailPanel = null;
-    }
 
     // Create SVG
     svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -114,7 +331,7 @@
     for (var art in scores) {
       var s = scores[art];
       var status = QC.scoreStatus(s.effective);
-      var color = getColor(status);
+      var color = QC.statusColor(status);
       g.setNode(art, {
         label: art,
         raw: s.raw,
@@ -160,16 +377,15 @@
     var renderer = new dagreD3.render();
     renderer(gEl, g);
 
-    // Add score labels and mini bars to nodes
+    // Add score labels to nodes
     gEl.selectAll("g.node").each(function (v) {
-      var node = d3.select(this);
-      var s = scores[v];
-      if (!s) return;
-      var status = QC.scoreStatus(s.effective);
-      var scoreColor = s.effective >= 0 ? "#34d399" : "#f87171";
+      var nodeEl = d3.select(this);
+      var sc = scores[v];
+      if (!sc) return;
+      var scoreColor = sc.effective >= 0 ? "#34d399" : "#f87171";
 
       // Score text below the label
-      node
+      nodeEl
         .append("text")
         .attr("x", 0)
         .attr("y", 14)
@@ -177,12 +393,10 @@
         .attr("font-family", "JetBrains Mono, monospace")
         .attr("font-size", "9px")
         .attr("fill", scoreColor)
-        .text(
-          "raw: " + s.raw + "  eff: " + s.effective,
-        );
+        .text("raw: " + sc.raw + "  eff: " + sc.effective);
 
-      // Status label
-      node
+      // Status label above
+      nodeEl
         .append("text")
         .attr("x", 0)
         .attr("y", -14)
@@ -191,14 +405,13 @@
         .attr("font-size", "8px")
         .attr("font-weight", "600")
         .attr("letter-spacing", "0.06em")
-        .attr("text-transform", "uppercase")
         .attr("fill", scoreColor)
-        .text(status.toUpperCase());
+        .text(QC.scoreStatus(sc.effective).toUpperCase());
     });
 
-    // Click handler for detail panel
+    // Click handler → scroll to table row
     gEl.selectAll("g.node").on("click", function (event, v) {
-      showDetail(v);
+      scrollToAndHighlight(v);
     });
 
     // Zoom
@@ -218,7 +431,7 @@
     if (!svgEl || !gEl) return;
     var bbox = gEl.node().getBBox();
     var containerWidth = canvas.clientWidth;
-    var containerHeight = canvas.clientHeight - 40; // controls bar
+    var containerHeight = canvas.clientHeight - 40;
     if (containerWidth <= 0 || containerHeight <= 0) return;
 
     var scale = Math.min(
@@ -233,88 +446,16 @@
     d3.select(svgEl)
       .transition()
       .duration(300)
-      .call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+      .call(
+        zoomBehavior.transform,
+        d3.zoomIdentity.translate(tx, ty).scale(scale),
+      );
   }
 
-  // --- Detail panel ---
-  function showDetail(artifact) {
-    if (!currentScores || !currentScores[artifact]) return;
-    var s = currentScores[artifact];
+  // ============================================================
+  // CONTROLS
+  // ============================================================
 
-    if (detailPanel) detailPanel.remove();
-    detailPanel = document.createElement("div");
-    detailPanel.className = "scoring-detail";
-
-    var html = '<h3>' + escapeHtml(artifact) + "</h3>";
-    html += '<div class="score-summary">';
-    html += "Raw: " + s.raw + " &middot; Effective: " + s.effective;
-    if (s.limitingPath) {
-      html +=
-        '<br><span style="color: var(--fail); font-size: 0.78rem;">Limited by ' +
-        escapeHtml(s.limitingPath[0]) +
-        "</span>";
-    }
-    html += "</div>";
-
-    if (s.attestations.length === 0) {
-      html += '<p style="color: var(--flint); font-size: 0.88rem;">No attestations.</p>';
-    } else {
-      for (var i = 0; i < s.attestations.length; i++) {
-        var a = s.attestations[i];
-        var scoreClass = a.score >= 0 ? "positive" : "negative";
-        var sign = a.score >= 0 ? "+" : "";
-        html += '<div class="attestation-item">';
-        html +=
-          '<span class="attestation-score ' +
-          scoreClass +
-          '">[' +
-          sign +
-          a.score +
-          "]</span> ";
-        html +=
-          '<span class="kind-badge ' +
-          (a.score >= 0 ? "positive" : "negative") +
-          '">' +
-          escapeHtml(a.kind) +
-          "</span>";
-        html +=
-          '<div class="attestation-summary">' +
-          escapeHtml(a.summary) +
-          "</div>";
-        html +=
-          '<div class="attestation-meta">' +
-          escapeHtml(a.author || "") +
-          " &middot; " +
-          escapeHtml((a.created_at || "").substring(0, 10)) +
-          "</div>";
-        if (a.suggested_fix) {
-          html +=
-            '<div class="attestation-meta" style="color: var(--accent); margin-top: 0.2rem;">Fix: ' +
-            escapeHtml(a.suggested_fix) +
-            "</div>";
-        }
-        html += "</div>";
-      }
-    }
-
-    // Close button
-    html +=
-      '<button style="position:absolute;top:0.5rem;right:0.75rem;background:none;border:none;font-size:1.2rem;cursor:pointer;color:var(--flint);" onclick="this.parentElement.remove()">&times;</button>';
-
-    detailPanel.innerHTML = html;
-    canvas.appendChild(detailPanel);
-  }
-
-  function escapeHtml(s) {
-    if (!s) return "";
-    return s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
-  // --- Wire controls ---
   function wireControls() {
     var zoomIn = document.getElementById("scoring-zoom-in");
     var zoomOut = document.getElementById("scoring-zoom-out");
@@ -342,12 +483,15 @@
       });
   }
 
-  // --- Init ---
-  computeBtn.addEventListener("click", render);
+  // ============================================================
+  // INIT
+  // ============================================================
+
+  computeBtn.addEventListener("click", compute);
   wireControls();
 
-  // Auto-render on load with default data
+  // Auto-compute on load with example data
   if (graphInput.value.trim() && qualInput.value.trim()) {
-    setTimeout(render, 100);
+    setTimeout(compute, 100);
   }
 })();

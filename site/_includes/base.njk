@@ -15,20 +15,13 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0/lib/addon-fit.min.js"></script>
     <link rel="stylesheet" href="/css/playground.css" />
     {% endif %}
-    {% if nav == "scoring" %}
-    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dagre-d3@0.6.4/dist/dagre-d3.min.js"></script>
-    <link rel="stylesheet" href="/css/scoring.css" />
-    {% endif %}
   </head>
   <body>
     <nav class="site-nav">
       <a href="/" class="nav-logo">Qualifier</a>
       <div class="nav-links">
         <a href="/format/"{% if nav == "format" %} aria-current="page"{% endif %}>Format</a>
-        <a href="/spec/"{% if nav == "spec" %} aria-current="page"{% endif %}>Spec</a>
         <a href="/cli/"{% if nav == "cli" %} aria-current="page"{% endif %}>CLI</a>
-        <a href="/scoring/"{% if nav == "scoring" %} aria-current="page"{% endif %}>Scoring</a>
         <a href="{{ site.repo }}" class="nav-github">GitHub</a>
       </div>
     </nav>

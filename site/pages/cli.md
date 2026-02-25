@@ -165,6 +165,3 @@ Qualifier uses layered configuration (highest wins):
 | 4        | User config        | `~/.config/qualifier/config.toml`          |
 | 5        | Built-in defaults  |                                            |
 
-## Full specification
-
-The complete CLI specification is in the [Spec](/spec/).

@@ -111,6 +111,3 @@ Qualifier consumes a dependency graph as `qualifier.graph.jsonl`:
 
 The graph MUST be a DAG. Cycles are rejected.
 
-## Full specification
-
-The complete format specification is in the [Spec](/spec/).

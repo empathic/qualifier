@@ -194,6 +194,17 @@
     return filled + empty;
   }
 
+  // --- Status color ---
+  function statusColor(status) {
+    switch (status) {
+      case "healthy": return { fill: "#34d39920", stroke: "#34d399" };
+      case "ok":      return { fill: "#34d39920", stroke: "#34d399" };
+      case "concern": return { fill: "#f8717120", stroke: "#f87171" };
+      case "blocker": return { fill: "#f8717120", stroke: "#f87171" };
+      default:        return { fill: "#1b1f2a",   stroke: "#6b7394" };
+    }
+  }
+
   // --- Export ---
   window.QualifierCore = {
     parseQualFile: parseQualFile,
@@ -206,5 +217,6 @@
     effectiveScores: effectiveScores,
     scoreStatus: scoreStatus,
     scoreBar: scoreBar,
+    statusColor: statusColor,
   };
 })();
