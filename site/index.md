@@ -88,43 +88,93 @@ Qualifier gives you a structured, VCS-friendly way to **record what you know abo
 ## How scores propagate
 
 <div class="propagation-figure">
-<svg class="propagation-svg" viewBox="0 0 700 220" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Score propagation diagram showing how a low-quality dependency drags down a high-quality binary">
-  <!-- lib/crypto: raw -20, eff -20 (blocker) -->
-  <rect x="0" y="88" width="130" height="50" fill="#f8717115" stroke="#f87171" stroke-width="1.5" rx="2"/>
-  <text x="65" y="108" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" fill="#d0d5e3">lib/crypto</text>
-  <text x="65" y="126" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#f87171">raw: -20  eff: -20</text>
-  <!-- lib/http: raw 50, eff 50 (healthy) -->
-  <rect x="0" y="168" width="130" height="50" fill="#34d39915" stroke="#34d399" stroke-width="1.5" rx="2"/>
-  <text x="65" y="188" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" fill="#d0d5e3">lib/http</text>
-  <text x="65" y="206" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#34d399">raw: 50  eff: 50</text>
-  <!-- src/auth.rs: raw -30, eff -30 -->
-  <rect x="220" y="48" width="130" height="50" fill="#f8717115" stroke="#f87171" stroke-width="1.5" rx="2"/>
-  <text x="285" y="68" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" fill="#d0d5e3">src/auth.rs</text>
-  <text x="285" y="86" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#f87171">raw: -30  eff: -30</text>
-  <!-- src/parser.rs: raw 5, eff 5 -->
-  <rect x="220" y="168" width="130" height="50" fill="#34d39915" stroke="#34d399" stroke-width="1.5" rx="2"/>
-  <text x="285" y="188" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" fill="#d0d5e3">src/parser.rs</text>
-  <text x="285" y="206" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#34d399">raw: 5  eff: 5</text>
-  <!-- bin/server: raw 50, eff -30 -->
-  <rect x="480" y="88" width="130" height="50" fill="#f8717115" stroke="#f87171" stroke-width="2.5" rx="2"/>
-  <text x="545" y="108" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="700" fill="#d0d5e3">bin/server</text>
-  <text x="545" y="126" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#f87171">raw: 50  eff: -30</text>
-  <!-- Edges -->
-  <line x1="130" y1="113" x2="220" y2="73" stroke="#f87171" stroke-width="1.5"/>
-  <line x1="350" y1="73" x2="480" y2="108" stroke="#f87171" stroke-width="2" />
-  <line x1="130" y1="193" x2="480" y2="118" stroke="#6b7394" stroke-width="1" stroke-dasharray="5 3"/>
-  <!-- Labels -->
-  <text x="545" y="78" text-anchor="middle" font-family="Instrument Sans, sans-serif" font-size="9" font-weight="600" fill="#f87171" letter-spacing="0.06em" text-transform="uppercase">LIMITED BY AUTH</text>
-  <text x="65" y="78" text-anchor="middle" font-family="Instrument Sans, sans-serif" font-size="9" font-weight="600" fill="#f87171" letter-spacing="0.06em">BLOCKER</text>
-  <text x="285" y="38" text-anchor="middle" font-family="Instrument Sans, sans-serif" font-size="9" font-weight="600" fill="#f87171" letter-spacing="0.06em">BLOCKER</text>
-  <!-- Arrow tips -->
-  <polygon points="220,73 214,68 214,78" fill="#f87171"/>
-  <polygon points="480,108 474,103 474,113" fill="#f87171"/>
-  <polygon points="480,118 474,113 474,123" fill="#6b7394"/>
+<svg class="propagation-svg" viewBox="0 0 700 150" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Attestations feed scores into a dependency graph, where the worst dependency limits effective scores">
+  <!--
+    Every node has its own attestations shown beneath it.
+    Node box shows: name + raw score + effective score.
+    Attestations shown as small lines below each box.
+    3 layers, 6 nodes. Compact.
+
+    Scores:
+      lib/crypto:  blocker -50, pass +30         → raw -20, eff -20
+      lib/http:    praise +30, pass +20           → raw +50, eff +50
+      lib/log:     pass +10                       → raw +10, eff +10
+      src/auth.rs: pass +20, concern -10          → raw +10, eff -20 (limited by crypto)
+      src/api.rs:  praise +30                     → raw +30, eff +10 (limited by log)
+      bin/server:  pass +20, praise +30           → raw +50, eff -20 (limited by auth)
+  -->
+
+  <!-- ═══ L0: leaf libraries ═══ -->
+
+  <!-- lib/crypto -->
+  <rect x="0" y="0" width="120" height="36" fill="#f8717110" stroke="#f87171" stroke-width="1.5" rx="2"/>
+  <text x="60" y="13" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600" fill="#eef0f6">lib/crypto</text>
+  <text x="60" y="28" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#f87171">raw -20 · eff -20</text>
+  <text x="4" y="50" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#f87171">-50 blocker</text>
+  <text x="4" y="60" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#34d399">+30 pass</text>
+
+  <!-- lib/http -->
+  <rect x="0" y="72" width="120" height="36" fill="#34d39910" stroke="#34d399" stroke-width="1.5" rx="2"/>
+  <text x="60" y="85" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600" fill="#eef0f6">lib/http</text>
+  <text x="60" y="100" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#34d399">raw +50 · eff +50</text>
+  <text x="4" y="122" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#34d399">+30 praise · +20 pass</text>
+
+  <!-- lib/log -->
+  <rect x="0" y="134" width="120" height="16" fill="#34d39910" stroke="#34d399" stroke-width="1" rx="2"/>
+  <text x="60" y="146" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" font-weight="600" fill="#eef0f6">lib/log <tspan fill="#34d399" font-size="7">+10 pass</tspan></text>
+
+  <!-- ═══ L1: mid-level ═══ -->
+
+  <!-- src/auth.rs -->
+  <rect x="230" y="14" width="130" height="36" fill="#f8717110" stroke="#f87171" stroke-width="1.5" rx="2"/>
+  <text x="295" y="27" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600" fill="#eef0f6">src/auth.rs</text>
+  <text x="295" y="42" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#f87171">raw +10 · eff -20</text>
+  <text x="234" y="63" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#34d399">+20 pass</text>
+  <text x="290" y="63" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#fbbf24">-10 concern</text>
+
+  <!-- src/api.rs -->
+  <rect x="230" y="80" width="130" height="36" fill="#34d39910" stroke="#34d399" stroke-width="1.5" rx="2"/>
+  <text x="295" y="93" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600" fill="#eef0f6">src/api.rs</text>
+  <text x="295" y="108" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#34d399">raw +30 · eff +10</text>
+  <text x="234" y="128" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#34d399">+30 praise</text>
+
+  <!-- ═══ L2: root ═══ -->
+
+  <rect x="480" y="40" width="218" height="42" fill="#f8717110" stroke="#f87171" stroke-width="2" rx="2"/>
+  <text x="589" y="56" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" font-weight="700" fill="#eef0f6">bin/server</text>
+  <text x="589" y="72" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#f87171">raw +50 · eff -20</text>
+  <text x="484" y="96" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#34d399">+20 pass · +30 praise</text>
+  <text x="484" y="106" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#6b7394">limited by lib/crypto via src/auth.rs</text>
+
+  <!-- ═══ Edges ═══ -->
+
+  <!-- lib/crypto → src/auth.rs  (limiting) -->
+  <line x1="120" y1="18" x2="227" y2="28" stroke="#f87171" stroke-width="1.5"/>
+  <polygon points="227,28 221,24 221,33" fill="#f87171"/>
+
+  <!-- lib/http → src/auth.rs -->
+  <line x1="120" y1="82" x2="227" y2="42" stroke="#3a4158" stroke-width="1"/>
+  <polygon points="227,42 221,38 221,47" fill="#3a4158"/>
+
+  <!-- lib/http → src/api.rs -->
+  <line x1="120" y1="96" x2="227" y2="94" stroke="#3a4158" stroke-width="1"/>
+  <polygon points="227,94 221,89 221,99" fill="#3a4158"/>
+
+  <!-- lib/log → src/api.rs -->
+  <path d="M 120,142 C 170,142 190,110 227,104" stroke="#3a4158" stroke-width="1" fill="none"/>
+  <polygon points="227,104 221,99 221,109" fill="#3a4158"/>
+
+  <!-- src/auth.rs → bin/server  (limiting) -->
+  <line x1="360" y1="36" x2="477" y2="54" stroke="#f87171" stroke-width="2"/>
+  <polygon points="477,54 470,50 471,59" fill="#f87171"/>
+
+  <!-- src/api.rs → bin/server -->
+  <line x1="360" y1="94" x2="477" y2="72" stroke="#3a4158" stroke-width="1"/>
+  <polygon points="477,72 470,68 471,77" fill="#3a4158"/>
 </svg>
 </div>
 
-`bin/server` has a raw score of 50 — its own attestations are healthy. But it depends on `src/auth.rs` (effective: -30), so its effective score drops to -30. Quality can never exceed your worst dependency.
+`bin/server`'s own attestations give it a raw score of +50 — healthy. But it depends on `src/auth.rs` (eff: -20, limited by `lib/crypto`'s blocker), so its effective score drops to -20. Your effective score can never exceed your worst dependency.
 
 ## What Qualifier adds
 
@@ -197,7 +247,7 @@ Qualifier is a Rust crate with a library and a CLI:
 | ------------------ | ---------------------------------------------------------- |
 | `.qual` files      | VCS-friendly JSONL attestations — the primary interface    |
 | `qualifier` CLI    | Human-friendly commands for attesting, scoring, gating     |
-| `libqualifier`     | Library API for tools, agents, and editor plugins          |
+| `qualifier` crate  | Library API for tools, agents, and editor plugins          |
 | Dependency graph   | `qualifier.graph.jsonl` — feeds the propagation engine     |
 
 See [Format](/format/) for the file spec, [CLI](/cli/) for command reference, or the full [Specification](/spec/).
