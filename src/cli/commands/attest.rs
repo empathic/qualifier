@@ -3,7 +3,7 @@ use clap::Args as ClapArgs;
 use std::io::{self, BufRead};
 use std::path::Path;
 
-use crate::attestation::{self, Attestation, Kind};
+use crate::attestation::{self, Attestation, AuthorType, Kind};
 use crate::qual_file;
 
 #[derive(ClapArgs)]
@@ -38,6 +38,14 @@ pub struct Args {
     /// Author identity (defaults to VCS user)
     #[arg(long)]
     pub author: Option<String>,
+
+    /// Author type (human, ai, tool, unknown)
+    #[arg(long)]
+    pub author_type: Option<String>,
+
+    /// VCS ref to pin (e.g., "git:3aba500")
+    #[arg(long, name = "ref")]
+    pub r#ref: Option<String>,
 
     /// ID of a prior attestation this replaces
     #[arg(long)]
@@ -75,10 +83,16 @@ pub fn run(args: Args) -> crate::Result<()> {
         .or_else(detect_author)
         .unwrap_or_else(|| "unknown".into());
 
+    let author_type = match &args.author_type {
+        Some(s) => Some(s.parse::<AuthorType>().map_err(crate::Error::Validation)?),
+        None => None,
+    };
+
     let qual_path =
         qual_file::resolve_qual_path(&args.artifact, args.file.as_deref().map(Path::new))?;
 
     let att = attestation::finalize(Attestation {
+        v: 2,
         artifact: args.artifact.clone(),
         kind,
         score,
@@ -87,7 +101,9 @@ pub fn run(args: Args) -> crate::Result<()> {
         suggested_fix: args.suggested_fix,
         tags: args.tags,
         author,
+        author_type,
         created_at: Utc::now(),
+        r#ref: args.r#ref,
         supersedes: args.supersedes,
         epoch_refs: None,
         id: String::new(),

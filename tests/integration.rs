@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 fn make_att(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
     attestation::finalize(Attestation {
+        v: 2,
         artifact: artifact.into(),
         kind,
         score,
@@ -17,9 +18,11 @@ fn make_att(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestatio
         suggested_fix: None,
         tags: vec![],
         author: "test@test.com".into(),
+        author_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
+        r#ref: None,
         supersedes: None,
         epoch_refs: None,
         id: String::new(),
@@ -148,6 +151,7 @@ fn test_artifacts_in_qual_but_not_in_graph() {
 fn test_compaction_roundtrip_preserves_scores() {
     let original = make_att("mod.rs", Kind::Concern, -30, "bad");
     let fix = attestation::finalize(Attestation {
+        v: 2,
         artifact: "mod.rs".into(),
         kind: Kind::Pass,
         score: 20,
@@ -156,9 +160,11 @@ fn test_compaction_roundtrip_preserves_scores() {
         suggested_fix: None,
         tags: vec![],
         author: "test@test.com".into(),
+        author_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
+        r#ref: None,
         supersedes: Some(original.id.clone()),
         epoch_refs: None,
         id: String::new(),
@@ -223,6 +229,7 @@ fn test_discovery_walks_tree() {
 fn test_supersession_cycle_detected() {
     let now = Utc::now();
     let mut a = Attestation {
+        v: 2,
         artifact: "x".into(),
         kind: Kind::Pass,
         score: 10,
@@ -231,7 +238,9 @@ fn test_supersession_cycle_detected() {
         suggested_fix: None,
         tags: vec![],
         author: "test".into(),
+        author_type: None,
         created_at: now,
+        r#ref: None,
         supersedes: None,
         epoch_refs: None,
         id: "aaa".into(),
@@ -263,6 +272,7 @@ fn test_graph_cycle_rejected() {
 fn test_cross_artifact_supersession_rejected() {
     let a = make_att("foo.rs", Kind::Concern, -10, "issue in foo");
     let b = attestation::finalize(Attestation {
+        v: 2,
         artifact: "bar.rs".into(),
         kind: Kind::Pass,
         score: 20,
@@ -271,9 +281,11 @@ fn test_cross_artifact_supersession_rejected() {
         suggested_fix: None,
         tags: vec![],
         author: "test@test.com".into(),
+        author_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
+        r#ref: None,
         supersedes: Some(a.id.clone()),
         epoch_refs: None,
         id: String::new(),
@@ -292,6 +304,7 @@ fn test_kind_typo_detected_in_validation() {
     att.id = attestation::generate_id(&att);
     // Need to use Custom kind directly since make_att uses finalize
     let att = attestation::finalize(Attestation {
+        v: 2,
         artifact: "x.rs".into(),
         kind: Kind::Custom("pss".into()),
         score: 10,
@@ -300,7 +313,9 @@ fn test_kind_typo_detected_in_validation() {
         suggested_fix: None,
         tags: vec![],
         author: "test@test.com".into(),
+        author_type: None,
         created_at: Utc::now(),
+        r#ref: None,
         supersedes: None,
         epoch_refs: None,
         id: String::new(),
@@ -321,4 +336,102 @@ fn test_parse_qual_file_only_comments() {
     let content = "// This is a comment\n// Another comment\n\n";
     let atts = qual_file::parse_str(content).unwrap();
     assert!(atts.is_empty());
+}
+
+#[test]
+fn test_v2_roundtrip() {
+    use qualifier::attestation::AuthorType;
+
+    let dir = tempfile::tempdir().unwrap();
+    let qual_path = dir.path().join("test.rs.qual");
+
+    let att = attestation::finalize(Attestation {
+        v: 2,
+        artifact: "test.rs".into(),
+        kind: Kind::Praise,
+        score: 30,
+        summary: "Great code".into(),
+        detail: None,
+        suggested_fix: None,
+        tags: vec!["quality".into()],
+        author: "alice@example.com".into(),
+        author_type: Some(AuthorType::Human),
+        created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+        r#ref: Some("git:3aba500".into()),
+        supersedes: None,
+        epoch_refs: None,
+        id: String::new(),
+    });
+    assert_eq!(att.v, 2);
+
+    qual_file::append(&qual_path, &att).unwrap();
+    let qf = qual_file::parse(&qual_path).unwrap();
+    assert_eq!(qf.attestations.len(), 1);
+
+    let parsed = &qf.attestations[0];
+    assert_eq!(parsed.v, 2);
+    assert_eq!(parsed.author_type, Some(AuthorType::Human));
+    assert_eq!(parsed.r#ref.as_deref(), Some("git:3aba500"));
+    assert_eq!(parsed.id, att.id);
+}
+
+#[test]
+fn test_compact_snapshot_produces_v2() {
+    // Create v1-style attestations (finalize makes them v2, but the point is
+    // the snapshot output should always be v2 with author_type=tool)
+    use qualifier::attestation::AuthorType;
+
+    let atts = vec![
+        make_att("src/a.rs", Kind::Praise, 40, "good"),
+        make_att("src/a.rs", Kind::Concern, -10, "meh"),
+    ];
+    let qf = QualFile {
+        path: PathBuf::from("src/.qual"),
+        artifact: "src/".into(),
+        attestations: atts,
+    };
+
+    let (snapped, _) = compact::snapshot(&qf);
+    assert_eq!(snapped.attestations.len(), 1);
+
+    let epoch = &snapped.attestations[0];
+    assert_eq!(epoch.v, 2);
+    assert_eq!(epoch.author_type, Some(AuthorType::Tool));
+    assert_eq!(epoch.score, 30); // 40 + -10
+}
+
+#[test]
+fn test_supersession_with_new_fields() {
+    let original = make_att("mod.rs", Kind::Concern, -20, "problem");
+    let replacement = attestation::finalize(Attestation {
+        v: 2,
+        artifact: "mod.rs".into(),
+        kind: Kind::Pass,
+        score: 20,
+        summary: "fixed it".into(),
+        detail: None,
+        suggested_fix: None,
+        tags: vec![],
+        author: "test@test.com".into(),
+        author_type: Some(qualifier::attestation::AuthorType::Human),
+        created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+        r#ref: Some("git:abc123".into()),
+        supersedes: Some(original.id.clone()),
+        epoch_refs: None,
+        id: String::new(),
+    });
+
+    let all = vec![original.clone(), replacement.clone()];
+
+    // Supersession should work
+    let active = scoring::filter_superseded(&all);
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id, replacement.id);
+
+    // Raw score should be replacement's score only
+    assert_eq!(scoring::raw_score(&all), 20);
 }

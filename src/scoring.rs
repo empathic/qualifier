@@ -242,6 +242,7 @@ mod tests {
 
     fn make_att(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
         attestation::finalize(Attestation {
+            v: 2,
             artifact: artifact.into(),
             kind,
             score,
@@ -250,9 +251,11 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: "test@test.com".into(),
+            author_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+            r#ref: None,
             supersedes: None,
             epoch_refs: None,
             id: String::new(),
@@ -261,6 +264,7 @@ mod tests {
 
     fn make_superseding(artifact: &str, score: i32, supersedes_id: &str) -> Attestation {
         attestation::finalize(Attestation {
+            v: 2,
             artifact: artifact.into(),
             kind: Kind::Pass,
             score,
@@ -269,9 +273,11 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: "test@test.com".into(),
+            author_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+            r#ref: None,
             supersedes: Some(supersedes_id.into()),
             epoch_refs: None,
             id: String::new(),

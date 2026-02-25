@@ -9,6 +9,10 @@ use std::fmt;
 /// order, and this determines attestation IDs. Do not reorder fields.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Attestation {
+    /// Format version. Always 2.
+    #[serde(default)]
+    pub v: u8,
+
     /// Qualified name of the artifact.
     pub artifact: String,
 
@@ -36,8 +40,16 @@ pub struct Attestation {
     /// Who or what created this attestation.
     pub author: String,
 
+    /// Author classification: human, ai, tool, or unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_type: Option<AuthorType>,
+
     /// When this attestation was created (RFC 3339).
     pub created_at: DateTime<Utc>,
+
+    /// VCS reference pin (e.g. "git:3aba500"). Opaque to qualifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#ref: Option<String>,
 
     /// ID of a prior attestation this replaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,10 +130,46 @@ impl Kind {
     }
 }
 
+/// Author classification for attestations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthorType {
+    Human,
+    Ai,
+    Tool,
+    Unknown,
+}
+
+impl fmt::Display for AuthorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AuthorType::Human => write!(f, "human"),
+            AuthorType::Ai => write!(f, "ai"),
+            AuthorType::Tool => write!(f, "tool"),
+            AuthorType::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+impl std::str::FromStr for AuthorType {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "human" => Ok(AuthorType::Human),
+            "ai" => Ok(AuthorType::Ai),
+            "tool" => Ok(AuthorType::Tool),
+            "unknown" => Ok(AuthorType::Unknown),
+            other => Err(format!("unknown author_type: '{other}'")),
+        }
+    }
+}
+
 /// Zero-copy view of an Attestation for canonical serialization.
 /// Field order and `skip_serializing_if` MUST exactly match `Attestation`.
 #[derive(Serialize)]
 struct CanonicalView<'a> {
+    v: u8,
     artifact: &'a str,
     kind: &'a Kind,
     score: i32,
@@ -133,7 +181,11 @@ struct CanonicalView<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tags: &'a Vec<String>,
     author: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author_type: &'a Option<AuthorType>,
     created_at: &'a DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    r#ref: &'a Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     supersedes: &'a Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -145,6 +197,7 @@ struct CanonicalView<'a> {
 /// serialization with the `id` field set to the empty string.
 pub fn generate_id(attestation: &Attestation) -> String {
     let view = CanonicalView {
+        v: attestation.v,
         artifact: &attestation.artifact,
         kind: &attestation.kind,
         score: attestation.score,
@@ -153,7 +206,9 @@ pub fn generate_id(attestation: &Attestation) -> String {
         suggested_fix: &attestation.suggested_fix,
         tags: &attestation.tags,
         author: &attestation.author,
+        author_type: &attestation.author_type,
         created_at: &attestation.created_at,
+        r#ref: &attestation.r#ref,
         supersedes: &attestation.supersedes,
         epoch_refs: &attestation.epoch_refs,
         id: "",
@@ -166,6 +221,9 @@ pub fn generate_id(attestation: &Attestation) -> String {
 pub fn validate(attestation: &Attestation) -> Vec<String> {
     let mut errors = Vec::new();
 
+    if attestation.v != 2 {
+        errors.push(format!("unsupported format version: {}", attestation.v));
+    }
     if attestation.artifact.is_empty() {
         errors.push("artifact must not be empty".into());
     }
@@ -328,6 +386,7 @@ pub fn clamp_score(score: i32) -> i32 {
 /// ignored and replaced with the content-addressed hash.
 pub fn finalize(mut attestation: Attestation) -> Attestation {
     attestation.score = clamp_score(attestation.score);
+    attestation.v = 2;
     attestation.id = String::new(); // clear for hashing
     attestation.id = generate_id(&attestation);
     attestation
@@ -340,6 +399,7 @@ mod tests {
 
     fn sample_attestation() -> Attestation {
         let mut att = Attestation {
+            v: 2,
             artifact: "src/parser.rs".into(),
             kind: Kind::Concern,
             score: -30,
@@ -348,9 +408,11 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: "alice@example.com".into(),
+            author_type: None,
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+            r#ref: None,
             supersedes: None,
             epoch_refs: None,
             id: String::new(),
@@ -388,6 +450,7 @@ mod tests {
     #[test]
     fn test_validate_empty_fields() {
         let att = Attestation {
+            v: 2,
             artifact: String::new(),
             kind: Kind::Pass,
             score: 0,
@@ -396,7 +459,9 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: String::new(),
+            author_type: None,
             created_at: Utc::now(),
+            r#ref: None,
             supersedes: None,
             epoch_refs: None,
             id: String::new(),
@@ -446,6 +511,7 @@ mod tests {
     #[test]
     fn test_finalize() {
         let att = Attestation {
+            v: 2,
             artifact: "test".into(),
             kind: Kind::Pass,
             score: 200, // over max
@@ -454,13 +520,16 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: "bot".into(),
+            author_type: None,
             created_at: Utc::now(),
+            r#ref: None,
             supersedes: None,
             epoch_refs: None,
             id: "will be replaced".into(),
         };
         let finalized = finalize(att);
         assert_eq!(finalized.score, 100); // clamped
+        assert_eq!(finalized.v, 2); // upgraded to v2
         assert_eq!(finalized.id, generate_id(&finalized)); // valid ID
     }
 
@@ -468,6 +537,7 @@ mod tests {
     fn test_supersession_cycle_detection() {
         let now = Utc::now();
         let mut a = Attestation {
+            v: 2,
             artifact: "x".into(),
             kind: Kind::Pass,
             score: 10,
@@ -476,7 +546,9 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: "test".into(),
+            author_type: None,
             created_at: now,
+            r#ref: None,
             supersedes: None,
             epoch_refs: None,
             id: "aaa".into(),
@@ -569,6 +641,7 @@ mod tests {
     #[test]
     fn test_cross_artifact_supersession_detected() {
         let a = finalize(Attestation {
+            v: 2,
             artifact: "foo.rs".into(),
             kind: Kind::Pass,
             score: 10,
@@ -577,12 +650,15 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: "test".into(),
+            author_type: None,
             created_at: Utc::now(),
+            r#ref: None,
             supersedes: None,
             epoch_refs: None,
             id: String::new(),
         });
         let b = finalize(Attestation {
+            v: 2,
             artifact: "bar.rs".into(),
             kind: Kind::Pass,
             score: 20,
@@ -591,7 +667,9 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: "test".into(),
+            author_type: None,
             created_at: Utc::now(),
+            r#ref: None,
             supersedes: Some(a.id.clone()),
             epoch_refs: None,
             id: String::new(),
@@ -604,6 +682,7 @@ mod tests {
     #[test]
     fn test_same_artifact_supersession_ok() {
         let a = finalize(Attestation {
+            v: 2,
             artifact: "foo.rs".into(),
             kind: Kind::Concern,
             score: -10,
@@ -612,12 +691,15 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: "test".into(),
+            author_type: None,
             created_at: Utc::now(),
+            r#ref: None,
             supersedes: None,
             epoch_refs: None,
             id: String::new(),
         });
         let b = finalize(Attestation {
+            v: 2,
             artifact: "foo.rs".into(),
             kind: Kind::Pass,
             score: 20,
@@ -626,7 +708,9 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: "test".into(),
+            author_type: None,
             created_at: Utc::now(),
+            r#ref: None,
             supersedes: Some(a.id.clone()),
             epoch_refs: None,
             id: String::new(),
@@ -642,5 +726,180 @@ mod tests {
         assert!(is_likely_typo("bloker", "blocker"));
         assert!(!is_likely_typo("pass", "pass")); // identical
         assert!(!is_likely_typo("my_custom_lint", "pass")); // too far
+    }
+
+    #[test]
+    fn test_v2_finalize_sets_version() {
+        let att = finalize(Attestation {
+            v: 2,
+            artifact: "test.rs".into(),
+            kind: Kind::Pass,
+            score: 10,
+            summary: "ok".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec![],
+            author: "test@test.com".into(),
+            author_type: None,
+            created_at: Utc::now(),
+            r#ref: None,
+            supersedes: None,
+            epoch_refs: None,
+            id: String::new(),
+        });
+        assert_eq!(att.v, 2);
+        assert_eq!(att.id, generate_id(&att));
+    }
+
+    #[test]
+    fn test_v2_id_includes_new_fields() {
+        let now = DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let base = finalize(Attestation {
+            v: 2,
+            artifact: "x.rs".into(),
+            kind: Kind::Pass,
+            score: 10,
+            summary: "ok".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec![],
+            author: "test@test.com".into(),
+            author_type: None,
+            created_at: now,
+            r#ref: None,
+            supersedes: None,
+            epoch_refs: None,
+            id: String::new(),
+        });
+
+        // Same content but with author_type set
+        let with_author_type = finalize(Attestation {
+            v: 2,
+            artifact: "x.rs".into(),
+            kind: Kind::Pass,
+            score: 10,
+            summary: "ok".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec![],
+            author: "test@test.com".into(),
+            author_type: Some(AuthorType::Human),
+            created_at: now,
+            r#ref: None,
+            supersedes: None,
+            epoch_refs: None,
+            id: String::new(),
+        });
+
+        // Same content but with ref set
+        let with_ref = finalize(Attestation {
+            v: 2,
+            artifact: "x.rs".into(),
+            kind: Kind::Pass,
+            score: 10,
+            summary: "ok".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec![],
+            author: "test@test.com".into(),
+            author_type: None,
+            created_at: now,
+            r#ref: Some("git:abc123".into()),
+            supersedes: None,
+            epoch_refs: None,
+            id: String::new(),
+        });
+
+        // All three should be v2 (finalize sets it)
+        assert_eq!(base.v, 2);
+        assert_eq!(with_author_type.v, 2);
+        assert_eq!(with_ref.v, 2);
+
+        // All three should have different IDs
+        assert_ne!(
+            base.id, with_author_type.id,
+            "author_type should affect v2 ID"
+        );
+        assert_ne!(base.id, with_ref.id, "ref should affect v2 ID");
+        assert_ne!(with_author_type.id, with_ref.id);
+    }
+
+    #[test]
+    fn test_validate_unknown_version() {
+        let mut att = Attestation {
+            v: 3,
+            artifact: "x.rs".into(),
+            kind: Kind::Pass,
+            score: 10,
+            summary: "ok".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec![],
+            author: "test@test.com".into(),
+            author_type: None,
+            created_at: Utc::now(),
+            r#ref: None,
+            supersedes: None,
+            epoch_refs: None,
+            id: String::new(),
+        };
+        att.id = generate_id(&att); // v>=2 path
+        let errors = validate(&att);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("unsupported format version")),
+            "v:3 should fail validation, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_v2_serde_roundtrip() {
+        let att = finalize(Attestation {
+            v: 2,
+            artifact: "x.rs".into(),
+            kind: Kind::Praise,
+            score: 30,
+            summary: "great".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec!["quality".into()],
+            author: "alice@example.com".into(),
+            author_type: Some(AuthorType::Human),
+            created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            r#ref: Some("git:3aba500".into()),
+            supersedes: None,
+            epoch_refs: None,
+            id: String::new(),
+        });
+
+        let json = serde_json::to_string(&att).unwrap();
+        assert!(json.contains("\"v\":2"));
+        assert!(json.contains("\"author_type\":\"human\""));
+        assert!(json.contains("\"ref\":\"git:3aba500\""));
+
+        let parsed: Attestation = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, att);
+    }
+
+    #[test]
+    fn test_author_type_roundtrip() {
+        let types = vec![
+            AuthorType::Human,
+            AuthorType::Ai,
+            AuthorType::Tool,
+            AuthorType::Unknown,
+        ];
+        for at in &types {
+            let s = at.to_string();
+            let parsed: AuthorType = s.parse().unwrap();
+            assert_eq!(&parsed, at);
+        }
     }
 }

@@ -249,8 +249,10 @@
         html +=
           '<span class="st-attestation-meta">' +
           escapeHtml(a.author || "") +
+          (a.author_type ? " (" + escapeHtml(a.author_type) + ")" : "") +
           " &middot; " +
           escapeHtml((a.created_at || "").substring(0, 10)) +
+          (a.ref ? " &middot; " + escapeHtml(a.ref) : "") +
           "</span>";
 
         if (a.suggested_fix) {

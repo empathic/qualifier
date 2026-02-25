@@ -285,6 +285,7 @@ mod tests {
 
     fn make_attestation(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
         attestation::finalize(Attestation {
+            v: 2,
             artifact: artifact.into(),
             kind,
             score,
@@ -293,9 +294,11 @@ mod tests {
             suggested_fix: None,
             tags: vec![],
             author: "test@test.com".into(),
+            author_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+            r#ref: None,
             supersedes: None,
             epoch_refs: None,
             id: String::new(),

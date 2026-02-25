@@ -938,3 +938,127 @@ fn test_attest_batch_validates() {
         "batch mode should reject invalid attestation (empty summary)"
     );
 }
+
+// --- v2 format tests ---
+
+#[test]
+fn test_attest_with_author_type() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "lib.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "30",
+            "--summary",
+            "Clean code",
+            "--author",
+            "test@test.com",
+            "--author-type",
+            "human",
+        ],
+    );
+
+    assert_eq!(code, 0, "attest with --author-type should succeed");
+
+    // Read the .qual file and verify author_type is present
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"author_type\":\"human\""),
+        "attestation should contain author_type: {content}"
+    );
+}
+
+#[test]
+fn test_attest_with_ref() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "lib.rs",
+            "--kind",
+            "pass",
+            "--score",
+            "20",
+            "--summary",
+            "Looks good",
+            "--author",
+            "test@test.com",
+            "--ref",
+            "git:3aba500",
+        ],
+    );
+
+    assert_eq!(code, 0, "attest with --ref should succeed");
+
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"ref\":\"git:3aba500\""),
+        "attestation should contain ref: {content}"
+    );
+}
+
+#[test]
+fn test_new_attestations_are_v2() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "mod.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "50",
+            "--summary",
+            "nice",
+            "--author",
+            "test@test.com",
+        ],
+    );
+
+    assert_eq!(code, 0);
+
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"v\":2"),
+        "new attestations should be v2: {content}"
+    );
+}
+
+#[test]
+fn test_attest_invalid_author_type() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "lib.rs",
+            "--kind",
+            "pass",
+            "--summary",
+            "ok",
+            "--author",
+            "test@test.com",
+            "--author-type",
+            "banana",
+        ],
+    );
+
+    assert_ne!(code, 0, "invalid author_type should fail");
+    assert!(
+        stderr.contains("author_type") || stderr.contains("banana"),
+        "error should mention invalid author_type: {stderr}"
+    );
+}

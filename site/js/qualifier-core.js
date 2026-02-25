@@ -205,6 +205,11 @@
     }
   }
 
+  // --- Version detection ---
+  function attestationVersion(att) {
+    return att.v || 2;
+  }
+
   // --- Export ---
   window.QualifierCore = {
     parseQualFile: parseQualFile,
@@ -218,5 +223,6 @@
     scoreStatus: scoreStatus,
     scoreBar: scoreBar,
     statusColor: statusColor,
+    attestationVersion: attestationVersion,
   };
 })();
