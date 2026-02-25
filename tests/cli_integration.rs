@@ -657,15 +657,30 @@ fn test_ls_basic_listing() {
     run_qualifier(
         dir.path(),
         &[
-            "attest", "foo.rs", "--kind", "praise", "--score", "50",
-            "--summary", "great", "--author", "test@test.com",
+            "attest",
+            "foo.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "50",
+            "--summary",
+            "great",
+            "--author",
+            "test@test.com",
         ],
     );
     run_qualifier(
         dir.path(),
         &[
-            "attest", "bar.rs", "--kind", "concern", "--score=-20",
-            "--summary", "meh", "--author", "test@test.com",
+            "attest",
+            "bar.rs",
+            "--kind",
+            "concern",
+            "--score=-20",
+            "--summary",
+            "meh",
+            "--author",
+            "test@test.com",
         ],
     );
 
@@ -682,22 +697,40 @@ fn test_ls_below_filter() {
     run_qualifier(
         dir.path(),
         &[
-            "attest", "good.rs", "--kind", "praise", "--score", "50",
-            "--summary", "nice", "--author", "test@test.com",
+            "attest",
+            "good.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "50",
+            "--summary",
+            "nice",
+            "--author",
+            "test@test.com",
         ],
     );
     run_qualifier(
         dir.path(),
         &[
-            "attest", "bad.rs", "--kind", "blocker", "--score=-50",
-            "--summary", "broken", "--author", "test@test.com",
+            "attest",
+            "bad.rs",
+            "--kind",
+            "blocker",
+            "--score=-50",
+            "--summary",
+            "broken",
+            "--author",
+            "test@test.com",
         ],
     );
 
     let (stdout, _, code) = run_qualifier(dir.path(), &["ls", "--below", "0"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("bad.rs"), "below filter should show bad.rs");
-    assert!(!stdout.contains("good.rs"), "below filter should hide good.rs");
+    assert!(
+        !stdout.contains("good.rs"),
+        "below filter should hide good.rs"
+    );
 }
 
 #[test]
@@ -707,15 +740,29 @@ fn test_ls_kind_filter() {
     run_qualifier(
         dir.path(),
         &[
-            "attest", "a.rs", "--kind", "blocker", "--summary", "bad",
-            "--author", "test@test.com",
+            "attest",
+            "a.rs",
+            "--kind",
+            "blocker",
+            "--summary",
+            "bad",
+            "--author",
+            "test@test.com",
         ],
     );
     run_qualifier(
         dir.path(),
         &[
-            "attest", "b.rs", "--kind", "praise", "--score", "30",
-            "--summary", "good", "--author", "test@test.com",
+            "attest",
+            "b.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "30",
+            "--summary",
+            "good",
+            "--author",
+            "test@test.com",
         ],
     );
 
@@ -735,8 +782,14 @@ fn test_blame_no_vcs() {
     run_qualifier(
         dir.path(),
         &[
-            "attest", "foo.rs", "--kind", "pass", "--summary", "ok",
-            "--author", "test@test.com",
+            "attest",
+            "foo.rs",
+            "--kind",
+            "pass",
+            "--summary",
+            "ok",
+            "--author",
+            "test@test.com",
         ],
     );
 
@@ -822,8 +875,16 @@ fn test_score_overflow_clamped() {
         run_qualifier(
             dir.path(),
             &[
-                "attest", "big.rs", "--kind", "praise", "--score", "100",
-                "--summary", &format!("praise {i}"), "--author", "test@test.com",
+                "attest",
+                "big.rs",
+                "--kind",
+                "praise",
+                "--score",
+                "100",
+                "--summary",
+                &format!("praise {i}"),
+                "--author",
+                "test@test.com",
             ],
         );
     }

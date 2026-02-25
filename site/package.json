@@ -1,0 +1,17 @@
+{
+  "name": "qualifier-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "eleventy --serve --port 0",
+    "build": "eleventy"
+  },
+  "devDependencies": {
+    "@11ty/eleventy": "^3.0.0",
+    "markdown-it-anchor": "^9.2.0"
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.1",
+    "prismjs": "^1.30.0"
+  }
+}

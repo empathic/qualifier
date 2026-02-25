@@ -1,0 +1,265 @@
+/* --- Score Explorer --- */
+.scoring-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin: 1.5rem 0;
+}
+
+.scoring-input {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.scoring-input label {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--flint);
+}
+
+.scoring-input textarea {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  background: var(--slab);
+  border: 1px solid var(--ridge);
+  border-radius: 2px;
+  padding: 0.75rem 1rem;
+  color: var(--chalk);
+  resize: vertical;
+  min-height: 120px;
+}
+
+.scoring-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.scoring-btn {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-mid);
+  border-radius: 2px;
+  padding: 0.45rem 1rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  align-self: flex-start;
+}
+
+.scoring-btn:hover {
+  background: var(--accent);
+  color: var(--void);
+  border-color: var(--accent);
+}
+
+/* Canvas */
+.scoring-canvas {
+  background: var(--slab);
+  border: 1px solid var(--ridge);
+  border-radius: 2px;
+  min-height: 400px;
+  position: relative;
+  overflow: hidden;
+}
+
+.scoring-canvas svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Controls bar */
+.scoring-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--ridge);
+  background: var(--plate);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.scoring-controls button {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--flint);
+  background: transparent;
+  border: 1px solid var(--ridge);
+  border-radius: 2px;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.scoring-controls button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Legend */
+.scoring-legend {
+  display: flex;
+  gap: 1.25rem;
+  margin: 1rem 0;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--flint);
+}
+
+.scoring-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.scoring-legend-swatch {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid;
+  border-radius: 2px;
+}
+
+.scoring-legend-swatch.healthy {
+  background: #34d39920;
+  border-color: #34d399;
+}
+
+.scoring-legend-swatch.blocker {
+  background: #f8717120;
+  border-color: #f87171;
+}
+
+.scoring-legend-swatch.unqualified {
+  background: var(--plate);
+  border-color: var(--steel);
+  border-style: dashed;
+}
+
+/* Detail panel */
+.scoring-detail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 340px;
+  height: 100%;
+  background: var(--plate);
+  border-left: 1px solid var(--ridge);
+  padding: 1.25rem;
+  overflow-y: auto;
+  z-index: 10;
+  box-shadow: -2px 0 12px rgba(0, 0, 0, 0.3);
+}
+
+.scoring-detail h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+
+.scoring-detail .score-summary {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  margin: 0.5rem 0 1rem;
+  color: var(--chalk);
+}
+
+.scoring-detail .attestation-item {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--ridge);
+}
+
+.scoring-detail .attestation-item:last-child {
+  border-bottom: none;
+}
+
+.scoring-detail .attestation-score {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.scoring-detail .attestation-score.positive {
+  color: #34d399;
+}
+
+.scoring-detail .attestation-score.negative {
+  color: #f87171;
+}
+
+.scoring-detail .attestation-summary {
+  font-size: 0.88rem;
+  color: var(--chalk);
+  margin: 0.2rem 0;
+}
+
+.scoring-detail .attestation-meta {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--flint);
+}
+
+/* Tooltip */
+.scoring-tooltip {
+  position: absolute;
+  background: var(--plate);
+  border: 1px solid var(--ridge);
+  border-radius: 2px;
+  padding: 0.6rem 0.8rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  max-width: 300px;
+  pointer-events: none;
+  z-index: 20;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  color: var(--chalk);
+}
+
+/* Graph nodes */
+.scoring-canvas .node rect {
+  transition: stroke-width 0.15s;
+}
+
+.scoring-canvas .node:hover rect {
+  stroke-width: 2.5;
+}
+
+/* Score table (fallback / static display) */
+.score-table {
+  font-family: var(--mono);
+  font-size: 0.84rem;
+}
+
+.score-table td.score-cell {
+  white-space: nowrap;
+}
+
+.score-table .bar {
+  display: inline-block;
+  font-size: 0.78rem;
+  letter-spacing: -0.02em;
+}
+
+@media (max-width: 640px) {
+  .scoring-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .scoring-detail {
+    position: static;
+    width: 100%;
+    height: auto;
+    border-left: none;
+    border-top: 1px solid var(--ridge);
+    box-shadow: none;
+  }
+}

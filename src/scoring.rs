@@ -20,7 +20,9 @@ pub struct ScoreReport {
 /// Filters out superseded attestations, sums scores, and clamps to [-100, 100].
 pub fn raw_score(attestations: &[Attestation]) -> i32 {
     let active = filter_superseded(attestations);
-    let sum = active.iter().fold(0i32, |acc, a| acc.saturating_add(a.score));
+    let sum = active
+        .iter()
+        .fold(0i32, |acc, a| acc.saturating_add(a.score));
     clamp_score(sum)
 }
 
