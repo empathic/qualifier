@@ -260,7 +260,7 @@ fn test_graph_cycle_rejected() {
 // --- Cross-artifact supersession ---
 
 #[test]
-fn test_cross_artifact_supersession_warning() {
+fn test_cross_artifact_supersession_rejected() {
     let a = make_att("foo.rs", Kind::Concern, -10, "issue in foo");
     let b = attestation::finalize(Attestation {
         artifact: "bar.rs".into(),
@@ -279,9 +279,9 @@ fn test_cross_artifact_supersession_warning() {
         id: String::new(),
     });
 
-    let warnings = attestation::validate_supersession_targets(&[a, b]);
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("cross-artifact"));
+    let result = attestation::validate_supersession_targets(&[a, b]);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("cross-artifact"));
 }
 
 // --- Kind typo detection ---
@@ -319,6 +319,6 @@ fn test_kind_typo_detected_in_validation() {
 #[test]
 fn test_parse_qual_file_only_comments() {
     let content = "// This is a comment\n// Another comment\n\n";
-    let atts = qual_file::parse_str(content, "test.rs").unwrap();
+    let atts = qual_file::parse_str(content).unwrap();
     assert!(atts.is_empty());
 }

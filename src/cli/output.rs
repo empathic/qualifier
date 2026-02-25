@@ -35,7 +35,7 @@ pub fn score_table(reports: &[(String, ScoreReport)]) -> Table {
         let bar = scoring::score_bar(report.effective, 10);
 
         let status_text = if let Some(ref path) = report.limiting_path {
-            format!("limited by {}", path[0])
+            format!("limited by {}", path.join(" -> "))
         } else {
             status.to_string()
         };

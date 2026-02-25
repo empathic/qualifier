@@ -36,7 +36,7 @@ pub fn run(args: Args) -> crate::Result<()> {
     } else {
         for (artifact, report) in &failures {
             let detail = if let Some(ref path) = report.limiting_path {
-                format!(" (limited by {})", path[0])
+                format!(" (limited by {})", path.join(" -> "))
             } else {
                 String::new()
             };

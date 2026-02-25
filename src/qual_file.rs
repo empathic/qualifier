@@ -43,7 +43,7 @@ pub fn parse(path: &Path) -> crate::Result<QualFile> {
 }
 
 /// Parse attestations from a string (for testing or in-memory use).
-pub fn parse_str(content: &str, artifact: &str) -> crate::Result<Vec<Attestation>> {
+pub fn parse_str(content: &str) -> crate::Result<Vec<Attestation>> {
     let mut attestations = Vec::new();
     for (line_no, line) in content.lines().enumerate() {
         let trimmed = line.trim();
@@ -54,7 +54,6 @@ pub fn parse_str(content: &str, artifact: &str) -> crate::Result<Vec<Attestation
             .map_err(|e| crate::Error::Validation(format!("line {}: {}", line_no + 1, e)))?;
         attestations.push(att);
     }
-    let _ = artifact; // just for context, not validated here
     Ok(attestations)
 }
 

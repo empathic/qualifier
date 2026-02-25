@@ -93,6 +93,23 @@ pub fn run(args: Args) -> crate::Result<()> {
         id: String::new(),
     });
 
+    let errors = attestation::validate(&att);
+    if !errors.is_empty() {
+        return Err(crate::Error::Validation(errors.join("; ")));
+    }
+
+    if att.supersedes.is_some() {
+        let existing = if qual_path.exists() {
+            qual_file::parse(&qual_path)?.attestations
+        } else {
+            Vec::new()
+        };
+        let mut all = existing;
+        all.push(att.clone());
+        attestation::check_supersession_cycles(&all)?;
+        attestation::validate_supersession_targets(&all)?;
+    }
+
     qual_file::append(qual_path.as_ref(), &att)?;
     println!("Attested {} [{}] {}", att.artifact, att.score, att.kind);
     println!("  id: {}", att.id);
@@ -114,7 +131,25 @@ fn run_batch() -> crate::Result<()> {
         let mut att: Attestation = serde_json::from_str(trimmed)?;
         att = attestation::finalize(att);
 
+        let errors = attestation::validate(&att);
+        if !errors.is_empty() {
+            return Err(crate::Error::Validation(errors.join("; ")));
+        }
+
         let qual_path = qual_file::resolve_qual_path(&att.artifact, None)?;
+
+        if att.supersedes.is_some() {
+            let existing = if qual_path.exists() {
+                qual_file::parse(&qual_path)?.attestations
+            } else {
+                Vec::new()
+            };
+            let mut all = existing;
+            all.push(att.clone());
+            attestation::check_supersession_cycles(&all)?;
+            attestation::validate_supersession_targets(&all)?;
+        }
+
         qual_file::append(&qual_path, &att)?;
         count += 1;
     }

@@ -20,7 +20,7 @@ pub struct ScoreReport {
 /// Filters out superseded attestations, sums scores, and clamps to [-100, 100].
 pub fn raw_score(attestations: &[Attestation]) -> i32 {
     let active = filter_superseded(attestations);
-    let sum: i32 = active.iter().map(|a| a.score).sum();
+    let sum = active.iter().fold(0i32, |acc, a| acc.saturating_add(a.score));
     clamp_score(sum)
 }
 
@@ -186,11 +186,10 @@ pub fn raw_score_from_refs(attestations: &[&Attestation]) -> i32 {
         .filter_map(|a| a.supersedes.as_deref())
         .collect();
 
-    let sum: i32 = attestations
+    let sum = attestations
         .iter()
         .filter(|a| !superseded_ids.contains(a.id.as_str()))
-        .map(|a| a.score)
-        .sum();
+        .fold(0i32, |acc, a| acc.saturating_add(a.score));
 
     clamp_score(sum)
 }

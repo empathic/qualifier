@@ -296,28 +296,27 @@ pub fn check_supersession_cycles(attestations: &[Attestation]) -> crate::Result<
 
 /// Validate that supersession references target the same artifact.
 ///
-/// Returns a list of warnings for any cross-artifact supersession found.
-pub fn validate_supersession_targets(attestations: &[Attestation]) -> Vec<String> {
+/// Returns an error if any cross-artifact supersession is found.
+pub fn validate_supersession_targets(attestations: &[Attestation]) -> crate::Result<()> {
     let by_id: std::collections::HashMap<&str, &Attestation> =
         attestations.iter().map(|a| (a.id.as_str(), a)).collect();
 
-    let mut warnings = Vec::new();
     for att in attestations {
         if let Some(ref target_id) = att.supersedes
             && let Some(target) = by_id.get(target_id.as_str())
             && att.artifact != target.artifact
         {
-            warnings.push(format!(
+            return Err(crate::Error::Validation(format!(
                 "attestation {} (artifact '{}') supersedes {} (artifact '{}') \
-                 — cross-artifact supersession is invalid",
+                 — cross-artifact supersession is not allowed",
                 &att.id[..8],
                 att.artifact,
                 &target_id[..target_id.len().min(8)],
                 target.artifact
-            ));
+            )));
         }
     }
-    warnings
+    Ok(())
 }
 
 /// Clamp a score to the valid range [-100, 100].
@@ -597,9 +596,9 @@ mod tests {
             epoch_refs: None,
             id: String::new(),
         });
-        let warnings = validate_supersession_targets(&[a, b]);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("cross-artifact"));
+        let result = validate_supersession_targets(&[a, b]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cross-artifact"));
     }
 
     #[test]
@@ -632,8 +631,8 @@ mod tests {
             epoch_refs: None,
             id: String::new(),
         });
-        let warnings = validate_supersession_targets(&[a, b]);
-        assert!(warnings.is_empty());
+        let result = validate_supersession_targets(&[a, b]);
+        assert!(result.is_ok());
     }
 
     #[test]

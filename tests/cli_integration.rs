@@ -647,3 +647,233 @@ fn test_attest_creates_parent_dirs() {
     assert_eq!(code, 0, "attest should create parent dirs as needed");
     assert!(dir.path().join("src/deep/.qual").exists());
 }
+
+// --- qualifier ls ---
+
+#[test]
+fn test_ls_basic_listing() {
+    let dir = tempfile::tempdir().unwrap();
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest", "foo.rs", "--kind", "praise", "--score", "50",
+            "--summary", "great", "--author", "test@test.com",
+        ],
+    );
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest", "bar.rs", "--kind", "concern", "--score=-20",
+            "--summary", "meh", "--author", "test@test.com",
+        ],
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["ls"]);
+    assert_eq!(code, 0, "ls should succeed");
+    assert!(stdout.contains("foo.rs"), "ls should list foo.rs");
+    assert!(stdout.contains("bar.rs"), "ls should list bar.rs");
+}
+
+#[test]
+fn test_ls_below_filter() {
+    let dir = tempfile::tempdir().unwrap();
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest", "good.rs", "--kind", "praise", "--score", "50",
+            "--summary", "nice", "--author", "test@test.com",
+        ],
+    );
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest", "bad.rs", "--kind", "blocker", "--score=-50",
+            "--summary", "broken", "--author", "test@test.com",
+        ],
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["ls", "--below", "0"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("bad.rs"), "below filter should show bad.rs");
+    assert!(!stdout.contains("good.rs"), "below filter should hide good.rs");
+}
+
+#[test]
+fn test_ls_kind_filter() {
+    let dir = tempfile::tempdir().unwrap();
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest", "a.rs", "--kind", "blocker", "--summary", "bad",
+            "--author", "test@test.com",
+        ],
+    );
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest", "b.rs", "--kind", "praise", "--score", "30",
+            "--summary", "good", "--author", "test@test.com",
+        ],
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["ls", "--kind", "blocker"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("a.rs"), "kind filter should show blocker");
+    assert!(!stdout.contains("b.rs"), "kind filter should hide praise");
+}
+
+// --- qualifier blame ---
+
+#[test]
+fn test_blame_no_vcs() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create an attestation so the .qual file exists
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest", "foo.rs", "--kind", "pass", "--summary", "ok",
+            "--author", "test@test.com",
+        ],
+    );
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["blame", "foo.rs"]);
+    assert_ne!(code, 0, "blame should fail without VCS");
+    assert!(
+        stderr.contains("No VCS") || stderr.contains("not supported"),
+        "should mention VCS: {stderr}"
+    );
+}
+
+// --- qualifier graph ---
+
+#[test]
+fn test_graph_dot_output() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("qualifier.graph.jsonl"),
+        "{\"artifact\":\"app\",\"depends_on\":[\"lib\"]}\n",
+    )
+    .unwrap();
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["graph", "--format", "dot"]);
+    assert_eq!(code, 0, "graph dot should succeed");
+    assert!(stdout.contains("digraph"), "should be DOT format");
+    assert!(stdout.contains("app"), "should contain app");
+    assert!(stdout.contains("lib"), "should contain lib");
+}
+
+#[test]
+fn test_graph_json_output() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("qualifier.graph.jsonl"),
+        "{\"artifact\":\"app\",\"depends_on\":[\"lib\"]}\n",
+    )
+    .unwrap();
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["graph", "--format", "json"]);
+    assert_eq!(code, 0, "graph json should succeed");
+    assert!(stdout.contains("app"), "should contain app");
+    assert!(stdout.contains("lib"), "should contain lib");
+}
+
+#[test]
+fn test_graph_missing_file() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["graph"]);
+    assert_ne!(code, 0, "graph should fail without graph file");
+    assert!(
+        stderr.contains("not found") || stderr.contains("Graph file"),
+        "should mention missing file: {stderr}"
+    );
+}
+
+// --- score overflow ---
+
+#[test]
+fn test_score_overflow_clamped() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create 20 attestations each with score +100 by writing JSONL directly
+    let mut lines = String::new();
+    for i in 0..20 {
+        let json = serde_json::json!({
+            "artifact": "big.rs",
+            "kind": "praise",
+            "score": 100,
+            "summary": format!("praise {i}"),
+            "author": "test@test.com",
+            "created_at": format!("2026-01-{:02}T00:00:00Z", (i % 28) + 1),
+            "id": ""
+        });
+        lines.push_str(&json.to_string());
+        lines.push('\n');
+    }
+
+    // Write the file, then use qualifier to finalize IDs via show
+    // Actually, just write pre-finalized attestations isn't practical.
+    // Instead, use the CLI to create many attestations.
+    for i in 0..5 {
+        run_qualifier(
+            dir.path(),
+            &[
+                "attest", "big.rs", "--kind", "praise", "--score", "100",
+                "--summary", &format!("praise {i}"), "--author", "test@test.com",
+            ],
+        );
+    }
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["score", "--format", "json"]);
+    assert_eq!(code, 0);
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let arr = parsed.as_array().unwrap();
+    let entry = arr.iter().find(|e| e["artifact"] == "big.rs").unwrap();
+    assert_eq!(
+        entry["raw_score"], 100,
+        "raw score should be clamped to 100, not 500"
+    );
+}
+
+// --- batch validation ---
+
+#[test]
+fn test_attest_batch_validates() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Pipe invalid JSONL (empty summary) into batch mode
+    let invalid_json = serde_json::json!({
+        "artifact": "test.rs",
+        "kind": "pass",
+        "score": 10,
+        "summary": "",
+        "author": "test@test.com",
+        "created_at": "2026-01-01T00:00:00Z"
+    });
+
+    let output = std::process::Command::new(qualifier_bin())
+        .args(["attest", "--stdin"])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(ref mut stdin) = child.stdin {
+                writeln!(stdin, "{}", invalid_json).ok();
+            }
+            child.wait_with_output()
+        })
+        .expect("failed to run batch mode");
+
+    assert!(
+        !output.status.success(),
+        "batch mode should reject invalid attestation (empty summary)"
+    );
+}
