@@ -615,10 +615,7 @@ fn test_score_accumulates_across_layouts() {
 
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let arr = parsed.as_array().unwrap();
-    let entry = arr
-        .iter()
-        .find(|e| e["subject"] == "src/mixed.rs")
-        .unwrap();
+    let entry = arr.iter().find(|e| e["subject"] == "src/mixed.rs").unwrap();
     assert_eq!(
         entry["raw_score"], 30,
         "scores should accumulate across layouts: 40 + -10 = 30"

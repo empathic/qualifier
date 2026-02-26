@@ -365,10 +365,7 @@ impl Record {
             Record::Attestation(a) => &a.subject,
             Record::Epoch(e) => &e.subject,
             Record::Dependency(d) => &d.subject,
-            Record::Unknown(v) => v
-                .get("subject")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
+            Record::Unknown(v) => v.get("subject").and_then(|v| v.as_str()).unwrap_or(""),
         }
     }
 
@@ -571,9 +568,7 @@ pub fn validate(attestation: &Attestation) -> Vec<String> {
     // Warn about 'epoch' used as a kind (it's now a record type)
     if let Kind::Custom(ref custom) = attestation.body.kind {
         if custom == "epoch" {
-            errors.push(
-                "'epoch' is a record type, not a kind; use type: \"epoch\" instead".into(),
-            );
+            errors.push("'epoch' is a record type, not a kind; use type: \"epoch\" instead".into());
         }
 
         // Warn about potentially misspelled custom kinds

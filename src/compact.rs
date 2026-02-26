@@ -67,10 +67,7 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
 
     for record in &qual_file.records {
         if record.is_scored() {
-            by_subject
-                .entry(record.subject())
-                .or_default()
-                .push(record);
+            by_subject.entry(record.subject()).or_default().push(record);
         } else {
             passthrough.push(record.clone());
         }
