@@ -28,30 +28,39 @@ Every record has a `type` field that identifies its schema. Qualifier defines th
 | `epoch`       | A compaction snapshot                    |
 | `dependency`  | A dependency edge between artifacts      |
 
-When `type` is omitted, it defaults to `"attestation"`.
+When `type` is omitted, it defaults to `"attestation"`. Unknown types are preserved as opaque pass-through data.
+
+## Record frame
+
+All record types share a common **frame** — a fixed set of fields that answer "who said what about which artifact, when":
+
+| Field        | Type    | Required | Description                                      |
+| ------------ | ------- | -------- | ------------------------------------------------ |
+| `v`          | integer | yes      | Format version (always 3)                        |
+| `type`       | string  | yes*     | Record type identifier. *Defaults to `"attestation"`. |
+| `artifact`   | string  | yes      | Qualified name of the target artifact            |
+| `span`       | object  | no       | Sub-artifact range (line/col addressing)         |
+| `author`     | string  | yes      | Who or what created this record                  |
+| `created_at` | string  | yes      | RFC 3339 timestamp                               |
+| `id`         | string  | yes      | Content-addressed BLAKE3 hash                    |
+
+Each record type adds its own body fields alongside the frame. There is no nested `body` wrapper — everything is flat in the JSON object.
 
 ## Attestation schema
 
-Each attestation is a JSON object with these fields:
+Attestations are the primary record type. Frame fields plus:
 
 | Field           | Type     | Required | Description                                      |
 | --------------- | -------- | -------- | ------------------------------------------------ |
-| `v`             | integer  | yes      | Format version (always 3)                        |
-| `type`          | string   | yes*     | Record type (`"attestation"`). *May be omitted.  |
-| `artifact`      | string   | yes      | Qualified name of the artifact                   |
-| `span`          | object   | no       | Sub-artifact range (line/col addressing)         |
 | `kind`          | enum     | yes      | Type of attestation (see below)                  |
 | `score`         | integer  | yes      | Signed quality delta, -100..100                  |
 | `summary`       | string   | yes      | Human-readable one-liner                         |
 | `detail`        | string   | no       | Extended description (markdown allowed)          |
 | `suggested_fix` | string   | no       | Actionable suggestion for improvement            |
 | `tags`          | string[] | no       | Freeform classification tags                     |
-| `author`        | string   | yes      | Who or what created this attestation             |
 | `author_type`   | enum     | no       | Author classification: human, ai, tool, unknown  |
-| `created_at`    | string   | yes      | RFC 3339 timestamp                               |
 | `ref`           | string   | no       | VCS ref pin (e.g. "git:3aba500"), opaque string  |
 | `supersedes`    | string   | no       | ID of a prior attestation this replaces          |
-| `id`            | string   | yes      | Content-addressed BLAKE3 hash                    |
 
 ## Attestation kinds
 
@@ -66,6 +75,37 @@ Each attestation is a JSON object with these fields:
 | `waiver`     | +10           | Acknowledged issue, explicitly accepted        |
 
 When `--score` is omitted from `qualifier attest`, the CLI uses the default score for the given kind.
+
+## Epoch schema
+
+An **epoch** is a compaction snapshot — a synthetic record that replaces a set of attestations with a single scored record preserving the net score. Frame fields plus:
+
+| Field         | Type     | Required | Description                                       |
+| ------------- | -------- | -------- | ------------------------------------------------- |
+| `score`       | integer  | yes      | Net score at compaction time                      |
+| `summary`     | string   | yes      | `"Compacted from N attestations"`                 |
+| `refs`        | string[] | yes      | IDs of the compacted records                      |
+| `author_type` | enum     | no       | Always `"tool"` for epochs                        |
+
+Epoch `author` is always `"qualifier/compact"`.
+
+```json
+{"v":3,"type":"epoch","artifact":"src/parser.rs","score":10,"summary":"Compacted from 12 attestations","refs":["a1b2...","c3d4..."],"author":"qualifier/compact","author_type":"tool","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6..."}
+```
+
+## Dependency schema
+
+A **dependency** record declares directed edges from one artifact to others. Frame fields plus:
+
+| Field        | Type     | Required | Description                                        |
+| ------------ | -------- | -------- | -------------------------------------------------- |
+| `depends_on` | string[] | yes      | Artifact names this artifact depends on            |
+
+```json
+{"v":3,"type":"dependency","artifact":"bin/server","depends_on":["lib/auth","lib/http"],"author":"build-system","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d..."}
+```
+
+Dependency records don't carry scores. They feed the propagation engine that computes effective scores.
 
 ## Supersession
 
