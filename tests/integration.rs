@@ -1,4 +1,4 @@
-use qualifier::attestation::{self, Attestation, Kind, Record};
+use qualifier::attestation::{self, Attestation, AttestationBody, Kind, Record};
 use qualifier::compact;
 use qualifier::graph;
 use qualifier::qual_file::{self, QualFile};
@@ -7,31 +7,33 @@ use qualifier::scoring;
 use chrono::Utc;
 use std::path::PathBuf;
 
-fn make_att(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
+fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
     attestation::finalize(Attestation {
-        v: 3,
+        metabox: "1".into(),
         record_type: "attestation".into(),
-        artifact: artifact.into(),
-        span: None,
-        kind,
-        score,
-        summary: summary.into(),
-        detail: None,
-        suggested_fix: None,
-        tags: vec![],
+        subject: subject.into(),
         author: "test@test.com".into(),
-        author_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
-        r#ref: None,
-        supersedes: None,
         id: String::new(),
+        body: AttestationBody {
+            author_type: None,
+            detail: None,
+            kind,
+            r#ref: None,
+            score,
+            span: None,
+            suggested_fix: None,
+            summary: summary.into(),
+            supersedes: None,
+            tags: vec![],
+        },
     })
 }
 
-fn make_record(artifact: &str, kind: Kind, score: i32, summary: &str) -> Record {
-    Record::Attestation(make_att(artifact, kind, score, summary))
+fn make_record(subject: &str, kind: Kind, score: i32, summary: &str) -> Record {
+    Record::Attestation(Box::new(make_att(subject, kind, score, summary)))
 }
 
 // --- Golden ID tests (regression guards for content-addressed hashing) ---
@@ -39,76 +41,82 @@ fn make_record(artifact: &str, kind: Kind, score: i32, summary: &str) -> Record 
 #[test]
 fn test_golden_attestation_id() {
     let att = attestation::finalize(Attestation {
-        v: 3,
+        metabox: "1".into(),
         record_type: "attestation".into(),
-        artifact: "src/parser.rs".into(),
-        span: None,
-        kind: Kind::Concern,
-        score: -30,
-        summary: "Panics on malformed input".into(),
-        detail: None,
-        suggested_fix: None,
-        tags: vec![],
+        subject: "src/parser.rs".into(),
         author: "alice@example.com".into(),
-        author_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
-        r#ref: None,
-        supersedes: None,
         id: String::new(),
+        body: AttestationBody {
+            author_type: None,
+            detail: None,
+            kind: Kind::Concern,
+            r#ref: None,
+            score: -30,
+            span: None,
+            suggested_fix: None,
+            summary: "Panics on malformed input".into(),
+            supersedes: None,
+            tags: vec![],
+        },
     });
     // If this assertion fails, the canonical form or hashing has changed —
     // all existing record IDs in the wild are now broken.
     assert_eq!(
-        att.id, "126ea3aa6728437ee5ce567f4682ebac5d2fb87c5dfcc53824812c0f89b6fe74",
+        att.id, "ea7ddda3cc31412ef7b0499956c2811a9108ce0455d21174c4967c53e54a8b15",
         "Golden attestation ID changed! Canonical form or hashing is broken."
     );
 }
 
 #[test]
 fn test_golden_epoch_id() {
-    use qualifier::attestation::{self, AuthorType, Epoch};
+    use qualifier::attestation::{self, AuthorType, Epoch, EpochBody};
 
     let epoch = attestation::finalize_epoch(Epoch {
-        v: 3,
+        metabox: "1".into(),
         record_type: "epoch".into(),
-        artifact: "src/parser.rs".into(),
-        span: None,
-        score: 10,
-        summary: "Compacted from 3 attestations".into(),
-        refs: vec!["aaa".into(), "bbb".into(), "ccc".into()],
+        subject: "src/parser.rs".into(),
         author: "qualifier/compact".into(),
-        author_type: Some(AuthorType::Tool),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
+        body: EpochBody {
+            author_type: Some(AuthorType::Tool),
+            refs: vec!["aaa".into(), "bbb".into(), "ccc".into()],
+            score: 10,
+            span: None,
+            summary: "Compacted from 3 attestations".into(),
+        },
     });
     assert_eq!(
-        epoch.id, "759bc0c7a3ffa09aad7a37d40f07916abdbdc535d7cc2850cf62efc830793342",
+        epoch.id, "1e9d1a1177aaf80745176ecb65be5fb8ac8f21fdb35763443e78d84ddfda2b37",
         "Golden epoch ID changed! Canonical form or hashing is broken."
     );
 }
 
 #[test]
 fn test_golden_dependency_id() {
-    use qualifier::attestation::{self, DependencyRecord};
+    use qualifier::attestation::{self, DependencyBody, DependencyRecord};
 
     let dep = attestation::finalize_record(Record::Dependency(DependencyRecord {
-        v: 3,
+        metabox: "1".into(),
         record_type: "dependency".into(),
-        artifact: "bin/server".into(),
-        depends_on: vec!["lib/auth".into(), "lib/http".into()],
+        subject: "bin/server".into(),
         author: "build-system".into(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
+        body: DependencyBody {
+            depends_on: vec!["lib/auth".into(), "lib/http".into()],
+        },
     }));
     assert_eq!(
         dep.id(),
-        "a7275c47c9f910556fd225da973a05b4c6edaf465bfcddf2d6bd3758761e8adb",
+        "9fd88c26fbb436740f9483e411279ebeeb1cfa84d06839ede0f4854587f7cf67",
         "Golden dependency ID changed! Canonical form or hashing is broken."
     );
 }
@@ -155,32 +163,32 @@ fn test_attestation_id_is_content_addressed() {
 
 #[test]
 fn test_scoring_with_dependency_graph() {
-    let graph_str = r#"{"artifact":"bin/server","depends_on":["lib/auth","lib/http"]}
-{"artifact":"lib/auth","depends_on":["lib/crypto"]}
-{"artifact":"lib/http","depends_on":[]}
-{"artifact":"lib/crypto","depends_on":[]}
+    let graph_str = r#"{"subject":"bin/server","depends_on":["lib/auth","lib/http"]}
+{"subject":"lib/auth","depends_on":["lib/crypto"]}
+{"subject":"lib/http","depends_on":[]}
+{"subject":"lib/crypto","depends_on":[]}
 "#;
     let g = graph::parse_graph(graph_str).unwrap();
 
     let qfs = vec![
         QualFile {
             path: PathBuf::from("bin/server.qual"),
-            artifact: "bin/server".into(),
+            subject: "bin/server".into(),
             records: vec![make_record("bin/server", Kind::Praise, 80, "solid")],
         },
         QualFile {
             path: PathBuf::from("lib/auth.qual"),
-            artifact: "lib/auth".into(),
+            subject: "lib/auth".into(),
             records: vec![make_record("lib/auth", Kind::Praise, 60, "decent")],
         },
         QualFile {
             path: PathBuf::from("lib/http.qual"),
-            artifact: "lib/http".into(),
+            subject: "lib/http".into(),
             records: vec![make_record("lib/http", Kind::Praise, 70, "good")],
         },
         QualFile {
             path: PathBuf::from("lib/crypto.qual"),
-            artifact: "lib/crypto".into(),
+            subject: "lib/crypto".into(),
             records: vec![make_record("lib/crypto", Kind::Blocker, -40, "vulnerable")],
         },
     ];
@@ -207,15 +215,15 @@ fn test_scoring_with_dependency_graph() {
 
 #[test]
 fn test_artifacts_in_qual_but_not_in_graph() {
-    let graph_str = r#"{"artifact":"app","depends_on":["lib"]}
-{"artifact":"lib","depends_on":[]}
+    let graph_str = r#"{"subject":"app","depends_on":["lib"]}
+{"subject":"lib","depends_on":[]}
 "#;
     let g = graph::parse_graph(graph_str).unwrap();
 
     // "standalone" has a qual file but isn't in the graph
     let qfs = vec![QualFile {
         path: PathBuf::from("standalone.qual"),
-        artifact: "standalone".into(),
+        subject: "standalone".into(),
         records: vec![make_record("standalone", Kind::Praise, 50, "fine")],
     }];
 
@@ -236,31 +244,33 @@ fn test_artifacts_in_qual_but_not_in_graph() {
 #[test]
 fn test_compaction_roundtrip_preserves_scores() {
     let original = make_record("mod.rs", Kind::Concern, -30, "bad");
-    let fix = Record::Attestation(attestation::finalize(Attestation {
-        v: 3,
+    let fix = Record::Attestation(Box::new(attestation::finalize(Attestation {
+        metabox: "1".into(),
         record_type: "attestation".into(),
-        artifact: "mod.rs".into(),
-        span: None,
-        kind: Kind::Pass,
-        score: 20,
-        summary: "fixed".into(),
-        detail: None,
-        suggested_fix: None,
-        tags: vec![],
+        subject: "mod.rs".into(),
         author: "test@test.com".into(),
-        author_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
-        r#ref: None,
-        supersedes: Some(original.id().to_string()),
         id: String::new(),
-    }));
+        body: AttestationBody {
+            author_type: None,
+            detail: None,
+            kind: Kind::Pass,
+            r#ref: None,
+            score: 20,
+            span: None,
+            suggested_fix: None,
+            summary: "fixed".into(),
+            supersedes: Some(original.id().to_string()),
+            tags: vec![],
+        },
+    })));
     let extra = make_record("mod.rs", Kind::Praise, 40, "nice");
 
     let qf = QualFile {
         path: PathBuf::from("mod.rs.qual"),
-        artifact: "mod.rs".into(),
+        subject: "mod.rs".into(),
         records: vec![original, fix, extra],
     };
 
@@ -303,11 +313,10 @@ fn test_discovery_walks_tree() {
     let found = qual_file::discover(dir.path()).unwrap();
     assert_eq!(found.len(), 3);
 
-    let artifacts: Vec<&str> = found.iter().map(|qf| qf.artifact.as_str()).collect();
-    // artifact_name uses full paths, so check suffixes
-    assert!(artifacts.iter().any(|a| a.ends_with("src/lib.rs")));
-    assert!(artifacts.iter().any(|a| a.ends_with("src/parser.rs")));
-    assert!(artifacts.iter().any(|a| a.ends_with("src/util/helpers.rs")));
+    let subjects: Vec<&str> = found.iter().map(|qf| qf.subject.as_str()).collect();
+    assert!(subjects.iter().any(|a| a.ends_with("src/lib.rs")));
+    assert!(subjects.iter().any(|a| a.ends_with("src/parser.rs")));
+    assert!(subjects.iter().any(|a| a.ends_with("src/util/helpers.rs")));
 }
 
 // --- Supersession cycle detection ---
@@ -315,42 +324,46 @@ fn test_discovery_walks_tree() {
 #[test]
 fn test_supersession_cycle_detected() {
     let now = Utc::now();
-    let a = Record::Attestation(Attestation {
-        v: 3,
+    let a = Record::Attestation(Box::new(Attestation {
+        metabox: "1".into(),
         record_type: "attestation".into(),
-        artifact: "x".into(),
-        span: None,
-        kind: Kind::Pass,
-        score: 10,
-        summary: "a".into(),
-        detail: None,
-        suggested_fix: None,
-        tags: vec![],
+        subject: "x".into(),
         author: "test".into(),
-        author_type: None,
         created_at: now,
-        r#ref: None,
-        supersedes: Some("bbb".into()),
         id: "aaa".into(),
-    });
-    let b = Record::Attestation(Attestation {
-        v: 3,
+        body: AttestationBody {
+            author_type: None,
+            detail: None,
+            kind: Kind::Pass,
+            r#ref: None,
+            score: 10,
+            span: None,
+            suggested_fix: None,
+            summary: "a".into(),
+            supersedes: Some("bbb".into()),
+            tags: vec![],
+        },
+    }));
+    let b = Record::Attestation(Box::new(Attestation {
+        metabox: "1".into(),
         record_type: "attestation".into(),
-        artifact: "x".into(),
-        span: None,
-        kind: Kind::Pass,
-        score: 10,
-        summary: "b".into(),
-        detail: None,
-        suggested_fix: None,
-        tags: vec![],
+        subject: "x".into(),
         author: "test".into(),
-        author_type: None,
         created_at: now,
-        r#ref: None,
-        supersedes: Some("aaa".into()),
         id: "bbb".into(),
-    });
+        body: AttestationBody {
+            author_type: None,
+            detail: None,
+            kind: Kind::Pass,
+            r#ref: None,
+            score: 10,
+            span: None,
+            suggested_fix: None,
+            summary: "b".into(),
+            supersedes: Some("aaa".into()),
+            tags: vec![],
+        },
+    }));
 
     let result = attestation::check_supersession_cycles(&[a, b]);
     assert!(result.is_err());
@@ -360,9 +373,9 @@ fn test_supersession_cycle_detected() {
 
 #[test]
 fn test_graph_cycle_rejected() {
-    let graph_str = r#"{"artifact":"a","depends_on":["b"]}
-{"artifact":"b","depends_on":["c"]}
-{"artifact":"c","depends_on":["a"]}
+    let graph_str = r#"{"subject":"a","depends_on":["b"]}
+{"subject":"b","depends_on":["c"]}
+{"subject":"c","depends_on":["a"]}
 "#;
     let result = graph::parse_graph(graph_str);
     assert!(result.is_err());
@@ -373,30 +386,32 @@ fn test_graph_cycle_rejected() {
 #[test]
 fn test_cross_artifact_supersession_rejected() {
     let a = make_record("foo.rs", Kind::Concern, -10, "issue in foo");
-    let b = Record::Attestation(attestation::finalize(Attestation {
-        v: 3,
+    let b = Record::Attestation(Box::new(attestation::finalize(Attestation {
+        metabox: "1".into(),
         record_type: "attestation".into(),
-        artifact: "bar.rs".into(),
-        span: None,
-        kind: Kind::Pass,
-        score: 20,
-        summary: "fix in bar".into(),
-        detail: None,
-        suggested_fix: None,
-        tags: vec![],
+        subject: "bar.rs".into(),
         author: "test@test.com".into(),
-        author_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
-        r#ref: None,
-        supersedes: Some(a.id().to_string()),
         id: String::new(),
-    }));
+        body: AttestationBody {
+            author_type: None,
+            detail: None,
+            kind: Kind::Pass,
+            r#ref: None,
+            score: 20,
+            span: None,
+            suggested_fix: None,
+            summary: "fix in bar".into(),
+            supersedes: Some(a.id().to_string()),
+            tags: vec![],
+        },
+    })));
 
     let result = attestation::validate_supersession_targets(&[a, b]);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("cross-artifact"));
+    assert!(result.unwrap_err().to_string().contains("cross-subject"));
 }
 
 // --- Kind typo detection ---
@@ -404,22 +419,24 @@ fn test_cross_artifact_supersession_rejected() {
 #[test]
 fn test_kind_typo_detected_in_validation() {
     let att = attestation::finalize(Attestation {
-        v: 3,
+        metabox: "1".into(),
         record_type: "attestation".into(),
-        artifact: "x.rs".into(),
-        span: None,
-        kind: Kind::Custom("pss".into()),
-        score: 10,
-        summary: "oops".into(),
-        detail: None,
-        suggested_fix: None,
-        tags: vec![],
+        subject: "x.rs".into(),
         author: "test@test.com".into(),
-        author_type: None,
         created_at: Utc::now(),
-        r#ref: None,
-        supersedes: None,
         id: String::new(),
+        body: AttestationBody {
+            author_type: None,
+            detail: None,
+            kind: Kind::Custom("pss".into()),
+            r#ref: None,
+            score: 10,
+            span: None,
+            suggested_fix: None,
+            summary: "oops".into(),
+            supersedes: None,
+            tags: vec![],
+        },
     });
 
     let errors = attestation::validate(&att);
@@ -440,42 +457,44 @@ fn test_parse_qual_file_only_comments() {
 }
 
 #[test]
-fn test_v3_roundtrip() {
+fn test_metabox_roundtrip() {
     use qualifier::attestation::AuthorType;
 
     let dir = tempfile::tempdir().unwrap();
     let qual_path = dir.path().join("test.rs.qual");
 
     let att = attestation::finalize(Attestation {
-        v: 3,
+        metabox: "1".into(),
         record_type: "attestation".into(),
-        artifact: "test.rs".into(),
-        span: None,
-        kind: Kind::Praise,
-        score: 30,
-        summary: "Great code".into(),
-        detail: None,
-        suggested_fix: None,
-        tags: vec!["quality".into()],
+        subject: "test.rs".into(),
         author: "alice@example.com".into(),
-        author_type: Some(AuthorType::Human),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
-        r#ref: Some("git:3aba500".into()),
-        supersedes: None,
         id: String::new(),
+        body: AttestationBody {
+            author_type: Some(AuthorType::Human),
+            detail: None,
+            kind: Kind::Praise,
+            r#ref: Some("git:3aba500".into()),
+            score: 30,
+            span: None,
+            suggested_fix: None,
+            summary: "Great code".into(),
+            supersedes: None,
+            tags: vec!["quality".into()],
+        },
     });
-    assert_eq!(att.v, 3);
+    assert_eq!(att.metabox, "1");
 
-    qual_file::append(&qual_path, &Record::Attestation(att.clone())).unwrap();
+    qual_file::append(&qual_path, &Record::Attestation(Box::new(att.clone()))).unwrap();
     let qf = qual_file::parse(&qual_path).unwrap();
     assert_eq!(qf.records.len(), 1);
 
     let parsed = qf.records[0].as_attestation().unwrap();
-    assert_eq!(parsed.v, 3);
-    assert_eq!(parsed.author_type, Some(AuthorType::Human));
-    assert_eq!(parsed.r#ref.as_deref(), Some("git:3aba500"));
+    assert_eq!(parsed.metabox, "1");
+    assert_eq!(parsed.body.author_type, Some(AuthorType::Human));
+    assert_eq!(parsed.body.r#ref.as_deref(), Some("git:3aba500"));
     assert_eq!(parsed.id, att.id);
 }
 
@@ -489,7 +508,7 @@ fn test_compact_snapshot_produces_epoch() {
     ];
     let qf = QualFile {
         path: PathBuf::from("src/.qual"),
-        artifact: "src/".into(),
+        subject: "src/".into(),
         records,
     };
 
@@ -497,34 +516,36 @@ fn test_compact_snapshot_produces_epoch() {
     assert_eq!(snapped.records.len(), 1);
 
     let epoch = snapped.records[0].as_epoch().unwrap();
-    assert_eq!(epoch.v, 3);
-    assert_eq!(epoch.author_type, Some(AuthorType::Tool));
-    assert_eq!(epoch.score, 30); // 40 + -10
+    assert_eq!(epoch.metabox, "1");
+    assert_eq!(epoch.body.author_type, Some(AuthorType::Tool));
+    assert_eq!(epoch.body.score, 30); // 40 + -10
 }
 
 #[test]
 fn test_supersession_with_new_fields() {
     let original = make_record("mod.rs", Kind::Concern, -20, "problem");
-    let replacement = Record::Attestation(attestation::finalize(Attestation {
-        v: 3,
+    let replacement = Record::Attestation(Box::new(attestation::finalize(Attestation {
+        metabox: "1".into(),
         record_type: "attestation".into(),
-        artifact: "mod.rs".into(),
-        span: None,
-        kind: Kind::Pass,
-        score: 20,
-        summary: "fixed it".into(),
-        detail: None,
-        suggested_fix: None,
-        tags: vec![],
+        subject: "mod.rs".into(),
         author: "test@test.com".into(),
-        author_type: Some(qualifier::attestation::AuthorType::Human),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
-        r#ref: Some("git:abc123".into()),
-        supersedes: Some(original.id().to_string()),
         id: String::new(),
-    }));
+        body: AttestationBody {
+            author_type: Some(qualifier::attestation::AuthorType::Human),
+            detail: None,
+            kind: Kind::Pass,
+            r#ref: Some("git:abc123".into()),
+            score: 20,
+            span: None,
+            suggested_fix: None,
+            summary: "fixed it".into(),
+            supersedes: Some(original.id().to_string()),
+            tags: vec![],
+        },
+    })));
 
     let all = vec![original.clone(), replacement.clone()];
 

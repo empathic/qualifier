@@ -37,16 +37,16 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     let scores = scoring::effective_scores(&graph, &qual_files);
 
-    // Build an index of artifacts that have records
+    // Build an index of subjects that have records
     let attested: HashSet<String> = qual_files
         .iter()
-        .flat_map(|qf| qf.records.iter().map(|r| r.artifact().to_string()))
+        .flat_map(|qf| qf.records.iter().map(|r| r.subject().to_string()))
         .collect();
 
     let mut reports: Vec<(String, scoring::ScoreReport)> = scores
         .into_iter()
-        .filter(|(artifact, report)| {
-            if args.unqualified && attested.contains(artifact) {
+        .filter(|(subject, report)| {
+            if args.unqualified && attested.contains(subject) {
                 return false;
             }
 
@@ -59,7 +59,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             if let Some(ref kind_filter) = args.kind {
                 let kind_match = qual_files.iter().any(|qf| {
                     qf.records.iter().any(|r| {
-                        r.artifact() == *artifact
+                        r.subject() == *subject
                             && r.kind().map(|k| k.to_string()).as_deref() == Some(kind_filter)
                     })
                 });

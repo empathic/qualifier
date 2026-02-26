@@ -55,21 +55,21 @@ pub fn effective_scores(
     graph: &DependencyGraph,
     qual_files: &[QualFile],
 ) -> HashMap<String, ScoreReport> {
-    // Build a map of artifact -> records
-    let mut artifact_records: HashMap<&str, Vec<&Record>> = HashMap::new();
+    // Build a map of subject -> records
+    let mut subject_records: HashMap<&str, Vec<&Record>> = HashMap::new();
     for qf in qual_files {
         for record in &qf.records {
-            artifact_records
-                .entry(record.artifact())
+            subject_records
+                .entry(record.subject())
                 .or_default()
                 .push(record);
         }
     }
 
-    // Compute raw scores for all known artifacts
+    // Compute raw scores for all known subjects
     let mut raw_scores: HashMap<String, i32> = HashMap::new();
-    for (artifact, records) in &artifact_records {
-        raw_scores.insert(artifact.to_string(), raw_score_from_refs(records));
+    for (subject, records) in &subject_records {
+        raw_scores.insert(subject.to_string(), raw_score_from_refs(records));
     }
 
     // Include graph artifacts with no records (raw score = 0)
@@ -81,9 +81,9 @@ pub fn effective_scores(
 
     // If graph is empty, all artifacts get effective = raw
     if graph.is_empty() {
-        for (artifact, &raw) in &raw_scores {
+        for (subject, &raw) in &raw_scores {
             reports.insert(
-                artifact.clone(),
+                subject.clone(),
                 ScoreReport {
                     raw,
                     effective: raw,
@@ -99,9 +99,9 @@ pub fn effective_scores(
         Ok(order) => order,
         Err(_) => {
             // If there's a cycle, fall back to raw = effective for everything
-            for (artifact, &raw) in &raw_scores {
+            for (subject, &raw) in &raw_scores {
                 reports.insert(
-                    artifact.clone(),
+                    subject.clone(),
                     ScoreReport {
                         raw,
                         effective: raw,
@@ -168,9 +168,9 @@ pub fn effective_scores(
         );
     }
 
-    // Also include artifacts with qual files but not in the graph
-    for (artifact, &raw) in &raw_scores {
-        reports.entry(artifact.clone()).or_insert(ScoreReport {
+    // Also include subjects with qual files but not in the graph
+    for (subject, &raw) in &raw_scores {
+        reports.entry(subject.clone()).or_insert(ScoreReport {
             raw,
             effective: raw,
             limiting_path: None,
@@ -232,59 +232,63 @@ pub fn score_bar(score: i32, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attestation::{self, Attestation, Kind};
+    use crate::attestation::{self, Attestation, AttestationBody, Kind};
     use crate::graph;
     use chrono::Utc;
     use std::path::PathBuf;
 
-    fn make_att(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
+    fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
         attestation::finalize(Attestation {
-            v: 3,
+            metabox: "1".into(),
             record_type: "attestation".into(),
-            artifact: artifact.into(),
-            span: None,
-            kind,
-            score,
-            summary: summary.into(),
-            detail: None,
-            suggested_fix: None,
-            tags: vec![],
+            subject: subject.into(),
             author: "test@test.com".into(),
-            author_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
-            r#ref: None,
-            supersedes: None,
             id: String::new(),
+            body: AttestationBody {
+                author_type: None,
+                detail: None,
+                kind,
+                r#ref: None,
+                score,
+                span: None,
+                suggested_fix: None,
+                summary: summary.into(),
+                supersedes: None,
+                tags: vec![],
+            },
         })
     }
 
-    fn make_record(artifact: &str, kind: Kind, score: i32, summary: &str) -> Record {
-        Record::Attestation(make_att(artifact, kind, score, summary))
+    fn make_record(subject: &str, kind: Kind, score: i32, summary: &str) -> Record {
+        Record::Attestation(Box::new(make_att(subject, kind, score, summary)))
     }
 
-    fn make_superseding(artifact: &str, score: i32, supersedes_id: &str) -> Record {
-        Record::Attestation(attestation::finalize(Attestation {
-            v: 3,
+    fn make_superseding(subject: &str, score: i32, supersedes_id: &str) -> Record {
+        Record::Attestation(Box::new(attestation::finalize(Attestation {
+            metabox: "1".into(),
             record_type: "attestation".into(),
-            artifact: artifact.into(),
-            span: None,
-            kind: Kind::Pass,
-            score,
-            summary: "updated".into(),
-            detail: None,
-            suggested_fix: None,
-            tags: vec![],
+            subject: subject.into(),
             author: "test@test.com".into(),
-            author_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
-            r#ref: None,
-            supersedes: Some(supersedes_id.into()),
             id: String::new(),
-        }))
+            body: AttestationBody {
+                author_type: None,
+                detail: None,
+                kind: Kind::Pass,
+                r#ref: None,
+                score,
+                span: None,
+                suggested_fix: None,
+                summary: "updated".into(),
+                supersedes: Some(supersedes_id.into()),
+                tags: vec![],
+            },
+        })))
     }
 
     #[test]
@@ -351,7 +355,7 @@ mod tests {
         let graph = DependencyGraph::empty();
         let qf = QualFile {
             path: PathBuf::from("x.qual"),
-            artifact: "x".into(),
+            subject: "x".into(),
             records: vec![make_record("x", Kind::Praise, 50, "good")],
         };
 
@@ -364,19 +368,19 @@ mod tests {
 
     #[test]
     fn test_effective_scores_limited_by_dependency() {
-        let graph_str = r#"{"artifact":"app","depends_on":["lib"]}
-{"artifact":"lib","depends_on":[]}
+        let graph_str = r#"{"subject":"app","depends_on":["lib"]}
+{"subject":"lib","depends_on":[]}
 "#;
         let g = graph::parse_graph(graph_str).unwrap();
 
         let qf_app = QualFile {
             path: PathBuf::from("app.qual"),
-            artifact: "app".into(),
+            subject: "app".into(),
             records: vec![make_record("app", Kind::Praise, 80, "great app")],
         };
         let qf_lib = QualFile {
             path: PathBuf::from("lib.qual"),
-            artifact: "lib".into(),
+            subject: "lib".into(),
             records: vec![make_record("lib", Kind::Concern, -20, "bad lib")],
         };
 
@@ -395,26 +399,26 @@ mod tests {
 
     #[test]
     fn test_effective_scores_chain_propagation() {
-        let graph_str = r#"{"artifact":"app","depends_on":["mid"]}
-{"artifact":"mid","depends_on":["leaf"]}
-{"artifact":"leaf","depends_on":[]}
+        let graph_str = r#"{"subject":"app","depends_on":["mid"]}
+{"subject":"mid","depends_on":["leaf"]}
+{"subject":"leaf","depends_on":[]}
 "#;
         let g = graph::parse_graph(graph_str).unwrap();
 
         let qfs = vec![
             QualFile {
                 path: PathBuf::from("app.qual"),
-                artifact: "app".into(),
+                subject: "app".into(),
                 records: vec![make_record("app", Kind::Praise, 90, "great")],
             },
             QualFile {
                 path: PathBuf::from("mid.qual"),
-                artifact: "mid".into(),
+                subject: "mid".into(),
                 records: vec![make_record("mid", Kind::Praise, 70, "good")],
             },
             QualFile {
                 path: PathBuf::from("leaf.qual"),
-                artifact: "leaf".into(),
+                subject: "leaf".into(),
                 records: vec![make_record("leaf", Kind::Blocker, -50, "cursed")],
             },
         ];
@@ -428,8 +432,8 @@ mod tests {
 
     #[test]
     fn test_effective_scores_unqualified_artifact() {
-        let graph_str = r#"{"artifact":"app","depends_on":["lib"]}
-{"artifact":"lib","depends_on":[]}
+        let graph_str = r#"{"subject":"app","depends_on":["lib"]}
+{"subject":"lib","depends_on":[]}
 "#;
         let g = graph::parse_graph(graph_str).unwrap();
         let scores = effective_scores(&g, &[]);
@@ -541,14 +545,14 @@ mod tests {
 
     #[test]
     fn test_effective_score_zero_propagation() {
-        let graph_str = r#"{"artifact":"app","depends_on":["lib"]}
-{"artifact":"lib","depends_on":[]}
+        let graph_str = r#"{"subject":"app","depends_on":["lib"]}
+{"subject":"lib","depends_on":[]}
 "#;
         let g = graph::parse_graph(graph_str).unwrap();
 
         let qfs = vec![QualFile {
             path: PathBuf::from("app.qual"),
-            artifact: "app".into(),
+            subject: "app".into(),
             records: vec![make_record("app", Kind::Praise, 50, "good")],
         }];
         let scores = effective_scores(&g, &qfs);
@@ -558,32 +562,32 @@ mod tests {
 
     #[test]
     fn test_effective_score_negative_deep_chain() {
-        let graph_str = r#"{"artifact":"app","depends_on":["mid"]}
-{"artifact":"mid","depends_on":["leaf1","leaf2"]}
-{"artifact":"leaf1","depends_on":[]}
-{"artifact":"leaf2","depends_on":[]}
+        let graph_str = r#"{"subject":"app","depends_on":["mid"]}
+{"subject":"mid","depends_on":["leaf1","leaf2"]}
+{"subject":"leaf1","depends_on":[]}
+{"subject":"leaf2","depends_on":[]}
 "#;
         let g = graph::parse_graph(graph_str).unwrap();
 
         let qfs = vec![
             QualFile {
                 path: PathBuf::from("app.qual"),
-                artifact: "app".into(),
+                subject: "app".into(),
                 records: vec![make_record("app", Kind::Praise, 90, "great")],
             },
             QualFile {
                 path: PathBuf::from("mid.qual"),
-                artifact: "mid".into(),
+                subject: "mid".into(),
                 records: vec![make_record("mid", Kind::Praise, 70, "good")],
             },
             QualFile {
                 path: PathBuf::from("leaf1.qual"),
-                artifact: "leaf1".into(),
+                subject: "leaf1".into(),
                 records: vec![make_record("leaf1", Kind::Blocker, -100, "cursed")],
             },
             QualFile {
                 path: PathBuf::from("leaf2.qual"),
-                artifact: "leaf2".into(),
+                subject: "leaf2".into(),
                 records: vec![make_record("leaf2", Kind::Praise, 80, "fine")],
             },
         ];

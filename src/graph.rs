@@ -17,7 +17,7 @@ pub struct DependencyGraph {
 /// A single entry in the `qualifier.graph.jsonl` file.
 #[derive(Debug, Deserialize)]
 struct GraphEntry {
-    artifact: String,
+    subject: String,
     depends_on: Vec<String>,
 }
 
@@ -116,7 +116,7 @@ impl DependencyGraph {
 
 /// Load a dependency graph from a `qualifier.graph.jsonl` file.
 ///
-/// Each line is a JSON object: `{"artifact": "...", "depends_on": ["...", ...]}`
+/// Each line is a JSON object: `{"subject": "...", "depends_on": ["...", ...]}`
 /// Empty lines and lines starting with `//` are skipped.
 pub fn load(path: &Path) -> crate::Result<DependencyGraph> {
     let content = std::fs::read_to_string(path)?;
@@ -136,7 +136,7 @@ pub fn parse_graph(content: &str) -> crate::Result<DependencyGraph> {
         let entry: GraphEntry = serde_json::from_str(trimmed)
             .map_err(|e| crate::Error::Validation(format!("graph line {}: {}", line_no + 1, e)))?;
 
-        let from = dg.get_or_insert(&entry.artifact);
+        let from = dg.get_or_insert(&entry.subject);
         for dep in &entry.depends_on {
             let to = dg.get_or_insert(dep);
             dg.graph.add_edge(from, to, ());
@@ -164,7 +164,7 @@ pub fn to_jsonl(graph: &DependencyGraph) -> String {
         deps.sort();
 
         let entry = serde_json::json!({
-            "artifact": artifact,
+            "subject": artifact,
             "depends_on": deps,
         });
         out.push_str(&serde_json::to_string(&entry).unwrap());
@@ -187,10 +187,10 @@ mod tests {
 
     #[test]
     fn test_parse_simple_graph() {
-        let input = r#"{"artifact":"bin/server","depends_on":["lib/auth","lib/http"]}
-{"artifact":"lib/auth","depends_on":["lib/crypto"]}
-{"artifact":"lib/http","depends_on":[]}
-{"artifact":"lib/crypto","depends_on":[]}
+        let input = r#"{"subject":"bin/server","depends_on":["lib/auth","lib/http"]}
+{"subject":"lib/auth","depends_on":["lib/crypto"]}
+{"subject":"lib/http","depends_on":[]}
+{"subject":"lib/crypto","depends_on":[]}
 "#;
         let g = parse_graph(input).unwrap();
         assert_eq!(g.len(), 4);
@@ -209,10 +209,10 @@ mod tests {
     #[test]
     fn test_parse_with_comments_and_blanks() {
         let input = r#"// dependency graph
-{"artifact":"a","depends_on":["b"]}
+{"subject":"a","depends_on":["b"]}
 
 // b has no deps
-{"artifact":"b","depends_on":[]}
+{"subject":"b","depends_on":[]}
 "#;
         let g = parse_graph(input).unwrap();
         assert_eq!(g.len(), 2);
@@ -220,9 +220,9 @@ mod tests {
 
     #[test]
     fn test_cycle_detection() {
-        let input = r#"{"artifact":"a","depends_on":["b"]}
-{"artifact":"b","depends_on":["c"]}
-{"artifact":"c","depends_on":["a"]}
+        let input = r#"{"subject":"a","depends_on":["b"]}
+{"subject":"b","depends_on":["c"]}
+{"subject":"c","depends_on":["a"]}
 "#;
         let err = parse_graph(input).unwrap_err();
         assert!(
@@ -233,16 +233,16 @@ mod tests {
 
     #[test]
     fn test_self_cycle() {
-        let input = r#"{"artifact":"a","depends_on":["a"]}"#;
+        let input = r#"{"subject":"a","depends_on":["a"]}"#;
         let err = parse_graph(input).unwrap_err();
         assert!(matches!(err, crate::Error::Cycle { .. }));
     }
 
     #[test]
     fn test_toposort_order() {
-        let input = r#"{"artifact":"app","depends_on":["lib"]}
-{"artifact":"lib","depends_on":["core"]}
-{"artifact":"core","depends_on":[]}
+        let input = r#"{"subject":"app","depends_on":["lib"]}
+{"subject":"lib","depends_on":["core"]}
+{"subject":"core","depends_on":[]}
 "#;
         let g = parse_graph(input).unwrap();
         let order = g.toposort().unwrap();
@@ -257,8 +257,8 @@ mod tests {
 
     #[test]
     fn test_to_dot() {
-        let input = r#"{"artifact":"a","depends_on":["b"]}
-{"artifact":"b","depends_on":[]}
+        let input = r#"{"subject":"a","depends_on":["b"]}
+{"subject":"b","depends_on":[]}
 "#;
         let g = parse_graph(input).unwrap();
         let dot = g.to_dot();
@@ -270,8 +270,8 @@ mod tests {
 
     #[test]
     fn test_to_jsonl_roundtrip() {
-        let input = r#"{"artifact":"a","depends_on":["b"]}
-{"artifact":"b","depends_on":[]}
+        let input = r#"{"subject":"a","depends_on":["b"]}
+{"subject":"b","depends_on":[]}
 "#;
         let g = parse_graph(input).unwrap();
         let jsonl = to_jsonl(&g);
@@ -289,8 +289,8 @@ mod tests {
         let path = dir.path().join("qualifier.graph.jsonl");
         std::fs::write(
             &path,
-            r#"{"artifact":"x","depends_on":["y"]}
-{"artifact":"y","depends_on":[]}
+            r#"{"subject":"x","depends_on":["y"]}
+{"subject":"y","depends_on":[]}
 "#,
         )
         .unwrap();

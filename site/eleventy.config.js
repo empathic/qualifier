@@ -57,6 +57,11 @@ export default function (eleventyConfig) {
   });
   eleventyConfig.addGlobalData("specHtml", specMd.render(specContent));
 
+  // Load METABOX.md from repo root, pre-render to HTML
+  const metaboxRaw = readFileSync("../METABOX.md", "utf-8");
+  const metaboxContent = metaboxRaw.replace(/^# .+\n+(\*\*.+\n)*/m, "");
+  eleventyConfig.addGlobalData("metaboxHtml", specMd.render(metaboxContent));
+
   // Load example files for the interactive playground
   eleventyConfig.addGlobalData("playgroundFiles", () => {
     const dir = "examples";

@@ -39,17 +39,18 @@
   }
 
   // --- Supersession filtering ---
-  // Returns only non-superseded attestations
-  function filterSuperseded(attestations) {
+  // Returns only non-superseded records
+  function filterSuperseded(records) {
     var superseded = {};
-    for (var i = 0; i < attestations.length; i++) {
-      var a = attestations[i];
-      if (a.supersedes) superseded[a.supersedes] = true;
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i];
+      var sup = r.body && r.body.supersedes;
+      if (sup) superseded[sup] = true;
     }
     var active = [];
-    for (var j = 0; j < attestations.length; j++) {
-      if (!superseded[attestations[j].id]) {
-        active.push(attestations[j]);
+    for (var j = 0; j < records.length; j++) {
+      if (!superseded[records[j].id]) {
+        active.push(records[j]);
       }
     }
     return active;
@@ -62,25 +63,26 @@
   }
 
   // --- Raw score ---
-  function rawScore(attestations) {
-    var active = filterSuperseded(attestations);
+  function rawScore(records) {
+    var active = filterSuperseded(records);
     var sum = 0;
     for (var i = 0; i < active.length; i++) {
       if (isScored(active[i])) {
-        sum += active[i].score || 0;
+        var score = active[i].body ? active[i].body.score : 0;
+        sum += score || 0;
       }
     }
     return Math.max(-100, Math.min(100, sum));
   }
 
-  // --- Group attestations by artifact ---
-  function groupByArtifact(attestations) {
+  // --- Group records by subject ---
+  function groupBySubject(records) {
     var groups = {};
-    for (var i = 0; i < attestations.length; i++) {
-      var a = attestations[i];
-      var key = a.artifact;
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i];
+      var key = r.subject;
       if (!groups[key]) groups[key] = [];
-      groups[key].push(a);
+      groups[key].push(r);
     }
     return groups;
   }
@@ -88,19 +90,21 @@
   // --- Build adjacency list from graph entries ---
   function buildAdjacency(graphEntries) {
     var adj = {};
-    var allArtifacts = {};
+    var allSubjects = {};
     for (var i = 0; i < graphEntries.length; i++) {
       var e = graphEntries[i];
-      adj[e.artifact] = e.depends_on || [];
-      allArtifacts[e.artifact] = true;
-      var deps = e.depends_on || [];
+      var subj = e.subject;
+      var deps = e.body ? e.body.depends_on : e.depends_on;
+      adj[subj] = deps || [];
+      allSubjects[subj] = true;
+      deps = deps || [];
       for (var j = 0; j < deps.length; j++) {
-        allArtifacts[deps[j]] = true;
+        allSubjects[deps[j]] = true;
       }
     }
-    // Ensure all referenced artifacts have entries
-    for (var art in allArtifacts) {
-      if (!adj[art]) adj[art] = [];
+    // Ensure all referenced subjects have entries
+    for (var s in allSubjects) {
+      if (!adj[s]) adj[s] = [];
     }
     return adj;
   }
@@ -129,31 +133,31 @@
   }
 
   // --- Effective scores ---
-  // Returns { artifact: { raw, effective, limitingPath } }
-  function effectiveScores(graphEntries, attestations) {
+  // Returns { subject: { raw, effective, limitingPath } }
+  function effectiveScores(graphEntries, records) {
     var adj = buildAdjacency(graphEntries);
-    var grouped = groupByArtifact(attestations);
+    var grouped = groupBySubject(records);
     var order = toposort(adj);
     var scores = {};
 
-    // Compute raw scores for all artifacts
-    for (var art in adj) {
-      scores[art] = {
-        raw: grouped[art] ? rawScore(grouped[art]) : 0,
+    // Compute raw scores for all subjects
+    for (var subj in adj) {
+      scores[subj] = {
+        raw: grouped[subj] ? rawScore(grouped[subj]) : 0,
         effective: 0,
         limitingPath: null,
-        attestations: grouped[art] ? filterSuperseded(grouped[art]) : [],
+        records: grouped[subj] ? filterSuperseded(grouped[subj]) : [],
       };
     }
 
-    // Also include artifacts only in attestations, not in graph
-    for (var artKey in grouped) {
-      if (!scores[artKey]) {
-        scores[artKey] = {
-          raw: rawScore(grouped[artKey]),
+    // Also include subjects only in records, not in graph
+    for (var subjKey in grouped) {
+      if (!scores[subjKey]) {
+        scores[subjKey] = {
+          raw: rawScore(grouped[subjKey]),
           effective: 0,
           limitingPath: null,
-          attestations: filterSuperseded(grouped[artKey]),
+          records: filterSuperseded(grouped[subjKey]),
         };
       }
     }
@@ -213,9 +217,9 @@
     }
   }
 
-  // --- Version detection ---
-  function attestationVersion(att) {
-    return att.v || 3;
+  // --- Format detection ---
+  function isMetabox(record) {
+    return record.metabox === "1";
   }
 
   // --- Export ---
@@ -224,13 +228,13 @@
     parseGraph: parseGraph,
     filterSuperseded: filterSuperseded,
     rawScore: rawScore,
-    groupByArtifact: groupByArtifact,
+    groupBySubject: groupBySubject,
     buildAdjacency: buildAdjacency,
     toposort: toposort,
     effectiveScores: effectiveScores,
     scoreStatus: scoreStatus,
     scoreBar: scoreBar,
     statusColor: statusColor,
-    attestationVersion: attestationVersion,
+    isMetabox: isMetabox,
   };
 })();

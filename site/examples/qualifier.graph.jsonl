@@ -1,5 +1,5 @@
-{"artifact":"bin/server","depends_on":["src/auth.rs","lib/http"]}
-{"artifact":"src/auth.rs","depends_on":["lib/crypto"]}
-{"artifact":"src/parser.rs","depends_on":[]}
-{"artifact":"lib/http","depends_on":[]}
-{"artifact":"lib/crypto","depends_on":[]}
+{"subject":"bin/server","depends_on":["src/auth.rs","lib/http"]}
+{"subject":"src/auth.rs","depends_on":["lib/crypto"]}
+{"subject":"src/parser.rs","depends_on":[]}
+{"subject":"lib/http","depends_on":[]}
+{"subject":"lib/crypto","depends_on":[]}

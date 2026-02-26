@@ -168,8 +168,8 @@ fn test_score_json_output_structure() {
 
     let entry = &arr[0];
     assert!(
-        entry.get("artifact").is_some(),
-        "entry should have 'artifact'"
+        entry.get("subject").is_some(),
+        "entry should have 'subject'"
     );
     assert!(
         entry.get("raw_score").is_some(),
@@ -368,7 +368,7 @@ fn test_show_json_output() {
         panic!("show --format json should produce valid JSON: {e}\ngot: {stdout}")
     });
 
-    assert_eq!(parsed["artifact"], "api.rs");
+    assert_eq!(parsed["subject"], "api.rs");
     assert_eq!(parsed["raw_score"], 30);
     assert_eq!(parsed["effective_score"], 30);
     assert!(parsed["records"].is_array());
@@ -433,7 +433,7 @@ fn test_multiple_attestations_accumulate() {
 
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let arr = parsed.as_array().unwrap();
-    let entry = arr.iter().find(|e| e["artifact"] == "lib.rs").unwrap();
+    let entry = arr.iter().find(|e| e["subject"] == "lib.rs").unwrap();
     assert_eq!(
         entry["raw_score"], 20,
         "scores should accumulate: 30 + -10 = 20"
@@ -617,7 +617,7 @@ fn test_score_accumulates_across_layouts() {
     let arr = parsed.as_array().unwrap();
     let entry = arr
         .iter()
-        .find(|e| e["artifact"] == "src/mixed.rs")
+        .find(|e| e["subject"] == "src/mixed.rs")
         .unwrap();
     assert_eq!(
         entry["raw_score"], 30,
@@ -808,7 +808,7 @@ fn test_graph_dot_output() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("qualifier.graph.jsonl"),
-        "{\"artifact\":\"app\",\"depends_on\":[\"lib\"]}\n",
+        "{\"subject\":\"app\",\"depends_on\":[\"lib\"]}\n",
     )
     .unwrap();
 
@@ -824,7 +824,7 @@ fn test_graph_json_output() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("qualifier.graph.jsonl"),
-        "{\"artifact\":\"app\",\"depends_on\":[\"lib\"]}\n",
+        "{\"subject\":\"app\",\"depends_on\":[\"lib\"]}\n",
     )
     .unwrap();
 
@@ -852,25 +852,7 @@ fn test_graph_missing_file() {
 fn test_score_overflow_clamped() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create 20 attestations each with score +100 by writing JSONL directly
-    let mut lines = String::new();
-    for i in 0..20 {
-        let json = serde_json::json!({
-            "artifact": "big.rs",
-            "kind": "praise",
-            "score": 100,
-            "summary": format!("praise {i}"),
-            "author": "test@test.com",
-            "created_at": format!("2026-01-{:02}T00:00:00Z", (i % 28) + 1),
-            "id": ""
-        });
-        lines.push_str(&json.to_string());
-        lines.push('\n');
-    }
-
-    // Write the file, then use qualifier to finalize IDs via show
-    // Actually, just write pre-finalized attestations isn't practical.
-    // Instead, use the CLI to create many attestations.
+    // Create 5 attestations each with score +100
     for i in 0..5 {
         run_qualifier(
             dir.path(),
@@ -894,7 +876,7 @@ fn test_score_overflow_clamped() {
 
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let arr = parsed.as_array().unwrap();
-    let entry = arr.iter().find(|e| e["artifact"] == "big.rs").unwrap();
+    let entry = arr.iter().find(|e| e["subject"] == "big.rs").unwrap();
     assert_eq!(
         entry["raw_score"], 100,
         "raw score should be clamped to 100, not 500"
@@ -909,10 +891,12 @@ fn test_attest_batch_validates() {
 
     // Pipe invalid JSONL (empty summary) into batch mode
     let invalid_json = serde_json::json!({
-        "artifact": "test.rs",
-        "kind": "pass",
-        "score": 10,
-        "summary": "",
+        "subject": "test.rs",
+        "body": {
+            "kind": "pass",
+            "score": 10,
+            "summary": ""
+        },
         "author": "test@test.com",
         "created_at": "2026-01-01T00:00:00Z"
     });
@@ -939,7 +923,7 @@ fn test_attest_batch_validates() {
     );
 }
 
-// --- v2 format tests ---
+// --- metabox format tests ---
 
 #[test]
 fn test_attest_with_author_type() {
@@ -1007,7 +991,7 @@ fn test_attest_with_ref() {
 }
 
 #[test]
-fn test_new_attestations_are_v3() {
+fn test_new_attestations_are_metabox() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, _, code) = run_qualifier(
@@ -1031,8 +1015,8 @@ fn test_new_attestations_are_v3() {
     let qual_path = dir.path().join(".qual");
     let content = std::fs::read_to_string(&qual_path).unwrap();
     assert!(
-        content.contains("\"v\":3"),
-        "new attestations should be v3: {content}"
+        content.contains("\"metabox\":\"1\""),
+        "new attestations should be metabox format: {content}"
     );
     assert!(
         content.contains("\"type\":\"attestation\""),

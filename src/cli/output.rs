@@ -28,9 +28,9 @@ pub fn score_color(score: i32) -> Color {
 /// Build a comfy-table for the `qualifier score` output.
 pub fn score_table(reports: &[(String, ScoreReport)]) -> Table {
     let mut table = Table::new();
-    table.set_header(vec!["ARTIFACT", "RAW", "EFF", "", "STATUS"]);
+    table.set_header(vec!["SUBJECT", "RAW", "EFF", "", "STATUS"]);
 
-    for (artifact, report) in reports {
+    for (subject, report) in reports {
         let status = scoring::score_status(report);
         let bar = scoring::score_bar(report.effective, 10);
 
@@ -43,7 +43,7 @@ pub fn score_table(reports: &[(String, ScoreReport)]) -> Table {
         let color = score_color(report.effective);
 
         table.add_row(vec![
-            Cell::new(artifact),
+            Cell::new(subject),
             Cell::new(report.raw).set_alignment(CellAlignment::Right),
             Cell::new(report.effective)
                 .set_alignment(CellAlignment::Right)
@@ -60,9 +60,9 @@ pub fn score_table(reports: &[(String, ScoreReport)]) -> Table {
 pub fn scores_json(reports: &[(String, ScoreReport)]) -> String {
     let entries: Vec<serde_json::Value> = reports
         .iter()
-        .map(|(artifact, report)| {
+        .map(|(subject, report)| {
             serde_json::json!({
-                "artifact": artifact,
+                "subject": subject,
                 "raw_score": report.raw,
                 "effective_score": report.effective,
                 "status": scoring::score_status(report),
@@ -75,9 +75,9 @@ pub fn scores_json(reports: &[(String, ScoreReport)]) -> String {
 }
 
 /// JSON output for a single artifact show.
-pub fn show_json(artifact: &str, report: &ScoreReport, records: &[Record]) -> String {
+pub fn show_json(subject: &str, report: &ScoreReport, records: &[Record]) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
-        "artifact": artifact,
+        "subject": subject,
         "raw_score": report.raw,
         "effective_score": report.effective,
         "limiting_path": report.limiting_path,

@@ -3,7 +3,7 @@ use clap::Args as ClapArgs;
 use std::io::{self, BufRead};
 use std::path::Path;
 
-use crate::attestation::{self, Attestation, AuthorType, Kind, Record};
+use crate::attestation::{self, Attestation, AttestationBody, AuthorType, Kind, Record};
 use crate::qual_file;
 
 #[derive(ClapArgs)]
@@ -69,7 +69,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         return run_batch();
     }
 
-    let artifact = match args.artifact {
+    let subject = match args.artifact {
         Some(a) => a,
         None => {
             return Err(crate::Error::Validation(
@@ -106,25 +106,27 @@ pub fn run(args: Args) -> crate::Result<()> {
         None => None,
     };
 
-    let qual_path = qual_file::resolve_qual_path(&artifact, args.file.as_deref().map(Path::new))?;
+    let qual_path = qual_file::resolve_qual_path(&subject, args.file.as_deref().map(Path::new))?;
 
     let att = attestation::finalize(Attestation {
-        v: 3,
+        metabox: "1".into(),
         record_type: "attestation".into(),
-        artifact,
-        span,
-        kind,
-        score,
-        summary,
-        detail: args.detail,
-        suggested_fix: args.suggested_fix,
-        tags: args.tags,
+        subject,
         author,
-        author_type,
         created_at: Utc::now(),
-        r#ref: args.r#ref,
-        supersedes: args.supersedes,
         id: String::new(),
+        body: AttestationBody {
+            author_type,
+            detail: args.detail,
+            kind,
+            r#ref: args.r#ref,
+            score,
+            span,
+            suggested_fix: args.suggested_fix,
+            summary,
+            supersedes: args.supersedes,
+            tags: args.tags,
+        },
     });
 
     let errors = attestation::validate(&att);
@@ -132,20 +134,26 @@ pub fn run(args: Args) -> crate::Result<()> {
         return Err(crate::Error::Validation(errors.join("; ")));
     }
 
-    if att.supersedes.is_some() {
+    if att.body.supersedes.is_some() {
         let existing = if qual_path.exists() {
             qual_file::parse(&qual_path)?.records
         } else {
             Vec::new()
         };
         let mut all = existing;
-        all.push(Record::Attestation(att.clone()));
+        all.push(Record::Attestation(Box::new(att.clone())));
         attestation::check_supersession_cycles(&all)?;
         attestation::validate_supersession_targets(&all)?;
     }
 
-    qual_file::append(qual_path.as_ref(), &Record::Attestation(att.clone()))?;
-    println!("Attested {} [{}] {}", att.artifact, att.score, att.kind);
+    qual_file::append(
+        qual_path.as_ref(),
+        &Record::Attestation(Box::new(att.clone())),
+    )?;
+    println!(
+        "Attested {} [{}] {}",
+        att.subject, att.body.score, att.body.kind
+    );
     println!("  id: {}", att.id);
 
     Ok(())
@@ -173,7 +181,7 @@ fn run_batch() -> crate::Result<()> {
             }
         }
 
-        let qual_path = qual_file::resolve_qual_path(record.artifact(), None)?;
+        let qual_path = qual_file::resolve_qual_path(record.subject(), None)?;
 
         if record.supersedes().is_some() {
             let existing = if qual_path.exists() {

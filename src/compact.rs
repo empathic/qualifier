@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 
-use crate::attestation::{self, AuthorType, Epoch, Record};
+use crate::attestation::{self, AuthorType, Epoch, EpochBody, Record};
 use crate::qual_file::QualFile;
 use crate::scoring;
 
@@ -28,7 +28,7 @@ pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult) {
 
     let pruned_file = QualFile {
         path: qual_file.path.clone(),
-        artifact: qual_file.artifact.clone(),
+        subject: qual_file.subject.clone(),
         records: active.into_iter().cloned().collect(),
     };
 
@@ -41,9 +41,9 @@ pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult) {
     (pruned_file, result)
 }
 
-/// Collapse all scored records into epoch records — one per distinct artifact.
+/// Collapse all scored records into epoch records — one per distinct subject.
 ///
-/// Each epoch record's score equals the raw score of its artifact's
+/// Each epoch record's score equals the raw score of its subject's
 /// non-superseded scored records, preserving the scoring invariant.
 ///
 /// Non-scored records (dependencies, unknowns) are passed through unchanged.
@@ -62,13 +62,13 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
     }
 
     // Separate scored records from passthrough (non-scored)
-    let mut by_artifact: HashMap<&str, Vec<&Record>> = HashMap::new();
+    let mut by_subject: HashMap<&str, Vec<&Record>> = HashMap::new();
     let mut passthrough: Vec<Record> = Vec::new();
 
     for record in &qual_file.records {
         if record.is_scored() {
-            by_artifact
-                .entry(record.artifact())
+            by_subject
+                .entry(record.subject())
                 .or_default()
                 .push(record);
         } else {
@@ -77,29 +77,31 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
     }
 
     let mut epoch_records = Vec::new();
-    for (artifact, records) in &by_artifact {
+    for (subject, records) in &by_subject {
         let raw = scoring::raw_score_from_refs(records);
         let refs: Vec<String> = records.iter().map(|r| r.id().to_string()).collect();
         let count = records.len();
 
         let epoch = attestation::finalize_epoch(Epoch {
-            v: 3,
+            metabox: "1".into(),
             record_type: "epoch".into(),
-            artifact: artifact.to_string(),
-            span: None,
-            score: raw,
-            summary: format!("Compacted from {} records", count),
-            refs,
+            subject: subject.to_string(),
             author: "qualifier/compact".into(),
-            author_type: Some(AuthorType::Tool),
             created_at: Utc::now(),
             id: String::new(),
+            body: EpochBody {
+                author_type: Some(AuthorType::Tool),
+                refs,
+                score: raw,
+                span: None,
+                summary: format!("Compacted from {} records", count),
+            },
         });
         epoch_records.push(Record::Epoch(epoch));
     }
 
-    // Sort by artifact name for deterministic output
-    epoch_records.sort_by(|a, b| a.artifact().cmp(b.artifact()));
+    // Sort by subject name for deterministic output
+    epoch_records.sort_by(|a, b| a.subject().cmp(b.subject()));
 
     // Append passthrough records
     epoch_records.extend(passthrough);
@@ -107,7 +109,7 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
     let after = epoch_records.len();
     let snapshot_file = QualFile {
         path: qual_file.path.clone(),
-        artifact: qual_file.artifact.clone(),
+        subject: qual_file.subject.clone(),
         records: epoch_records,
     };
 
@@ -123,64 +125,68 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attestation::{self, Attestation, Kind};
+    use crate::attestation::{self, Attestation, AttestationBody, Kind};
     use chrono::Utc;
     use std::path::PathBuf;
 
-    fn make_att(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
+    fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
         attestation::finalize(Attestation {
-            v: 3,
+            metabox: "1".into(),
             record_type: "attestation".into(),
-            artifact: artifact.into(),
-            span: None,
-            kind,
-            score,
-            summary: summary.into(),
-            detail: None,
-            suggested_fix: None,
-            tags: vec![],
+            subject: subject.into(),
             author: "test@test.com".into(),
-            author_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
-            r#ref: None,
-            supersedes: None,
             id: String::new(),
+            body: AttestationBody {
+                author_type: None,
+                detail: None,
+                kind,
+                r#ref: None,
+                score,
+                span: None,
+                suggested_fix: None,
+                summary: summary.into(),
+                supersedes: None,
+                tags: vec![],
+            },
         })
     }
 
-    fn make_record(artifact: &str, kind: Kind, score: i32, summary: &str) -> Record {
-        Record::Attestation(make_att(artifact, kind, score, summary))
+    fn make_record(subject: &str, kind: Kind, score: i32, summary: &str) -> Record {
+        Record::Attestation(Box::new(make_att(subject, kind, score, summary)))
     }
 
-    fn make_superseding(artifact: &str, score: i32, supersedes_id: &str) -> Record {
-        Record::Attestation(attestation::finalize(Attestation {
-            v: 3,
+    fn make_superseding(subject: &str, score: i32, supersedes_id: &str) -> Record {
+        Record::Attestation(Box::new(attestation::finalize(Attestation {
+            metabox: "1".into(),
             record_type: "attestation".into(),
-            artifact: artifact.into(),
-            span: None,
-            kind: Kind::Pass,
-            score,
-            summary: "updated".into(),
-            detail: None,
-            suggested_fix: None,
-            tags: vec![],
+            subject: subject.into(),
             author: "test@test.com".into(),
-            author_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
-            r#ref: None,
-            supersedes: Some(supersedes_id.into()),
             id: String::new(),
-        }))
+            body: AttestationBody {
+                author_type: None,
+                detail: None,
+                kind: Kind::Pass,
+                r#ref: None,
+                score,
+                span: None,
+                suggested_fix: None,
+                summary: "updated".into(),
+                supersedes: Some(supersedes_id.into()),
+                tags: vec![],
+            },
+        })))
     }
 
     fn make_qual_file(records: Vec<Record>) -> QualFile {
         QualFile {
             path: PathBuf::from("test.rs.qual"),
-            artifact: "test.rs".into(),
+            subject: "test.rs".into(),
             records,
         }
     }
@@ -256,9 +262,9 @@ mod tests {
         assert_eq!(result.pruned, 1);
 
         let epoch = snapped.records[0].as_epoch().unwrap();
-        assert_eq!(epoch.score, 30); // 40 + -10
+        assert_eq!(epoch.body.score, 30); // 40 + -10
         assert_eq!(epoch.author, "qualifier/compact");
-        assert_eq!(epoch.refs.len(), 2);
+        assert_eq!(epoch.body.refs.len(), 2);
     }
 
     #[test]
@@ -290,17 +296,17 @@ mod tests {
 
         let (snapped, _) = snapshot(&qf);
         assert_eq!(snapped.records.len(), 1);
-        assert_eq!(snapped.records[0].as_epoch().unwrap().score, 10);
-        assert_eq!(snapped.records[0].as_epoch().unwrap().refs.len(), 3);
+        assert_eq!(snapped.records[0].as_epoch().unwrap().body.score, 10);
+        assert_eq!(snapped.records[0].as_epoch().unwrap().body.refs.len(), 3);
     }
 
     #[test]
     fn test_prune_with_dangling_supersedes() {
         let a = make_record("test.rs", Kind::Praise, 20, "good");
         let mut b_att = make_att("test.rs", Kind::Pass, 10, "fixed");
-        b_att.supersedes = Some("nonexistent_id_12345".into());
+        b_att.body.supersedes = Some("nonexistent_id_12345".into());
         b_att = attestation::finalize(b_att);
-        let b = Record::Attestation(b_att);
+        let b = Record::Attestation(Box::new(b_att));
 
         let qf = make_qual_file(vec![a, b]);
         let (pruned, result) = prune(&qf);
@@ -358,11 +364,11 @@ mod tests {
         assert_eq!(result.after, 1);
         assert_eq!(result.pruned, 0);
         assert!(snapped.records[0].as_epoch().is_some());
-        assert_eq!(snapped.records[0].as_epoch().unwrap().score, 40);
+        assert_eq!(snapped.records[0].as_epoch().unwrap().body.score, 40);
     }
 
     #[test]
-    fn test_snapshot_multi_artifact() {
+    fn test_snapshot_multi_subject() {
         let records = vec![
             make_record("src/a.rs", Kind::Praise, 40, "good"),
             make_record("src/a.rs", Kind::Concern, -10, "meh"),
@@ -371,7 +377,7 @@ mod tests {
 
         let qf = QualFile {
             path: PathBuf::from("src/.qual"),
-            artifact: "src/".into(),
+            subject: "src/".into(),
             records,
         };
 
@@ -384,27 +390,27 @@ mod tests {
         let epoch_a = snapped
             .records
             .iter()
-            .find(|r| r.artifact() == "src/a.rs")
+            .find(|r| r.subject() == "src/a.rs")
             .unwrap()
             .as_epoch()
             .unwrap();
         let epoch_b = snapped
             .records
             .iter()
-            .find(|r| r.artifact() == "src/b.rs")
+            .find(|r| r.subject() == "src/b.rs")
             .unwrap()
             .as_epoch()
             .unwrap();
 
-        assert_eq!(epoch_a.score, 30); // 40 + -10
-        assert_eq!(epoch_a.refs.len(), 2);
+        assert_eq!(epoch_a.body.score, 30); // 40 + -10
+        assert_eq!(epoch_a.body.refs.len(), 2);
 
-        assert_eq!(epoch_b.score, 20);
-        assert_eq!(epoch_b.refs.len(), 1);
+        assert_eq!(epoch_b.body.score, 20);
+        assert_eq!(epoch_b.body.refs.len(), 1);
     }
 
     #[test]
-    fn test_prune_multi_artifact() {
+    fn test_prune_multi_subject() {
         let a1 = make_record("src/a.rs", Kind::Concern, -10, "issue");
         let a2 = make_superseding("src/a.rs", 5, a1.id());
         let b1 = make_record("src/b.rs", Kind::Pass, 20, "ok");
@@ -414,7 +420,7 @@ mod tests {
 
         let qf = QualFile {
             path: PathBuf::from("src/.qual"),
-            artifact: "src/".into(),
+            subject: "src/".into(),
             records: vec![a1, a2, b1],
         };
 

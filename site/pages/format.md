@@ -14,8 +14,8 @@ Append-only JSONL. One record per line. VCS-native by design.
 A `.qual` file is a UTF-8 encoded file where each line is a complete JSON object representing one record. This is JSONL (JSON Lines).
 
 ```jsonl
-{"v":3,"type":"attestation","artifact":"src/parser.rs","kind":"concern","score":-30,"summary":"Panics on malformed input","author":"alice@example.com","author_type":"human","created_at":"2026-02-24T10:00:00Z","ref":"git:3aba500","id":"a1b2c3d4..."}
-{"v":3,"type":"attestation","artifact":"src/parser.rs","kind":"praise","score":40,"summary":"Excellent test coverage","author":"bob@example.com","author_type":"human","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8..."}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"author_type":"human","kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"author_type":"human","kind":"praise","score":40,"summary":"Excellent test coverage"}}
 ```
 
 ## Record types
@@ -26,41 +26,42 @@ Every record has a `type` field that identifies its schema. Qualifier defines th
 | ------------- | ---------------------------------------- |
 | `attestation` | A quality signal (the primary type)      |
 | `epoch`       | A compaction snapshot                    |
-| `dependency`  | A dependency edge between artifacts      |
+| `dependency`  | A dependency edge between subjects       |
 
 When `type` is omitted, it defaults to `"attestation"`. Unknown types are preserved as opaque pass-through data.
 
-## Record frame
+## Record envelope
 
-All record types share a common **frame** — a fixed set of fields that answer "who said what about which artifact, when":
+All record types share a common **Metabox envelope** — a fixed set of fields that answer "who said what about which subject, when", plus a type-specific `body` object. The record envelope is an instance of the [Metabox](/metabox/) envelope format.
 
 | Field        | Type    | Required | Description                                      |
 | ------------ | ------- | -------- | ------------------------------------------------ |
-| `v`          | integer | yes      | Format version (always 3)                        |
+| `metabox`    | string  | yes      | Envelope version (always `"1"`)                  |
 | `type`       | string  | yes*     | Record type identifier. *Defaults to `"attestation"`. |
-| `artifact`   | string  | yes      | Qualified name of the target artifact            |
-| `span`       | object  | no       | Sub-artifact range (line/col addressing)         |
+| `subject`    | string  | yes      | Qualified name of the target artifact            |
 | `author`     | string  | yes      | Who or what created this record                  |
 | `created_at` | string  | yes      | RFC 3339 timestamp                               |
 | `id`         | string  | yes      | Content-addressed BLAKE3 hash                    |
-
-Each record type adds its own body fields alongside the frame. There is no nested `body` wrapper — everything is flat in the JSON object.
+| `body`       | object  | yes      | Type-specific payload                            |
 
 ## Attestation schema
 
-Attestations are the primary record type. Frame fields plus:
+Attestations are the primary record type. Envelope fields plus body:
 
 | Field           | Type     | Required | Description                                      |
 | --------------- | -------- | -------- | ------------------------------------------------ |
-| `kind`          | enum     | yes      | Type of attestation (see below)                  |
-| `score`         | integer  | yes      | Signed quality delta, -100..100                  |
-| `summary`       | string   | yes      | Human-readable one-liner                         |
-| `detail`        | string   | no       | Extended description (markdown allowed)          |
-| `suggested_fix` | string   | no       | Actionable suggestion for improvement            |
-| `tags`          | string[] | no       | Freeform classification tags                     |
 | `author_type`   | enum     | no       | Author classification: human, ai, tool, unknown  |
+| `detail`        | string   | no       | Extended description (markdown allowed)          |
+| `kind`          | enum     | yes      | Type of attestation (see below)                  |
 | `ref`           | string   | no       | VCS ref pin (e.g. "git:3aba500"), opaque string  |
+| `score`         | integer  | yes      | Signed quality delta, -100..100                  |
+| `span`          | object   | no       | Sub-artifact range (line/col addressing)         |
+| `suggested_fix` | string   | no       | Actionable suggestion for improvement            |
+| `summary`       | string   | yes      | Human-readable one-liner                         |
 | `supersedes`    | string   | no       | ID of a prior attestation this replaces          |
+| `tags`          | string[] | no       | Freeform classification tags                     |
+
+Body fields are in alphabetical order (MCF canonical form).
 
 ## Attestation kinds
 
@@ -78,45 +79,46 @@ When `--score` is omitted from `qualifier attest`, the CLI uses the default scor
 
 ## Epoch schema
 
-An **epoch** is a compaction snapshot — a synthetic record that replaces a set of attestations with a single scored record preserving the net score. Frame fields plus:
+An **epoch** is a compaction snapshot — a synthetic record that replaces a set of attestations with a single scored record preserving the net score. Envelope fields plus body:
 
 | Field         | Type     | Required | Description                                       |
 | ------------- | -------- | -------- | ------------------------------------------------- |
-| `score`       | integer  | yes      | Net score at compaction time                      |
-| `summary`     | string   | yes      | `"Compacted from N attestations"`                 |
-| `refs`        | string[] | yes      | IDs of the compacted records                      |
 | `author_type` | enum     | no       | Always `"tool"` for epochs                        |
+| `refs`        | string[] | yes      | IDs of the compacted records                      |
+| `score`       | integer  | yes      | Net score at compaction time                      |
+| `span`        | object   | no       | Sub-artifact range                                |
+| `summary`     | string   | yes      | `"Compacted from N records"`                      |
 
 Epoch `author` is always `"qualifier/compact"`.
 
 ```json
-{"v":3,"type":"epoch","artifact":"src/parser.rs","score":10,"summary":"Compacted from 12 attestations","refs":["a1b2...","c3d4..."],"author":"qualifier/compact","author_type":"tool","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6..."}
+{"metabox":"1","type":"epoch","subject":"src/parser.rs","author":"qualifier/compact","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6...","body":{"author_type":"tool","refs":["a1b2...","c3d4..."],"score":10,"summary":"Compacted from 12 records"}}
 ```
 
 ## Dependency schema
 
-A **dependency** record declares directed edges from one artifact to others. Frame fields plus:
+A **dependency** record declares directed edges from one subject to others. Envelope fields plus body:
 
 | Field        | Type     | Required | Description                                        |
 | ------------ | -------- | -------- | -------------------------------------------------- |
-| `depends_on` | string[] | yes      | Artifact names this artifact depends on            |
+| `depends_on` | string[] | yes      | Subject names this subject depends on              |
 
 ```json
-{"v":3,"type":"dependency","artifact":"bin/server","depends_on":["lib/auth","lib/http"],"author":"build-system","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d..."}
+{"metabox":"1","type":"dependency","subject":"bin/server","author":"build-system","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d...","body":{"depends_on":["lib/auth","lib/http"]}}
 ```
 
 Dependency records don't carry scores. They feed the propagation engine that computes effective scores.
 
 ## Supersession
 
-Attestations are immutable. To "update" a signal, write a new attestation with `supersedes` pointing to the prior ID. Only the latest in a chain contributes to scoring.
+Attestations are immutable. To "update" a signal, write a new attestation with `body.supersedes` pointing to the prior ID. Only the latest in a chain contributes to scoring.
 
 ## Content-addressed IDs
 
-Record IDs are BLAKE3 hashes of the **Qualifier Canonical Form (QCF)** — a deterministic JSON serialization with fixed field order, no whitespace, and `id` set to `""` during hashing.
+Record IDs are BLAKE3 hashes of the **Metabox Canonical Form (MCF)** — a deterministic JSON serialization with fixed envelope field order, alphabetical body field order, no whitespace, and `id` set to `""` during hashing.
 
 ```json
-{"v":3,"type":"attestation","artifact":"src/parser.rs","kind":"concern","score":-30,"summary":"Panics on malformed input","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":""}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-30,"summary":"Panics on malformed input"}}
 ```
 
 Optional fields (`span`, `detail`, `suggested_fix`, `tags`, `author_type`, `ref`, `supersedes`) are omitted from the canonical form when absent — the hash changes only when a field is actually present.
@@ -161,10 +163,9 @@ The recommended layout is one `.qual` file per directory. `qualifier attest` def
 Qualifier consumes a dependency graph as `qualifier.graph.jsonl`:
 
 ```jsonl
-{"artifact":"bin/server","depends_on":["lib/auth","lib/http","lib/db"]}
-{"artifact":"lib/auth","depends_on":["lib/crypto"]}
-{"artifact":"lib/http","depends_on":[]}
+{"subject":"bin/server","depends_on":["lib/auth","lib/http","lib/db"]}
+{"subject":"lib/auth","depends_on":["lib/crypto"]}
+{"subject":"lib/http","depends_on":[]}
 ```
 
 The graph MUST be a DAG. Cycles are rejected.
-

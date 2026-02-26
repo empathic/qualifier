@@ -77,9 +77,9 @@ pub fn run(args: Args) -> crate::Result<()> {
             let author_short = att.author.split('@').next().unwrap_or(&att.author);
             println!(
                 "    {} {}  {:?}  {}  {}",
-                output::format_score(att.score),
-                att.kind,
-                att.summary,
+                output::format_score(att.body.score),
+                att.body.kind,
+                att.body.summary,
                 author_short,
                 date,
             );
@@ -87,8 +87,8 @@ pub fn run(args: Args) -> crate::Result<()> {
             let date = epoch.created_at.format("%Y-%m-%d");
             println!(
                 "    {} epoch  {:?}  {}  {}",
-                output::format_score(epoch.score),
-                epoch.summary,
+                output::format_score(epoch.body.score),
+                epoch.body.summary,
                 epoch.author,
                 date,
             );
