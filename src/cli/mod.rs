@@ -18,7 +18,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Add an attestation to an artifact
-    Attest(commands::attest::Args),
+    Attest(Box<commands::attest::Args>),
     /// Show attestations and scores for an artifact
     Show(commands::show::Args),
     /// Compute and display scores
@@ -41,7 +41,7 @@ pub fn run() {
     let cli = Cli::parse();
 
     let result: crate::Result<()> = match cli.command {
-        Commands::Attest(args) => commands::attest::run(args),
+        Commands::Attest(args) => commands::attest::run(*args),
         Commands::Show(args) => commands::show::run(args),
         Commands::Score(args) => commands::score::run(args),
         Commands::Ls(args) => commands::ls::run(args),
