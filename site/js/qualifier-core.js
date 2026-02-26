@@ -55,12 +55,20 @@
     return active;
   }
 
+  // --- Check if a record is scored (attestation or epoch) ---
+  function isScored(record) {
+    var t = record.type || "attestation";
+    return t === "attestation" || t === "epoch";
+  }
+
   // --- Raw score ---
   function rawScore(attestations) {
     var active = filterSuperseded(attestations);
     var sum = 0;
     for (var i = 0; i < active.length; i++) {
-      sum += active[i].score || 0;
+      if (isScored(active[i])) {
+        sum += active[i].score || 0;
+      }
     }
     return Math.max(-100, Math.min(100, sum));
   }
@@ -207,7 +215,7 @@
 
   // --- Version detection ---
   function attestationVersion(att) {
-    return att.v || 2;
+    return att.v || 3;
   }
 
   // --- Export ---

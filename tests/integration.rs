@@ -1,4 +1,4 @@
-use qualifier::attestation::{self, Attestation, Kind};
+use qualifier::attestation::{self, Attestation, Kind, Record};
 use qualifier::compact;
 use qualifier::graph;
 use qualifier::qual_file::{self, QualFile};
@@ -9,8 +9,10 @@ use std::path::PathBuf;
 
 fn make_att(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
     attestation::finalize(Attestation {
-        v: 2,
+        v: 3,
+        record_type: "attestation".into(),
         artifact: artifact.into(),
+        span: None,
         kind,
         score,
         summary: summary.into(),
@@ -24,9 +26,91 @@ fn make_att(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestatio
             .with_timezone(&Utc),
         r#ref: None,
         supersedes: None,
-        epoch_refs: None,
         id: String::new(),
     })
+}
+
+fn make_record(artifact: &str, kind: Kind, score: i32, summary: &str) -> Record {
+    Record::Attestation(make_att(artifact, kind, score, summary))
+}
+
+// --- Golden ID tests (regression guards for content-addressed hashing) ---
+
+#[test]
+fn test_golden_attestation_id() {
+    let att = attestation::finalize(Attestation {
+        v: 3,
+        record_type: "attestation".into(),
+        artifact: "src/parser.rs".into(),
+        span: None,
+        kind: Kind::Concern,
+        score: -30,
+        summary: "Panics on malformed input".into(),
+        detail: None,
+        suggested_fix: None,
+        tags: vec![],
+        author: "alice@example.com".into(),
+        author_type: None,
+        created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+        r#ref: None,
+        supersedes: None,
+        id: String::new(),
+    });
+    // If this assertion fails, the canonical form or hashing has changed —
+    // all existing record IDs in the wild are now broken.
+    assert_eq!(
+        att.id, "126ea3aa6728437ee5ce567f4682ebac5d2fb87c5dfcc53824812c0f89b6fe74",
+        "Golden attestation ID changed! Canonical form or hashing is broken."
+    );
+}
+
+#[test]
+fn test_golden_epoch_id() {
+    use qualifier::attestation::{self, AuthorType, Epoch};
+
+    let epoch = attestation::finalize_epoch(Epoch {
+        v: 3,
+        record_type: "epoch".into(),
+        artifact: "src/parser.rs".into(),
+        span: None,
+        score: 10,
+        summary: "Compacted from 3 attestations".into(),
+        refs: vec!["aaa".into(), "bbb".into(), "ccc".into()],
+        author: "qualifier/compact".into(),
+        author_type: Some(AuthorType::Tool),
+        created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+        id: String::new(),
+    });
+    assert_eq!(
+        epoch.id, "759bc0c7a3ffa09aad7a37d40f07916abdbdc535d7cc2850cf62efc830793342",
+        "Golden epoch ID changed! Canonical form or hashing is broken."
+    );
+}
+
+#[test]
+fn test_golden_dependency_id() {
+    use qualifier::attestation::{self, DependencyRecord};
+
+    let dep = attestation::finalize_record(Record::Dependency(DependencyRecord {
+        v: 3,
+        record_type: "dependency".into(),
+        artifact: "bin/server".into(),
+        depends_on: vec!["lib/auth".into(), "lib/http".into()],
+        author: "build-system".into(),
+        created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+        id: String::new(),
+    }));
+    assert_eq!(
+        dep.id(),
+        "a7275c47c9f910556fd225da973a05b4c6edaf465bfcddf2d6bd3758761e8adb",
+        "Golden dependency ID changed! Canonical form or hashing is broken."
+    );
 }
 
 // --- Full attestation lifecycle ---
@@ -37,20 +121,22 @@ fn test_attestation_lifecycle_write_parse_roundtrip() {
     let qual_path = dir.path().join("src/parser.rs.qual");
     std::fs::create_dir_all(qual_path.parent().unwrap()).unwrap();
 
-    let att1 = make_att("src/parser.rs", Kind::Concern, -30, "Panics on bad input");
-    let att2 = make_att("src/parser.rs", Kind::Praise, 40, "Good test coverage");
+    let r1 = make_record("src/parser.rs", Kind::Concern, -30, "Panics on bad input");
+    let r2 = make_record("src/parser.rs", Kind::Praise, 40, "Good test coverage");
 
-    qual_file::append(&qual_path, &att1).unwrap();
-    qual_file::append(&qual_path, &att2).unwrap();
+    qual_file::append(&qual_path, &r1).unwrap();
+    qual_file::append(&qual_path, &r2).unwrap();
 
     let qf = qual_file::parse(&qual_path).unwrap();
-    assert_eq!(qf.attestations.len(), 2);
-    assert_eq!(qf.attestations[0].id, att1.id);
-    assert_eq!(qf.attestations[1].id, att2.id);
+    assert_eq!(qf.records.len(), 2);
+    assert_eq!(qf.records[0].id(), r1.id());
+    assert_eq!(qf.records[1].id(), r2.id());
 
     // IDs are deterministic and valid
-    assert_eq!(attestation::generate_id(&att1), att1.id);
-    assert_eq!(attestation::generate_id(&att2), att2.id);
+    let att1 = r1.as_attestation().unwrap();
+    let att2 = r2.as_attestation().unwrap();
+    assert_eq!(attestation::generate_id(att1), att1.id);
+    assert_eq!(attestation::generate_id(att2), att2.id);
 }
 
 #[test]
@@ -80,22 +166,22 @@ fn test_scoring_with_dependency_graph() {
         QualFile {
             path: PathBuf::from("bin/server.qual"),
             artifact: "bin/server".into(),
-            attestations: vec![make_att("bin/server", Kind::Praise, 80, "solid")],
+            records: vec![make_record("bin/server", Kind::Praise, 80, "solid")],
         },
         QualFile {
             path: PathBuf::from("lib/auth.qual"),
             artifact: "lib/auth".into(),
-            attestations: vec![make_att("lib/auth", Kind::Praise, 60, "decent")],
+            records: vec![make_record("lib/auth", Kind::Praise, 60, "decent")],
         },
         QualFile {
             path: PathBuf::from("lib/http.qual"),
             artifact: "lib/http".into(),
-            attestations: vec![make_att("lib/http", Kind::Praise, 70, "good")],
+            records: vec![make_record("lib/http", Kind::Praise, 70, "good")],
         },
         QualFile {
             path: PathBuf::from("lib/crypto.qual"),
             artifact: "lib/crypto".into(),
-            attestations: vec![make_att("lib/crypto", Kind::Blocker, -40, "vulnerable")],
+            records: vec![make_record("lib/crypto", Kind::Blocker, -40, "vulnerable")],
         },
     ];
 
@@ -130,7 +216,7 @@ fn test_artifacts_in_qual_but_not_in_graph() {
     let qfs = vec![QualFile {
         path: PathBuf::from("standalone.qual"),
         artifact: "standalone".into(),
-        attestations: vec![make_att("standalone", Kind::Praise, 50, "fine")],
+        records: vec![make_record("standalone", Kind::Praise, 50, "fine")],
     }];
 
     let scores = scoring::effective_scores(&g, &qfs);
@@ -149,10 +235,12 @@ fn test_artifacts_in_qual_but_not_in_graph() {
 
 #[test]
 fn test_compaction_roundtrip_preserves_scores() {
-    let original = make_att("mod.rs", Kind::Concern, -30, "bad");
-    let fix = attestation::finalize(Attestation {
-        v: 2,
+    let original = make_record("mod.rs", Kind::Concern, -30, "bad");
+    let fix = Record::Attestation(attestation::finalize(Attestation {
+        v: 3,
+        record_type: "attestation".into(),
         artifact: "mod.rs".into(),
+        span: None,
         kind: Kind::Pass,
         score: 20,
         summary: "fixed".into(),
@@ -165,29 +253,28 @@ fn test_compaction_roundtrip_preserves_scores() {
             .unwrap()
             .with_timezone(&Utc),
         r#ref: None,
-        supersedes: Some(original.id.clone()),
-        epoch_refs: None,
+        supersedes: Some(original.id().to_string()),
         id: String::new(),
-    });
-    let extra = make_att("mod.rs", Kind::Praise, 40, "nice");
+    }));
+    let extra = make_record("mod.rs", Kind::Praise, 40, "nice");
 
     let qf = QualFile {
         path: PathBuf::from("mod.rs.qual"),
         artifact: "mod.rs".into(),
-        attestations: vec![original, fix, extra],
+        records: vec![original, fix, extra],
     };
 
-    let score_before = scoring::raw_score(&qf.attestations);
+    let score_before = scoring::raw_score(&qf.records);
 
     // Prune
     let (pruned, _) = compact::prune(&qf);
-    assert_eq!(scoring::raw_score(&pruned.attestations), score_before);
+    assert_eq!(scoring::raw_score(&pruned.records), score_before);
 
     // Snapshot
     let (snapped, _) = compact::snapshot(&qf);
-    assert_eq!(scoring::raw_score(&snapped.attestations), score_before);
-    assert_eq!(snapped.attestations.len(), 1);
-    assert_eq!(snapped.attestations[0].kind, Kind::Epoch);
+    assert_eq!(scoring::raw_score(&snapped.records), score_before);
+    assert_eq!(snapped.records.len(), 1);
+    assert!(snapped.records[0].as_epoch().is_some());
 }
 
 // --- Discovery ---
@@ -228,9 +315,11 @@ fn test_discovery_walks_tree() {
 #[test]
 fn test_supersession_cycle_detected() {
     let now = Utc::now();
-    let mut a = Attestation {
-        v: 2,
+    let a = Record::Attestation(Attestation {
+        v: 3,
+        record_type: "attestation".into(),
         artifact: "x".into(),
+        span: None,
         kind: Kind::Pass,
         score: 10,
         summary: "a".into(),
@@ -241,14 +330,27 @@ fn test_supersession_cycle_detected() {
         author_type: None,
         created_at: now,
         r#ref: None,
-        supersedes: None,
-        epoch_refs: None,
+        supersedes: Some("bbb".into()),
         id: "aaa".into(),
-    };
-    let mut b = a.clone();
-    b.id = "bbb".into();
-    b.supersedes = Some("aaa".into());
-    a.supersedes = Some("bbb".into());
+    });
+    let b = Record::Attestation(Attestation {
+        v: 3,
+        record_type: "attestation".into(),
+        artifact: "x".into(),
+        span: None,
+        kind: Kind::Pass,
+        score: 10,
+        summary: "b".into(),
+        detail: None,
+        suggested_fix: None,
+        tags: vec![],
+        author: "test".into(),
+        author_type: None,
+        created_at: now,
+        r#ref: None,
+        supersedes: Some("aaa".into()),
+        id: "bbb".into(),
+    });
 
     let result = attestation::check_supersession_cycles(&[a, b]);
     assert!(result.is_err());
@@ -270,10 +372,12 @@ fn test_graph_cycle_rejected() {
 
 #[test]
 fn test_cross_artifact_supersession_rejected() {
-    let a = make_att("foo.rs", Kind::Concern, -10, "issue in foo");
-    let b = attestation::finalize(Attestation {
-        v: 2,
+    let a = make_record("foo.rs", Kind::Concern, -10, "issue in foo");
+    let b = Record::Attestation(attestation::finalize(Attestation {
+        v: 3,
+        record_type: "attestation".into(),
         artifact: "bar.rs".into(),
+        span: None,
         kind: Kind::Pass,
         score: 20,
         summary: "fix in bar".into(),
@@ -286,10 +390,9 @@ fn test_cross_artifact_supersession_rejected() {
             .unwrap()
             .with_timezone(&Utc),
         r#ref: None,
-        supersedes: Some(a.id.clone()),
-        epoch_refs: None,
+        supersedes: Some(a.id().to_string()),
         id: String::new(),
-    });
+    }));
 
     let result = attestation::validate_supersession_targets(&[a, b]);
     assert!(result.is_err());
@@ -300,12 +403,11 @@ fn test_cross_artifact_supersession_rejected() {
 
 #[test]
 fn test_kind_typo_detected_in_validation() {
-    let mut att = make_att("x.rs", Kind::Custom("pss".into()), 10, "oops");
-    att.id = attestation::generate_id(&att);
-    // Need to use Custom kind directly since make_att uses finalize
     let att = attestation::finalize(Attestation {
-        v: 2,
+        v: 3,
+        record_type: "attestation".into(),
         artifact: "x.rs".into(),
+        span: None,
         kind: Kind::Custom("pss".into()),
         score: 10,
         summary: "oops".into(),
@@ -317,7 +419,6 @@ fn test_kind_typo_detected_in_validation() {
         created_at: Utc::now(),
         r#ref: None,
         supersedes: None,
-        epoch_refs: None,
         id: String::new(),
     });
 
@@ -334,20 +435,22 @@ fn test_kind_typo_detected_in_validation() {
 #[test]
 fn test_parse_qual_file_only_comments() {
     let content = "// This is a comment\n// Another comment\n\n";
-    let atts = qual_file::parse_str(content).unwrap();
-    assert!(atts.is_empty());
+    let records = qual_file::parse_str(content).unwrap();
+    assert!(records.is_empty());
 }
 
 #[test]
-fn test_v2_roundtrip() {
+fn test_v3_roundtrip() {
     use qualifier::attestation::AuthorType;
 
     let dir = tempfile::tempdir().unwrap();
     let qual_path = dir.path().join("test.rs.qual");
 
     let att = attestation::finalize(Attestation {
-        v: 2,
+        v: 3,
+        record_type: "attestation".into(),
         artifact: "test.rs".into(),
+        span: None,
         kind: Kind::Praise,
         score: 30,
         summary: "Great code".into(),
@@ -361,53 +464,52 @@ fn test_v2_roundtrip() {
             .with_timezone(&Utc),
         r#ref: Some("git:3aba500".into()),
         supersedes: None,
-        epoch_refs: None,
         id: String::new(),
     });
-    assert_eq!(att.v, 2);
+    assert_eq!(att.v, 3);
 
-    qual_file::append(&qual_path, &att).unwrap();
+    qual_file::append(&qual_path, &Record::Attestation(att.clone())).unwrap();
     let qf = qual_file::parse(&qual_path).unwrap();
-    assert_eq!(qf.attestations.len(), 1);
+    assert_eq!(qf.records.len(), 1);
 
-    let parsed = &qf.attestations[0];
-    assert_eq!(parsed.v, 2);
+    let parsed = qf.records[0].as_attestation().unwrap();
+    assert_eq!(parsed.v, 3);
     assert_eq!(parsed.author_type, Some(AuthorType::Human));
     assert_eq!(parsed.r#ref.as_deref(), Some("git:3aba500"));
     assert_eq!(parsed.id, att.id);
 }
 
 #[test]
-fn test_compact_snapshot_produces_v2() {
-    // Create v1-style attestations (finalize makes them v2, but the point is
-    // the snapshot output should always be v2 with author_type=tool)
+fn test_compact_snapshot_produces_epoch() {
     use qualifier::attestation::AuthorType;
 
-    let atts = vec![
-        make_att("src/a.rs", Kind::Praise, 40, "good"),
-        make_att("src/a.rs", Kind::Concern, -10, "meh"),
+    let records = vec![
+        make_record("src/a.rs", Kind::Praise, 40, "good"),
+        make_record("src/a.rs", Kind::Concern, -10, "meh"),
     ];
     let qf = QualFile {
         path: PathBuf::from("src/.qual"),
         artifact: "src/".into(),
-        attestations: atts,
+        records,
     };
 
     let (snapped, _) = compact::snapshot(&qf);
-    assert_eq!(snapped.attestations.len(), 1);
+    assert_eq!(snapped.records.len(), 1);
 
-    let epoch = &snapped.attestations[0];
-    assert_eq!(epoch.v, 2);
+    let epoch = snapped.records[0].as_epoch().unwrap();
+    assert_eq!(epoch.v, 3);
     assert_eq!(epoch.author_type, Some(AuthorType::Tool));
     assert_eq!(epoch.score, 30); // 40 + -10
 }
 
 #[test]
 fn test_supersession_with_new_fields() {
-    let original = make_att("mod.rs", Kind::Concern, -20, "problem");
-    let replacement = attestation::finalize(Attestation {
-        v: 2,
+    let original = make_record("mod.rs", Kind::Concern, -20, "problem");
+    let replacement = Record::Attestation(attestation::finalize(Attestation {
+        v: 3,
+        record_type: "attestation".into(),
         artifact: "mod.rs".into(),
+        span: None,
         kind: Kind::Pass,
         score: 20,
         summary: "fixed it".into(),
@@ -420,17 +522,16 @@ fn test_supersession_with_new_fields() {
             .unwrap()
             .with_timezone(&Utc),
         r#ref: Some("git:abc123".into()),
-        supersedes: Some(original.id.clone()),
-        epoch_refs: None,
+        supersedes: Some(original.id().to_string()),
         id: String::new(),
-    });
+    }));
 
     let all = vec![original.clone(), replacement.clone()];
 
     // Supersession should work
     let active = scoring::filter_superseded(&all);
     assert_eq!(active.len(), 1);
-    assert_eq!(active[0].id, replacement.id);
+    assert_eq!(active[0].id(), replacement.id());
 
     // Raw score should be replacement's score only
     assert_eq!(scoring::raw_score(&all), 20);

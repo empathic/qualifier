@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::attestation::{Attestation, clamp_score};
+use crate::attestation::{Record, clamp_score};
 use crate::graph::DependencyGraph;
 use crate::qual_file::QualFile;
 
 /// Score report for a single artifact.
 #[derive(Debug, Clone)]
 pub struct ScoreReport {
-    /// Sum of non-superseded attestation scores, clamped to [-100, 100].
+    /// Sum of non-superseded scored record scores, clamped to [-100, 100].
     pub raw: i32,
     /// Raw score floored by worst dependency effective score.
     pub effective: i32,
@@ -15,32 +15,31 @@ pub struct ScoreReport {
     pub limiting_path: Option<Vec<String>>,
 }
 
-/// Compute the raw score for a set of attestations (single artifact).
+/// Compute the raw score for a set of records (single artifact).
 ///
-/// Filters out superseded attestations, sums scores, and clamps to [-100, 100].
-pub fn raw_score(attestations: &[Attestation]) -> i32 {
-    let active = filter_superseded(attestations);
+/// Filters out superseded records, sums scores of scored types
+/// (attestations and epochs), and clamps to [-100, 100].
+pub fn raw_score(records: &[Record]) -> i32 {
+    let active = filter_superseded(records);
     let sum = active
         .iter()
-        .fold(0i32, |acc, a| acc.saturating_add(a.score));
+        .filter_map(|r| r.score())
+        .fold(0i32, |acc, s| acc.saturating_add(s));
     clamp_score(sum)
 }
 
-/// Filter out superseded attestations, returning only the active ones.
+/// Filter out superseded records, returning only the active ones.
 ///
-/// An attestation is superseded if any other attestation's `supersedes` field
-/// points to its ID. We follow chains: if B supersedes A, and C supersedes B,
-/// only C is active.
-pub fn filter_superseded(attestations: &[Attestation]) -> Vec<&Attestation> {
+/// A record is superseded if any other record's `supersedes` field
+/// points to its ID. Only attestations can supersede or be superseded.
+/// Non-attestation records always pass through.
+pub fn filter_superseded(records: &[Record]) -> Vec<&Record> {
     // Collect all IDs that are superseded by something
-    let superseded_ids: HashSet<&str> = attestations
-        .iter()
-        .filter_map(|a| a.supersedes.as_deref())
-        .collect();
+    let superseded_ids: HashSet<&str> = records.iter().filter_map(|r| r.supersedes()).collect();
 
-    attestations
+    records
         .iter()
-        .filter(|a| !superseded_ids.contains(a.id.as_str()))
+        .filter(|r| !superseded_ids.contains(r.id()))
         .collect()
 }
 
@@ -56,24 +55,24 @@ pub fn effective_scores(
     graph: &DependencyGraph,
     qual_files: &[QualFile],
 ) -> HashMap<String, ScoreReport> {
-    // Build a map of artifact -> attestations
-    let mut artifact_attestations: HashMap<&str, Vec<&Attestation>> = HashMap::new();
+    // Build a map of artifact -> records
+    let mut artifact_records: HashMap<&str, Vec<&Record>> = HashMap::new();
     for qf in qual_files {
-        for att in &qf.attestations {
-            artifact_attestations
-                .entry(att.artifact.as_str())
+        for record in &qf.records {
+            artifact_records
+                .entry(record.artifact())
                 .or_default()
-                .push(att);
+                .push(record);
         }
     }
 
     // Compute raw scores for all known artifacts
     let mut raw_scores: HashMap<String, i32> = HashMap::new();
-    for (artifact, atts) in &artifact_attestations {
-        raw_scores.insert(artifact.to_string(), raw_score_from_refs(atts));
+    for (artifact, records) in &artifact_records {
+        raw_scores.insert(artifact.to_string(), raw_score_from_refs(records));
     }
 
-    // Include graph artifacts with no attestations (raw score = 0)
+    // Include graph artifacts with no records (raw score = 0)
     for artifact in graph.artifacts() {
         raw_scores.entry(artifact.to_string()).or_insert(0);
     }
@@ -181,17 +180,15 @@ pub fn effective_scores(
     reports
 }
 
-/// Compute raw score from a slice of attestation references.
-pub fn raw_score_from_refs(attestations: &[&Attestation]) -> i32 {
-    let superseded_ids: HashSet<&str> = attestations
-        .iter()
-        .filter_map(|a| a.supersedes.as_deref())
-        .collect();
+/// Compute raw score from a slice of record references.
+pub fn raw_score_from_refs(records: &[&Record]) -> i32 {
+    let superseded_ids: HashSet<&str> = records.iter().filter_map(|r| r.supersedes()).collect();
 
-    let sum = attestations
+    let sum = records
         .iter()
-        .filter(|a| !superseded_ids.contains(a.id.as_str()))
-        .fold(0i32, |acc, a| acc.saturating_add(a.score));
+        .filter(|r| !superseded_ids.contains(r.id()))
+        .filter_map(|r| r.score())
+        .fold(0i32, |acc, s| acc.saturating_add(s));
 
     clamp_score(sum)
 }
@@ -235,15 +232,17 @@ pub fn score_bar(score: i32, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attestation::{self, Kind};
+    use crate::attestation::{self, Attestation, Kind};
     use crate::graph;
     use chrono::Utc;
     use std::path::PathBuf;
 
     fn make_att(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
         attestation::finalize(Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: artifact.into(),
+            span: None,
             kind,
             score,
             summary: summary.into(),
@@ -257,15 +256,20 @@ mod tests {
                 .with_timezone(&Utc),
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         })
     }
 
-    fn make_superseding(artifact: &str, score: i32, supersedes_id: &str) -> Attestation {
-        attestation::finalize(Attestation {
-            v: 2,
+    fn make_record(artifact: &str, kind: Kind, score: i32, summary: &str) -> Record {
+        Record::Attestation(make_att(artifact, kind, score, summary))
+    }
+
+    fn make_superseding(artifact: &str, score: i32, supersedes_id: &str) -> Record {
+        Record::Attestation(attestation::finalize(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
             artifact: artifact.into(),
+            span: None,
             kind: Kind::Pass,
             score,
             summary: "updated".into(),
@@ -279,18 +283,17 @@ mod tests {
                 .with_timezone(&Utc),
             r#ref: None,
             supersedes: Some(supersedes_id.into()),
-            epoch_refs: None,
             id: String::new(),
-        })
+        }))
     }
 
     #[test]
     fn test_raw_score_simple() {
-        let atts = vec![
-            make_att("x", Kind::Praise, 40, "good"),
-            make_att("x", Kind::Concern, -30, "bad"),
+        let records = vec![
+            make_record("x", Kind::Praise, 40, "good"),
+            make_record("x", Kind::Concern, -30, "bad"),
         ];
-        assert_eq!(raw_score(&atts), 10);
+        assert_eq!(raw_score(&records), 10);
     }
 
     #[test]
@@ -300,53 +303,56 @@ mod tests {
 
     #[test]
     fn test_raw_score_clamped() {
-        let atts = vec![
-            make_att("x", Kind::Praise, 80, "great"),
-            make_att("x", Kind::Praise, 80, "also great"),
+        let records = vec![
+            make_record("x", Kind::Praise, 80, "great"),
+            make_record("x", Kind::Praise, 80, "also great"),
         ];
-        assert_eq!(raw_score(&atts), 100); // clamped
+        assert_eq!(raw_score(&records), 100); // clamped
     }
 
     #[test]
     fn test_raw_score_clamped_negative() {
-        let atts = vec![
-            make_att("x", Kind::Fail, -80, "bad"),
-            make_att("x", Kind::Fail, -80, "worse"),
+        let records = vec![
+            make_record("x", Kind::Fail, -80, "bad"),
+            make_record("x", Kind::Fail, -80, "worse"),
         ];
-        assert_eq!(raw_score(&atts), -100); // clamped
+        assert_eq!(raw_score(&records), -100); // clamped
     }
 
     #[test]
     fn test_raw_score_with_supersession() {
-        let original = make_att("x", Kind::Concern, -30, "bad");
-        let replacement = make_superseding("x", 10, &original.id);
-        let atts = vec![original, replacement];
+        let original = make_record("x", Kind::Concern, -30, "bad");
+        let replacement = make_superseding("x", 10, original.id());
+        let records = vec![original, replacement];
         // Original (-30) is superseded, only replacement (10) counts
-        assert_eq!(raw_score(&atts), 10);
+        assert_eq!(raw_score(&records), 10);
     }
 
     #[test]
     fn test_filter_superseded() {
-        let a = make_att("x", Kind::Pass, 10, "a");
-        let b = make_superseding("x", 20, &a.id);
-        let c = make_att("x", Kind::Praise, 30, "c");
+        let a = make_record("x", Kind::Pass, 10, "a");
+        let b = make_superseding("x", 20, a.id());
+        let c = make_record("x", Kind::Praise, 30, "c");
 
-        let atts = vec![a.clone(), b.clone(), c.clone()];
-        let active = filter_superseded(&atts);
+        let a_id = a.id().to_string();
+        let b_id = b.id().to_string();
+        let c_id = c.id().to_string();
+
+        let records = vec![a, b, c];
+        let active = filter_superseded(&records);
         assert_eq!(active.len(), 2);
-        assert!(active.iter().any(|att| att.id == b.id));
-        assert!(active.iter().any(|att| att.id == c.id));
-        assert!(!active.iter().any(|att| att.id == a.id));
+        assert!(active.iter().any(|r| r.id() == b_id));
+        assert!(active.iter().any(|r| r.id() == c_id));
+        assert!(!active.iter().any(|r| r.id() == a_id));
     }
 
     #[test]
     fn test_effective_scores_no_graph() {
         let graph = DependencyGraph::empty();
-        let att = make_att("x", Kind::Praise, 50, "good");
         let qf = QualFile {
             path: PathBuf::from("x.qual"),
             artifact: "x".into(),
-            attestations: vec![att],
+            records: vec![make_record("x", Kind::Praise, 50, "good")],
         };
 
         let scores = effective_scores(&graph, &[qf]);
@@ -363,18 +369,15 @@ mod tests {
 "#;
         let g = graph::parse_graph(graph_str).unwrap();
 
-        let app_att = make_att("app", Kind::Praise, 80, "great app");
-        let lib_att = make_att("lib", Kind::Concern, -20, "bad lib");
-
         let qf_app = QualFile {
             path: PathBuf::from("app.qual"),
             artifact: "app".into(),
-            attestations: vec![app_att],
+            records: vec![make_record("app", Kind::Praise, 80, "great app")],
         };
         let qf_lib = QualFile {
             path: PathBuf::from("lib.qual"),
             artifact: "lib".into(),
-            attestations: vec![lib_att],
+            records: vec![make_record("lib", Kind::Concern, -20, "bad lib")],
         };
 
         let scores = effective_scores(&g, &[qf_app, qf_lib]);
@@ -392,8 +395,6 @@ mod tests {
 
     #[test]
     fn test_effective_scores_chain_propagation() {
-        // app -> mid -> leaf
-        // leaf is terrible, should propagate up
         let graph_str = r#"{"artifact":"app","depends_on":["mid"]}
 {"artifact":"mid","depends_on":["leaf"]}
 {"artifact":"leaf","depends_on":[]}
@@ -404,30 +405,29 @@ mod tests {
             QualFile {
                 path: PathBuf::from("app.qual"),
                 artifact: "app".into(),
-                attestations: vec![make_att("app", Kind::Praise, 90, "great")],
+                records: vec![make_record("app", Kind::Praise, 90, "great")],
             },
             QualFile {
                 path: PathBuf::from("mid.qual"),
                 artifact: "mid".into(),
-                attestations: vec![make_att("mid", Kind::Praise, 70, "good")],
+                records: vec![make_record("mid", Kind::Praise, 70, "good")],
             },
             QualFile {
                 path: PathBuf::from("leaf.qual"),
                 artifact: "leaf".into(),
-                attestations: vec![make_att("leaf", Kind::Blocker, -50, "cursed")],
+                records: vec![make_record("leaf", Kind::Blocker, -50, "cursed")],
             },
         ];
 
         let scores = effective_scores(&g, &qfs);
 
         assert_eq!(scores["leaf"].effective, -50);
-        assert_eq!(scores["mid"].effective, -50); // limited by leaf
-        assert_eq!(scores["app"].effective, -50); // limited by leaf via mid
+        assert_eq!(scores["mid"].effective, -50);
+        assert_eq!(scores["app"].effective, -50);
     }
 
     #[test]
     fn test_effective_scores_unqualified_artifact() {
-        // Artifact in graph with no qual file -> raw = 0
         let graph_str = r#"{"artifact":"app","depends_on":["lib"]}
 {"artifact":"lib","depends_on":[]}
 "#;
@@ -498,7 +498,6 @@ mod tests {
             }),
             "ok"
         );
-        // Limited variants
         assert_eq!(
             score_status(&ScoreReport {
                 raw: 80,
@@ -527,26 +526,21 @@ mod tests {
 
     #[test]
     fn test_raw_score_exact_boundaries() {
-        // Exactly -100
-        let atts = vec![make_att("x", Kind::Fail, -100, "terrible")];
-        assert_eq!(raw_score(&atts), -100);
+        let records = vec![make_record("x", Kind::Fail, -100, "terrible")];
+        assert_eq!(raw_score(&records), -100);
 
-        // Exactly +100
-        let atts = vec![make_att("x", Kind::Praise, 100, "perfect")];
-        assert_eq!(raw_score(&atts), 100);
+        let records = vec![make_record("x", Kind::Praise, 100, "perfect")];
+        assert_eq!(raw_score(&records), 100);
 
-        // Sum to exactly 0
-        let atts = vec![
-            make_att("x", Kind::Praise, 30, "good"),
-            make_att("x", Kind::Concern, -30, "bad"),
+        let records = vec![
+            make_record("x", Kind::Praise, 30, "good"),
+            make_record("x", Kind::Concern, -30, "bad"),
         ];
-        assert_eq!(raw_score(&atts), 0);
+        assert_eq!(raw_score(&records), 0);
     }
 
     #[test]
     fn test_effective_score_zero_propagation() {
-        // Dependency has score 0, parent has positive score
-        // Parent should NOT be limited because 0 < 50 is true
         let graph_str = r#"{"artifact":"app","depends_on":["lib"]}
 {"artifact":"lib","depends_on":[]}
 "#;
@@ -555,19 +549,15 @@ mod tests {
         let qfs = vec![QualFile {
             path: PathBuf::from("app.qual"),
             artifact: "app".into(),
-            attestations: vec![make_att("app", Kind::Praise, 50, "good")],
+            records: vec![make_record("app", Kind::Praise, 50, "good")],
         }];
-        // lib has no qual file, so raw = 0
         let scores = effective_scores(&g, &qfs);
-        assert_eq!(scores["app"].effective, 0); // limited by lib's 0
+        assert_eq!(scores["app"].effective, 0);
         assert_eq!(scores["lib"].effective, 0);
     }
 
     #[test]
     fn test_effective_score_negative_deep_chain() {
-        // app -> mid -> leaf1, leaf1 has -100
-        // app -> mid -> leaf2, leaf2 has +80
-        // mid depends on both, should be limited by leaf1
         let graph_str = r#"{"artifact":"app","depends_on":["mid"]}
 {"artifact":"mid","depends_on":["leaf1","leaf2"]}
 {"artifact":"leaf1","depends_on":[]}
@@ -579,29 +569,29 @@ mod tests {
             QualFile {
                 path: PathBuf::from("app.qual"),
                 artifact: "app".into(),
-                attestations: vec![make_att("app", Kind::Praise, 90, "great")],
+                records: vec![make_record("app", Kind::Praise, 90, "great")],
             },
             QualFile {
                 path: PathBuf::from("mid.qual"),
                 artifact: "mid".into(),
-                attestations: vec![make_att("mid", Kind::Praise, 70, "good")],
+                records: vec![make_record("mid", Kind::Praise, 70, "good")],
             },
             QualFile {
                 path: PathBuf::from("leaf1.qual"),
                 artifact: "leaf1".into(),
-                attestations: vec![make_att("leaf1", Kind::Blocker, -100, "cursed")],
+                records: vec![make_record("leaf1", Kind::Blocker, -100, "cursed")],
             },
             QualFile {
                 path: PathBuf::from("leaf2.qual"),
                 artifact: "leaf2".into(),
-                attestations: vec![make_att("leaf2", Kind::Praise, 80, "fine")],
+                records: vec![make_record("leaf2", Kind::Praise, 80, "fine")],
             },
         ];
 
         let scores = effective_scores(&g, &qfs);
         assert_eq!(scores["leaf1"].effective, -100);
         assert_eq!(scores["leaf2"].effective, 80);
-        assert_eq!(scores["mid"].effective, -100); // limited by leaf1
-        assert_eq!(scores["app"].effective, -100); // propagated up
+        assert_eq!(scores["mid"].effective, -100);
+        assert_eq!(scores["app"].effective, -100);
     }
 }

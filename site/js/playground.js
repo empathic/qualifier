@@ -600,7 +600,7 @@
         return cmdHelp();
       case "--version":
       case "-V":
-        return { output: "qualifier 0.1.0" };
+        return { output: "qualifier 0.1.1" };
       default:
         return {
           output:

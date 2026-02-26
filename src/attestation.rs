@@ -1,20 +1,223 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use std::fmt;
 
-/// A quality attestation against a software artifact.
+// ─── Span types ─────────────────────────────────────────────────────────────
+
+/// A position within an artifact (1-indexed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Position {
+    /// 1-indexed line number.
+    pub line: u32,
+    /// 1-indexed column number (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub col: Option<u32>,
+}
+
+/// A sub-range within an artifact.
+///
+/// When `end` is absent, the span addresses a single position (end = start).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Span {
+    /// Start of the range (inclusive).
+    pub start: Position,
+    /// End of the range (inclusive). Defaults to `start` if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<Position>,
+}
+
+impl Span {
+    /// Return the end position, defaulting to start if absent.
+    pub fn end_or_start(&self) -> &Position {
+        self.end.as_ref().unwrap_or(&self.start)
+    }
+
+    /// Normalize: materialize end = start if absent.
+    pub fn normalize(&mut self) {
+        if self.end.is_none() {
+            self.end = Some(self.start.clone());
+        }
+    }
+}
+
+/// Parse a span from CLI syntax: "42", "42:58", "42.5:58.80"
+pub fn parse_span(s: &str) -> Result<Span, String> {
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        1 => {
+            let start = parse_position(parts[0])?;
+            Ok(Span { start, end: None })
+        }
+        2 => {
+            let start = parse_position(parts[0])?;
+            let end = parse_position(parts[1])?;
+            Ok(Span {
+                start,
+                end: Some(end),
+            })
+        }
+        _ => Err(format!(
+            "invalid span syntax: '{s}' (expected LINE, LINE:LINE, or LINE.COL:LINE.COL)"
+        )),
+    }
+}
+
+fn parse_position(s: &str) -> Result<Position, String> {
+    let parts: Vec<&str> = s.split('.').collect();
+    match parts.len() {
+        1 => {
+            let line: u32 = parts[0]
+                .parse()
+                .map_err(|_| format!("invalid line number: '{}'", parts[0]))?;
+            Ok(Position { line, col: None })
+        }
+        2 => {
+            let line: u32 = parts[0]
+                .parse()
+                .map_err(|_| format!("invalid line number: '{}'", parts[0]))?;
+            let col: u32 = parts[1]
+                .parse()
+                .map_err(|_| format!("invalid column number: '{}'", parts[1]))?;
+            Ok(Position {
+                line,
+                col: Some(col),
+            })
+        }
+        _ => Err(format!(
+            "invalid position syntax: '{s}' (expected LINE or LINE.COL)"
+        )),
+    }
+}
+
+// ─── Kind enum ──────────────────────────────────────────────────────────────
+
+/// The type of an attestation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    Pass,
+    Fail,
+    Blocker,
+    Concern,
+    Praise,
+    Suggestion,
+    Waiver,
+    #[serde(untagged)]
+    Custom(String),
+}
+
+impl fmt::Display for Kind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Kind::Pass => write!(f, "pass"),
+            Kind::Fail => write!(f, "fail"),
+            Kind::Blocker => write!(f, "blocker"),
+            Kind::Concern => write!(f, "concern"),
+            Kind::Praise => write!(f, "praise"),
+            Kind::Suggestion => write!(f, "suggestion"),
+            Kind::Waiver => write!(f, "waiver"),
+            Kind::Custom(s) => write!(f, "{s}"),
+        }
+    }
+}
+
+impl std::str::FromStr for Kind {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(match s {
+            "pass" => Kind::Pass,
+            "fail" => Kind::Fail,
+            "blocker" => Kind::Blocker,
+            "concern" => Kind::Concern,
+            "praise" => Kind::Praise,
+            "suggestion" => Kind::Suggestion,
+            "waiver" => Kind::Waiver,
+            other => Kind::Custom(other.to_string()),
+        })
+    }
+}
+
+impl Kind {
+    /// Recommended default score for each attestation kind.
+    pub fn default_score(&self) -> i32 {
+        match self {
+            Kind::Pass => 20,
+            Kind::Fail => -20,
+            Kind::Blocker => -50,
+            Kind::Concern => -10,
+            Kind::Praise => 30,
+            Kind::Suggestion => -5,
+            Kind::Waiver => 10,
+            Kind::Custom(_) => 0,
+        }
+    }
+}
+
+// ─── AuthorType enum ────────────────────────────────────────────────────────
+
+/// Author classification for attestations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthorType {
+    Human,
+    Ai,
+    Tool,
+    Unknown,
+}
+
+impl fmt::Display for AuthorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AuthorType::Human => write!(f, "human"),
+            AuthorType::Ai => write!(f, "ai"),
+            AuthorType::Tool => write!(f, "tool"),
+            AuthorType::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+impl std::str::FromStr for AuthorType {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "human" => Ok(AuthorType::Human),
+            "ai" => Ok(AuthorType::Ai),
+            "tool" => Ok(AuthorType::Tool),
+            "unknown" => Ok(AuthorType::Unknown),
+            other => Err(format!("unknown author_type: '{other}'")),
+        }
+    }
+}
+
+// ─── Attestation struct ─────────────────────────────────────────────────────
+
+fn default_attestation_type() -> String {
+    "attestation".to_string()
+}
+
+/// A quality attestation against a software artifact (v3).
 ///
 /// **IMPORTANT:** Field order is canonical — `serde` serializes in declaration
-/// order, and this determines attestation IDs. Do not reorder fields.
+/// order, and this determines record IDs. Do not reorder fields.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Attestation {
-    /// Format version. Always 2.
+    /// Format version. Always 3.
     #[serde(default)]
     pub v: u8,
 
+    /// Record type. Always "attestation".
+    #[serde(rename = "type", default = "default_attestation_type")]
+    pub record_type: String,
+
     /// Qualified name of the artifact.
     pub artifact: String,
+
+    /// Sub-artifact range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<Span>,
 
     /// The type of attestation.
     pub kind: Kind,
@@ -55,122 +258,185 @@ pub struct Attestation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<String>,
 
-    /// IDs of attestations compacted into this epoch (epoch attestations only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub epoch_refs: Option<Vec<String>>,
-
-    /// Content-addressed attestation ID (BLAKE3).
+    /// Content-addressed record ID (BLAKE3).
     pub id: String,
 }
 
-/// The type of an attestation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    Pass,
-    Fail,
-    Blocker,
-    Concern,
-    Praise,
-    Suggestion,
-    Waiver,
-    Epoch,
-    #[serde(untagged)]
-    Custom(String),
+// ─── Epoch struct ───────────────────────────────────────────────────────────
+
+/// An epoch record — a compaction summary that replaces a set of records
+/// with a single scored record preserving the net score.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Epoch {
+    #[serde(default)]
+    pub v: u8,
+    #[serde(rename = "type")]
+    pub record_type: String,
+    pub artifact: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<Span>,
+    pub score: i32,
+    pub summary: String,
+    pub refs: Vec<String>,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_type: Option<AuthorType>,
+    pub created_at: DateTime<Utc>,
+    pub id: String,
 }
 
-impl fmt::Display for Kind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+// ─── DependencyRecord struct ────────────────────────────────────────────────
+
+/// A dependency record declaring edges between artifacts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DependencyRecord {
+    #[serde(default)]
+    pub v: u8,
+    #[serde(rename = "type")]
+    pub record_type: String,
+    pub artifact: String,
+    pub depends_on: Vec<String>,
+    pub author: String,
+    pub created_at: DateTime<Utc>,
+    pub id: String,
+}
+
+// ─── Record enum ────────────────────────────────────────────────────────────
+
+/// A typed qualifier record. Dispatches on the `type` field in JSON.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Record {
+    Attestation(Attestation),
+    Epoch(Epoch),
+    Dependency(DependencyRecord),
+    Unknown(serde_json::Value),
+}
+
+impl Serialize for Record {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            Kind::Pass => write!(f, "pass"),
-            Kind::Fail => write!(f, "fail"),
-            Kind::Blocker => write!(f, "blocker"),
-            Kind::Concern => write!(f, "concern"),
-            Kind::Praise => write!(f, "praise"),
-            Kind::Suggestion => write!(f, "suggestion"),
-            Kind::Waiver => write!(f, "waiver"),
-            Kind::Epoch => write!(f, "epoch"),
-            Kind::Custom(s) => write!(f, "{s}"),
+            Record::Attestation(a) => a.serialize(serializer),
+            Record::Epoch(e) => e.serialize(serializer),
+            Record::Dependency(d) => d.serialize(serializer),
+            Record::Unknown(v) => v.serialize(serializer),
         }
     }
 }
 
-impl std::str::FromStr for Kind {
-    type Err = std::convert::Infallible;
+impl<'de> Deserialize<'de> for Record {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let record_type = value
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("attestation");
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Ok(match s {
-            "pass" => Kind::Pass,
-            "fail" => Kind::Fail,
-            "blocker" => Kind::Blocker,
-            "concern" => Kind::Concern,
-            "praise" => Kind::Praise,
-            "suggestion" => Kind::Suggestion,
-            "waiver" => Kind::Waiver,
-            "epoch" => Kind::Epoch,
-            other => Kind::Custom(other.to_string()),
-        })
+        match record_type {
+            "attestation" => {
+                let att: Attestation =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                Ok(Record::Attestation(att))
+            }
+            "epoch" => {
+                let epoch: Epoch =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                Ok(Record::Epoch(epoch))
+            }
+            "dependency" => {
+                let dep: DependencyRecord =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                Ok(Record::Dependency(dep))
+            }
+            _ => Ok(Record::Unknown(value)),
+        }
     }
 }
 
-impl Kind {
-    /// Recommended default score for each attestation kind.
-    pub fn default_score(&self) -> i32 {
+impl Record {
+    /// Get the artifact name.
+    pub fn artifact(&self) -> &str {
         match self {
-            Kind::Pass => 20,
-            Kind::Fail => -20,
-            Kind::Blocker => -50,
-            Kind::Concern => -10,
-            Kind::Praise => 30,
-            Kind::Suggestion => -5,
-            Kind::Waiver => 10,
-            Kind::Epoch => 0,
-            Kind::Custom(_) => 0,
+            Record::Attestation(a) => &a.artifact,
+            Record::Epoch(e) => &e.artifact,
+            Record::Dependency(d) => &d.artifact,
+            Record::Unknown(v) => v.get("artifact").and_then(|v| v.as_str()).unwrap_or(""),
         }
     }
-}
 
-/// Author classification for attestations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthorType {
-    Human,
-    Ai,
-    Tool,
-    Unknown,
-}
-
-impl fmt::Display for AuthorType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    /// Get the record ID.
+    pub fn id(&self) -> &str {
         match self {
-            AuthorType::Human => write!(f, "human"),
-            AuthorType::Ai => write!(f, "ai"),
-            AuthorType::Tool => write!(f, "tool"),
-            AuthorType::Unknown => write!(f, "unknown"),
+            Record::Attestation(a) => &a.id,
+            Record::Epoch(e) => &e.id,
+            Record::Dependency(d) => &d.id,
+            Record::Unknown(v) => v.get("id").and_then(|v| v.as_str()).unwrap_or(""),
         }
+    }
+
+    /// Get the score (if this is a scored record type).
+    pub fn score(&self) -> Option<i32> {
+        match self {
+            Record::Attestation(a) => Some(a.score),
+            Record::Epoch(e) => Some(e.score),
+            _ => None,
+        }
+    }
+
+    /// Get the supersedes ID (attestations only).
+    pub fn supersedes(&self) -> Option<&str> {
+        match self {
+            Record::Attestation(a) => a.supersedes.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Get the kind (attestations only).
+    pub fn kind(&self) -> Option<&Kind> {
+        match self {
+            Record::Attestation(a) => Some(&a.kind),
+            _ => None,
+        }
+    }
+
+    /// Try to get this as an attestation.
+    pub fn as_attestation(&self) -> Option<&Attestation> {
+        match self {
+            Record::Attestation(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Try to get this as an epoch.
+    pub fn as_epoch(&self) -> Option<&Epoch> {
+        match self {
+            Record::Epoch(e) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// Returns true if this is a scored record type (attestation or epoch).
+    pub fn is_scored(&self) -> bool {
+        matches!(self, Record::Attestation(_) | Record::Epoch(_))
     }
 }
 
-impl std::str::FromStr for AuthorType {
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "human" => Ok(AuthorType::Human),
-            "ai" => Ok(AuthorType::Ai),
-            "tool" => Ok(AuthorType::Tool),
-            "unknown" => Ok(AuthorType::Unknown),
-            other => Err(format!("unknown author_type: '{other}'")),
-        }
-    }
+fn slice_is_empty(s: &[String]) -> bool {
+    s.is_empty()
 }
 
-/// Zero-copy view of an Attestation for canonical serialization.
-/// Field order and `skip_serializing_if` MUST exactly match `Attestation`.
+// ─── Canonical views (for ID generation) ────────────────────────────────────
+
+/// Zero-copy canonical view for attestation records.
+/// Field order MUST match the v3 spec: v, type, artifact, span, kind, score,
+/// summary, detail, suggested_fix, tags, author, author_type, created_at,
+/// ref, supersedes, id.
 #[derive(Serialize)]
-struct CanonicalView<'a> {
+struct AttestationCanonicalView<'a> {
     v: u8,
+    r#type: &'a str,
     artifact: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: &'a Option<Span>,
     kind: &'a Kind,
     score: i32,
     summary: &'a str,
@@ -178,8 +444,8 @@ struct CanonicalView<'a> {
     detail: &'a Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     suggested_fix: &'a Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tags: &'a Vec<String>,
+    #[serde(skip_serializing_if = "slice_is_empty")]
+    tags: &'a [String],
     author: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     author_type: &'a Option<AuthorType>,
@@ -188,17 +454,52 @@ struct CanonicalView<'a> {
     r#ref: &'a Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     supersedes: &'a Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    epoch_refs: &'a Option<Vec<String>>,
     id: &'a str,
 }
+
+/// Zero-copy canonical view for epoch records.
+/// Field order: v, type, artifact, span, score, summary, refs,
+/// author, author_type, created_at, id.
+#[derive(Serialize)]
+struct EpochCanonicalView<'a> {
+    v: u8,
+    r#type: &'a str,
+    artifact: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: &'a Option<Span>,
+    score: i32,
+    summary: &'a str,
+    refs: &'a [String],
+    author: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author_type: &'a Option<AuthorType>,
+    created_at: &'a DateTime<Utc>,
+    id: &'a str,
+}
+
+/// Zero-copy canonical view for dependency records.
+/// Field order: v, type, artifact, depends_on, author, created_at, id.
+#[derive(Serialize)]
+struct DependencyCanonicalView<'a> {
+    v: u8,
+    r#type: &'a str,
+    artifact: &'a str,
+    depends_on: &'a [String],
+    author: &'a str,
+    created_at: &'a DateTime<Utc>,
+    id: &'a str,
+}
+
+// ─── ID generation ──────────────────────────────────────────────────────────
 
 /// Generate a deterministic attestation ID by BLAKE3-hashing the canonical
 /// serialization with the `id` field set to the empty string.
 pub fn generate_id(attestation: &Attestation) -> String {
-    let view = CanonicalView {
+    let view = AttestationCanonicalView {
         v: attestation.v,
+        r#type: "attestation",
         artifact: &attestation.artifact,
+        span: &attestation.span,
         kind: &attestation.kind,
         score: attestation.score,
         summary: &attestation.summary,
@@ -210,18 +511,63 @@ pub fn generate_id(attestation: &Attestation) -> String {
         created_at: &attestation.created_at,
         r#ref: &attestation.r#ref,
         supersedes: &attestation.supersedes,
-        epoch_refs: &attestation.epoch_refs,
         id: "",
     };
     let canonical = serde_json::to_string(&view).expect("attestation must serialize");
     blake3::hash(canonical.as_bytes()).to_hex().to_string()
 }
 
+/// Generate a deterministic epoch ID.
+pub fn generate_epoch_id(epoch: &Epoch) -> String {
+    let view = EpochCanonicalView {
+        v: epoch.v,
+        r#type: "epoch",
+        artifact: &epoch.artifact,
+        span: &epoch.span,
+        score: epoch.score,
+        summary: &epoch.summary,
+        refs: &epoch.refs,
+        author: &epoch.author,
+        author_type: &epoch.author_type,
+        created_at: &epoch.created_at,
+        id: "",
+    };
+    let canonical = serde_json::to_string(&view).expect("epoch must serialize");
+    blake3::hash(canonical.as_bytes()).to_hex().to_string()
+}
+
+/// Generate a deterministic dependency record ID.
+pub fn generate_dependency_id(dep: &DependencyRecord) -> String {
+    let view = DependencyCanonicalView {
+        v: dep.v,
+        r#type: "dependency",
+        artifact: &dep.artifact,
+        depends_on: &dep.depends_on,
+        author: &dep.author,
+        created_at: &dep.created_at,
+        id: "",
+    };
+    let canonical = serde_json::to_string(&view).expect("dependency must serialize");
+    blake3::hash(canonical.as_bytes()).to_hex().to_string()
+}
+
+/// Generate a deterministic ID for any record type.
+pub fn generate_record_id(record: &Record) -> String {
+    match record {
+        Record::Attestation(a) => generate_id(a),
+        Record::Epoch(e) => generate_epoch_id(e),
+        Record::Dependency(d) => generate_dependency_id(d),
+        Record::Unknown(_) => String::new(),
+    }
+}
+
+// ─── Validation ─────────────────────────────────────────────────────────────
+
 /// Validate an attestation, returning all validation errors found.
 pub fn validate(attestation: &Attestation) -> Vec<String> {
     let mut errors = Vec::new();
 
-    if attestation.v != 2 {
+    if attestation.v != 3 {
         errors.push(format!("unsupported format version: {}", attestation.v));
     }
     if attestation.artifact.is_empty() {
@@ -254,13 +600,13 @@ pub fn validate(attestation: &Attestation) -> Vec<String> {
         }
     }
 
-    // epoch_refs only valid on epoch attestations
-    if attestation.epoch_refs.is_some() && attestation.kind != Kind::Epoch {
-        errors.push("epoch_refs is only valid on epoch attestations".into());
-    }
-
-    // Warn about potentially misspelled custom kinds
+    // Warn about 'epoch' used as a kind (it's now a record type)
     if let Kind::Custom(ref custom) = attestation.kind {
+        if custom == "epoch" {
+            errors.push("'epoch' is a record type, not a kind; use type: \"epoch\" instead".into());
+        }
+
+        // Warn about potentially misspelled custom kinds
         let known = [
             "pass",
             "fail",
@@ -269,13 +615,29 @@ pub fn validate(attestation: &Attestation) -> Vec<String> {
             "praise",
             "suggestion",
             "waiver",
-            "epoch",
         ];
         for k in &known {
             if is_likely_typo(custom, k) {
                 errors.push(format!("unknown kind '{}', did you mean '{}'?", custom, k));
                 break;
             }
+        }
+    }
+
+    // Validate span
+    if let Some(ref span) = attestation.span {
+        if span.start.line == 0 {
+            errors.push("span.start.line must be >= 1 (1-indexed)".into());
+        }
+        if let Some(ref end) = span.end
+            && end.line == 0
+        {
+            errors.push("span.end.line must be >= 1 (1-indexed)".into());
+        }
+        if let Some(col) = span.start.col
+            && col == 0
+        {
+            errors.push("span.start.col must be >= 1 (1-indexed)".into());
         }
     }
 
@@ -310,27 +672,29 @@ fn is_likely_typo(a: &str, b: &str) -> bool {
     prev[n] <= 2
 }
 
-/// Check a slice of attestations for supersession cycles.
-/// Returns Err with cycle details if a cycle is found.
-pub fn check_supersession_cycles(attestations: &[Attestation]) -> crate::Result<()> {
-    let id_set: HashSet<&str> = attestations.iter().map(|a| a.id.as_str()).collect();
+// ─── Supersession ───────────────────────────────────────────────────────────
 
-    for att in attestations {
-        if let Some(ref target) = att.supersedes {
-            // Walk the chain from this attestation
+/// Check a slice of records for supersession cycles.
+/// Returns Err with cycle details if a cycle is found.
+pub fn check_supersession_cycles(records: &[Record]) -> crate::Result<()> {
+    let id_set: HashSet<&str> = records.iter().map(|r| r.id()).collect();
+
+    for record in records {
+        if let Some(target) = record.supersedes() {
+            // Walk the chain from this record
             let mut visited = HashSet::new();
-            visited.insert(att.id.as_str());
-            let mut current = target.as_str();
+            visited.insert(record.id());
+            let mut current = target;
 
             loop {
                 if visited.contains(current) {
                     return Err(crate::Error::Cycle {
                         context: "supersession".into(),
-                        detail: format!("cycle detected involving attestation {}", current),
+                        detail: format!("cycle detected involving record {}", current),
                     });
                 }
 
-                // Find the attestation with this ID
+                // Find the record with this ID
                 if !id_set.contains(current) {
                     break; // target not in this file — that's fine
                 }
@@ -338,9 +702,9 @@ pub fn check_supersession_cycles(attestations: &[Attestation]) -> crate::Result<
                 visited.insert(current);
 
                 // Find next link in chain
-                match attestations.iter().find(|a| a.id == current) {
-                    Some(next) => match &next.supersedes {
-                        Some(next_target) => current = next_target.as_str(),
+                match records.iter().find(|r| r.id() == current) {
+                    Some(next) => match next.supersedes() {
+                        Some(next_target) => current = next_target,
                         None => break,
                     },
                     None => break,
@@ -355,27 +719,29 @@ pub fn check_supersession_cycles(attestations: &[Attestation]) -> crate::Result<
 /// Validate that supersession references target the same artifact.
 ///
 /// Returns an error if any cross-artifact supersession is found.
-pub fn validate_supersession_targets(attestations: &[Attestation]) -> crate::Result<()> {
-    let by_id: std::collections::HashMap<&str, &Attestation> =
-        attestations.iter().map(|a| (a.id.as_str(), a)).collect();
+pub fn validate_supersession_targets(records: &[Record]) -> crate::Result<()> {
+    let by_id: std::collections::HashMap<&str, &Record> =
+        records.iter().map(|r| (r.id(), r)).collect();
 
-    for att in attestations {
-        if let Some(ref target_id) = att.supersedes
-            && let Some(target) = by_id.get(target_id.as_str())
-            && att.artifact != target.artifact
+    for record in records {
+        if let Some(target_id) = record.supersedes()
+            && let Some(target) = by_id.get(target_id)
+            && record.artifact() != target.artifact()
         {
             return Err(crate::Error::Validation(format!(
-                "attestation {} (artifact '{}') supersedes {} (artifact '{}') \
+                "record {} (artifact '{}') supersedes {} (artifact '{}') \
                  — cross-artifact supersession is not allowed",
-                &att.id[..8],
-                att.artifact,
+                &record.id()[..8.min(record.id().len())],
+                record.artifact(),
                 &target_id[..target_id.len().min(8)],
-                target.artifact
+                target.artifact()
             )));
         }
     }
     Ok(())
 }
+
+// ─── Finalize ───────────────────────────────────────────────────────────────
 
 /// Clamp a score to the valid range [-100, 100].
 pub fn clamp_score(score: i32) -> i32 {
@@ -386,11 +752,47 @@ pub fn clamp_score(score: i32) -> i32 {
 /// ignored and replaced with the content-addressed hash.
 pub fn finalize(mut attestation: Attestation) -> Attestation {
     attestation.score = clamp_score(attestation.score);
-    attestation.v = 2;
+    attestation.v = 3;
+    attestation.record_type = "attestation".to_string();
+    // Normalize span
+    if let Some(ref mut span) = attestation.span {
+        span.normalize();
+    }
     attestation.id = String::new(); // clear for hashing
     attestation.id = generate_id(&attestation);
     attestation
 }
+
+/// Build an epoch with a generated ID.
+pub fn finalize_epoch(mut epoch: Epoch) -> Epoch {
+    epoch.score = clamp_score(epoch.score);
+    epoch.v = 3;
+    epoch.record_type = "epoch".to_string();
+    if let Some(ref mut span) = epoch.span {
+        span.normalize();
+    }
+    epoch.id = String::new();
+    epoch.id = generate_epoch_id(&epoch);
+    epoch
+}
+
+/// Build a record with a generated ID (dispatches by type).
+pub fn finalize_record(record: Record) -> Record {
+    match record {
+        Record::Attestation(a) => Record::Attestation(finalize(a)),
+        Record::Epoch(e) => Record::Epoch(finalize_epoch(e)),
+        Record::Dependency(mut d) => {
+            d.v = 3;
+            d.record_type = "dependency".to_string();
+            d.id = String::new();
+            d.id = generate_dependency_id(&d);
+            Record::Dependency(d)
+        }
+        other => other,
+    }
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -399,8 +801,10 @@ mod tests {
 
     fn sample_attestation() -> Attestation {
         let mut att = Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "src/parser.rs".into(),
+            span: None,
             kind: Kind::Concern,
             score: -30,
             summary: "Panics on malformed input".into(),
@@ -414,7 +818,6 @@ mod tests {
                 .with_timezone(&Utc),
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         };
         att.id = generate_id(&att);
@@ -450,8 +853,10 @@ mod tests {
     #[test]
     fn test_validate_empty_fields() {
         let att = Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: String::new(),
+            span: None,
             kind: Kind::Pass,
             score: 0,
             summary: String::new(),
@@ -463,7 +868,6 @@ mod tests {
             created_at: Utc::now(),
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         };
         let errors = validate(&att);
@@ -491,15 +895,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_epoch_refs_on_non_epoch() {
-        let mut att = sample_attestation();
-        att.epoch_refs = Some(vec!["abc".into()]);
-        att.id = generate_id(&att);
-        let errors = validate(&att);
-        assert!(errors.iter().any(|e| e.contains("epoch_refs")));
-    }
-
-    #[test]
     fn test_clamp_score() {
         assert_eq!(clamp_score(50), 50);
         assert_eq!(clamp_score(-200), -100);
@@ -511,8 +906,10 @@ mod tests {
     #[test]
     fn test_finalize() {
         let att = Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "test".into(),
+            span: None,
             kind: Kind::Pass,
             score: 200, // over max
             summary: "good".into(),
@@ -524,21 +921,112 @@ mod tests {
             created_at: Utc::now(),
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: "will be replaced".into(),
         };
         let finalized = finalize(att);
         assert_eq!(finalized.score, 100); // clamped
-        assert_eq!(finalized.v, 2); // upgraded to v2
+        assert_eq!(finalized.v, 3);
         assert_eq!(finalized.id, generate_id(&finalized)); // valid ID
+    }
+
+    #[test]
+    fn test_finalize_normalizes_span() {
+        let att = Attestation {
+            v: 3,
+            record_type: "attestation".into(),
+            artifact: "test.rs".into(),
+            span: Some(Span {
+                start: Position {
+                    line: 42,
+                    col: None,
+                },
+                end: None,
+            }),
+            kind: Kind::Concern,
+            score: -10,
+            summary: "issue".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec![],
+            author: "test".into(),
+            author_type: None,
+            created_at: Utc::now(),
+            r#ref: None,
+            supersedes: None,
+            id: String::new(),
+        };
+        let finalized = finalize(att);
+        let span = finalized.span.unwrap();
+        assert_eq!(
+            span.end,
+            Some(Position {
+                line: 42,
+                col: None
+            })
+        );
+    }
+
+    #[test]
+    fn test_span_changes_id() {
+        let now = DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let without_span = finalize(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
+            artifact: "x.rs".into(),
+            span: None,
+            kind: Kind::Concern,
+            score: -10,
+            summary: "issue".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec![],
+            author: "test".into(),
+            author_type: None,
+            created_at: now,
+            r#ref: None,
+            supersedes: None,
+            id: String::new(),
+        });
+
+        let with_span = finalize(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
+            artifact: "x.rs".into(),
+            span: Some(Span {
+                start: Position {
+                    line: 42,
+                    col: None,
+                },
+                end: None,
+            }),
+            kind: Kind::Concern,
+            score: -10,
+            summary: "issue".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec![],
+            author: "test".into(),
+            author_type: None,
+            created_at: now,
+            r#ref: None,
+            supersedes: None,
+            id: String::new(),
+        });
+
+        assert_ne!(without_span.id, with_span.id, "span should affect ID");
     }
 
     #[test]
     fn test_supersession_cycle_detection() {
         let now = Utc::now();
-        let mut a = Attestation {
-            v: 2,
+        let a = Record::Attestation(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "x".into(),
+            span: None,
             kind: Kind::Pass,
             score: 10,
             summary: "a".into(),
@@ -549,19 +1037,28 @@ mod tests {
             author_type: None,
             created_at: now,
             r#ref: None,
-            supersedes: None,
-            epoch_refs: None,
+            supersedes: Some("bbb".into()),
             id: "aaa".into(),
-        };
-        let mut b = a.clone();
-        b.id = "bbb".into();
-        b.supersedes = Some("aaa".into());
+        });
+        let b = Record::Attestation(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
+            artifact: "x".into(),
+            span: None,
+            kind: Kind::Pass,
+            score: 10,
+            summary: "b".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec![],
+            author: "test".into(),
+            author_type: None,
+            created_at: now,
+            r#ref: None,
+            supersedes: Some("aaa".into()),
+            id: "bbb".into(),
+        });
 
-        // No cycle: a <- b
-        assert!(check_supersession_cycles(&[a.clone(), b.clone()]).is_ok());
-
-        // Create cycle: a -> b -> a
-        a.supersedes = Some("bbb".into());
         assert!(check_supersession_cycles(&[a, b]).is_err());
     }
 
@@ -575,7 +1072,6 @@ mod tests {
             Kind::Praise,
             Kind::Suggestion,
             Kind::Waiver,
-            Kind::Epoch,
         ];
         for kind in &kinds {
             let s = kind.to_string();
@@ -608,7 +1104,6 @@ mod tests {
         assert_eq!(Kind::Praise.default_score(), 30);
         assert_eq!(Kind::Suggestion.default_score(), -5);
         assert_eq!(Kind::Waiver.default_score(), 10);
-        assert_eq!(Kind::Epoch.default_score(), 0);
         assert_eq!(Kind::Custom("foo".into()).default_score(), 0);
     }
 
@@ -640,9 +1135,11 @@ mod tests {
 
     #[test]
     fn test_cross_artifact_supersession_detected() {
-        let a = finalize(Attestation {
-            v: 2,
+        let a = Record::Attestation(finalize(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "foo.rs".into(),
+            span: None,
             kind: Kind::Pass,
             score: 10,
             summary: "ok".into(),
@@ -654,12 +1151,14 @@ mod tests {
             created_at: Utc::now(),
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
-        });
-        let b = finalize(Attestation {
-            v: 2,
+        }));
+        let a_id = a.id().to_string();
+        let b = Record::Attestation(finalize(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "bar.rs".into(),
+            span: None,
             kind: Kind::Pass,
             score: 20,
             summary: "updated".into(),
@@ -670,10 +1169,9 @@ mod tests {
             author_type: None,
             created_at: Utc::now(),
             r#ref: None,
-            supersedes: Some(a.id.clone()),
-            epoch_refs: None,
+            supersedes: Some(a_id),
             id: String::new(),
-        });
+        }));
         let result = validate_supersession_targets(&[a, b]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cross-artifact"));
@@ -681,9 +1179,11 @@ mod tests {
 
     #[test]
     fn test_same_artifact_supersession_ok() {
-        let a = finalize(Attestation {
-            v: 2,
+        let a = Record::Attestation(finalize(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "foo.rs".into(),
+            span: None,
             kind: Kind::Concern,
             score: -10,
             summary: "bad".into(),
@@ -695,12 +1195,14 @@ mod tests {
             created_at: Utc::now(),
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
-        });
-        let b = finalize(Attestation {
-            v: 2,
+        }));
+        let a_id = a.id().to_string();
+        let b = Record::Attestation(finalize(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "foo.rs".into(),
+            span: None,
             kind: Kind::Pass,
             score: 20,
             summary: "fixed".into(),
@@ -711,10 +1213,9 @@ mod tests {
             author_type: None,
             created_at: Utc::now(),
             r#ref: None,
-            supersedes: Some(a.id.clone()),
-            epoch_refs: None,
+            supersedes: Some(a_id),
             id: String::new(),
-        });
+        }));
         let result = validate_supersession_targets(&[a, b]);
         assert!(result.is_ok());
     }
@@ -729,10 +1230,12 @@ mod tests {
     }
 
     #[test]
-    fn test_v2_finalize_sets_version() {
+    fn test_v3_finalize_sets_version() {
         let att = finalize(Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "test.rs".into(),
+            span: None,
             kind: Kind::Pass,
             score: 10,
             summary: "ok".into(),
@@ -744,22 +1247,23 @@ mod tests {
             created_at: Utc::now(),
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         });
-        assert_eq!(att.v, 2);
+        assert_eq!(att.v, 3);
         assert_eq!(att.id, generate_id(&att));
     }
 
     #[test]
-    fn test_v2_id_includes_new_fields() {
+    fn test_v3_id_includes_new_fields() {
         let now = DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
 
         let base = finalize(Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "x.rs".into(),
+            span: None,
             kind: Kind::Pass,
             score: 10,
             summary: "ok".into(),
@@ -771,14 +1275,15 @@ mod tests {
             created_at: now,
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         });
 
         // Same content but with author_type set
         let with_author_type = finalize(Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "x.rs".into(),
+            span: None,
             kind: Kind::Pass,
             score: 10,
             summary: "ok".into(),
@@ -790,14 +1295,15 @@ mod tests {
             created_at: now,
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         });
 
         // Same content but with ref set
         let with_ref = finalize(Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "x.rs".into(),
+            span: None,
             kind: Kind::Pass,
             score: 10,
             summary: "ok".into(),
@@ -809,29 +1315,22 @@ mod tests {
             created_at: now,
             r#ref: Some("git:abc123".into()),
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         });
 
-        // All three should be v2 (finalize sets it)
-        assert_eq!(base.v, 2);
-        assert_eq!(with_author_type.v, 2);
-        assert_eq!(with_ref.v, 2);
-
-        // All three should have different IDs
-        assert_ne!(
-            base.id, with_author_type.id,
-            "author_type should affect v2 ID"
-        );
-        assert_ne!(base.id, with_ref.id, "ref should affect v2 ID");
+        assert_eq!(base.v, 3);
+        assert_ne!(base.id, with_author_type.id, "author_type should affect ID");
+        assert_ne!(base.id, with_ref.id, "ref should affect ID");
         assert_ne!(with_author_type.id, with_ref.id);
     }
 
     #[test]
     fn test_validate_unknown_version() {
         let mut att = Attestation {
-            v: 3,
+            v: 2,
+            record_type: "attestation".into(),
             artifact: "x.rs".into(),
+            span: None,
             kind: Kind::Pass,
             score: 10,
             summary: "ok".into(),
@@ -843,25 +1342,26 @@ mod tests {
             created_at: Utc::now(),
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         };
-        att.id = generate_id(&att); // v>=2 path
+        att.id = generate_id(&att);
         let errors = validate(&att);
         assert!(
             errors
                 .iter()
                 .any(|e| e.contains("unsupported format version")),
-            "v:3 should fail validation, got: {:?}",
+            "v:2 should fail validation, got: {:?}",
             errors
         );
     }
 
     #[test]
-    fn test_v2_serde_roundtrip() {
+    fn test_v3_serde_roundtrip() {
         let att = finalize(Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: "x.rs".into(),
+            span: None,
             kind: Kind::Praise,
             score: 30,
             summary: "great".into(),
@@ -875,17 +1375,145 @@ mod tests {
                 .with_timezone(&Utc),
             r#ref: Some("git:3aba500".into()),
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         });
 
         let json = serde_json::to_string(&att).unwrap();
-        assert!(json.contains("\"v\":2"));
+        assert!(json.contains("\"v\":3"));
+        assert!(json.contains("\"type\":\"attestation\""));
         assert!(json.contains("\"author_type\":\"human\""));
         assert!(json.contains("\"ref\":\"git:3aba500\""));
 
         let parsed: Attestation = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, att);
+    }
+
+    #[test]
+    fn test_record_serde_roundtrip() {
+        let att = finalize(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
+            artifact: "x.rs".into(),
+            span: None,
+            kind: Kind::Pass,
+            score: 10,
+            summary: "ok".into(),
+            detail: None,
+            suggested_fix: None,
+            tags: vec![],
+            author: "test".into(),
+            author_type: None,
+            created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            r#ref: None,
+            supersedes: None,
+            id: String::new(),
+        });
+        let record = Record::Attestation(att.clone());
+        let json = serde_json::to_string(&record).unwrap();
+        let parsed: Record = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id(), att.id);
+        assert!(parsed.as_attestation().is_some());
+    }
+
+    #[test]
+    fn test_record_type_defaults_to_attestation() {
+        // JSON without "type" field should parse as attestation
+        let json = r#"{"v":3,"artifact":"x.rs","kind":"pass","score":10,"summary":"ok","author":"test","created_at":"2026-02-24T10:00:00Z","id":"abc"}"#;
+        let record: Record = serde_json::from_str(json).unwrap();
+        assert!(record.as_attestation().is_some());
+    }
+
+    #[test]
+    fn test_epoch_record_roundtrip() {
+        let epoch = finalize_epoch(Epoch {
+            v: 3,
+            record_type: "epoch".into(),
+            artifact: "x.rs".into(),
+            span: None,
+            score: 30,
+            summary: "Compacted from 3 records".into(),
+            refs: vec!["aaa".into(), "bbb".into()],
+            author: "qualifier/compact".into(),
+            author_type: Some(AuthorType::Tool),
+            created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            id: String::new(),
+        });
+
+        let record = Record::Epoch(epoch.clone());
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains("\"type\":\"epoch\""));
+
+        let parsed: Record = serde_json::from_str(&json).unwrap();
+        assert!(parsed.as_epoch().is_some());
+        assert_eq!(parsed.as_epoch().unwrap().score, 30);
+    }
+
+    #[test]
+    fn test_unknown_record_type_preserved() {
+        let json = r#"{"v":3,"type":"custom-thing","artifact":"x.rs","foo":"bar","author":"test","created_at":"2026-02-24T10:00:00Z","id":"abc"}"#;
+        let record: Record = serde_json::from_str(json).unwrap();
+        match record {
+            Record::Unknown(v) => {
+                assert_eq!(v.get("type").unwrap().as_str().unwrap(), "custom-thing");
+                assert_eq!(v.get("foo").unwrap().as_str().unwrap(), "bar");
+            }
+            _ => panic!("expected Unknown record"),
+        }
+    }
+
+    #[test]
+    fn test_parse_span_line_only() {
+        let span = parse_span("42").unwrap();
+        assert_eq!(
+            span.start,
+            Position {
+                line: 42,
+                col: None
+            }
+        );
+        assert_eq!(span.end, None);
+    }
+
+    #[test]
+    fn test_parse_span_line_range() {
+        let span = parse_span("42:58").unwrap();
+        assert_eq!(
+            span.start,
+            Position {
+                line: 42,
+                col: None
+            }
+        );
+        assert_eq!(
+            span.end,
+            Some(Position {
+                line: 58,
+                col: None
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_span_with_columns() {
+        let span = parse_span("42.5:58.80").unwrap();
+        assert_eq!(
+            span.start,
+            Position {
+                line: 42,
+                col: Some(5)
+            }
+        );
+        assert_eq!(
+            span.end,
+            Some(Position {
+                line: 58,
+                col: Some(80)
+            })
+        );
     }
 
     #[test]

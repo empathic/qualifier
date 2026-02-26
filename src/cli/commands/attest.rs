@@ -3,13 +3,13 @@ use clap::Args as ClapArgs;
 use std::io::{self, BufRead};
 use std::path::Path;
 
-use crate::attestation::{self, Attestation, AuthorType, Kind};
+use crate::attestation::{self, Attestation, AuthorType, Kind, Record};
 use crate::qual_file;
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// The artifact to attest
-    pub artifact: String,
+    /// The artifact to attest (required unless --stdin)
+    pub artifact: Option<String>,
 
     /// Attestation kind (pass, fail, blocker, concern, praise, suggestion, waiver)
     #[arg(long)]
@@ -43,6 +43,10 @@ pub struct Args {
     #[arg(long)]
     pub author_type: Option<String>,
 
+    /// Sub-artifact span (e.g., "42", "42:58", "42.5:58.80")
+    #[arg(long)]
+    pub span: Option<String>,
+
     /// VCS ref to pin (e.g., "git:3aba500")
     #[arg(long, name = "ref")]
     pub r#ref: Option<String>,
@@ -64,6 +68,15 @@ pub fn run(args: Args) -> crate::Result<()> {
     if args.stdin {
         return run_batch();
     }
+
+    let artifact = match args.artifact {
+        Some(a) => a,
+        None => {
+            return Err(crate::Error::Validation(
+                "<artifact> is required (or use --stdin for batch mode)".into(),
+            ));
+        }
+    };
 
     let kind: Kind = args.kind.as_deref().unwrap_or("concern").parse().unwrap();
 
@@ -88,12 +101,18 @@ pub fn run(args: Args) -> crate::Result<()> {
         None => None,
     };
 
-    let qual_path =
-        qual_file::resolve_qual_path(&args.artifact, args.file.as_deref().map(Path::new))?;
+    let span = match &args.span {
+        Some(s) => Some(attestation::parse_span(s).map_err(crate::Error::Validation)?),
+        None => None,
+    };
+
+    let qual_path = qual_file::resolve_qual_path(&artifact, args.file.as_deref().map(Path::new))?;
 
     let att = attestation::finalize(Attestation {
-        v: 2,
-        artifact: args.artifact.clone(),
+        v: 3,
+        record_type: "attestation".into(),
+        artifact,
+        span,
         kind,
         score,
         summary,
@@ -105,7 +124,6 @@ pub fn run(args: Args) -> crate::Result<()> {
         created_at: Utc::now(),
         r#ref: args.r#ref,
         supersedes: args.supersedes,
-        epoch_refs: None,
         id: String::new(),
     });
 
@@ -116,17 +134,17 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     if att.supersedes.is_some() {
         let existing = if qual_path.exists() {
-            qual_file::parse(&qual_path)?.attestations
+            qual_file::parse(&qual_path)?.records
         } else {
             Vec::new()
         };
         let mut all = existing;
-        all.push(att.clone());
+        all.push(Record::Attestation(att.clone()));
         attestation::check_supersession_cycles(&all)?;
         attestation::validate_supersession_targets(&all)?;
     }
 
-    qual_file::append(qual_path.as_ref(), &att)?;
+    qual_file::append(qual_path.as_ref(), &Record::Attestation(att.clone()))?;
     println!("Attested {} [{}] {}", att.artifact, att.score, att.kind);
     println!("  id: {}", att.id);
 
@@ -144,33 +162,36 @@ fn run_batch() -> crate::Result<()> {
             continue;
         }
 
-        let mut att: Attestation = serde_json::from_str(trimmed)?;
-        att = attestation::finalize(att);
+        let record: Record = serde_json::from_str(trimmed)?;
+        let record = attestation::finalize_record(record);
 
-        let errors = attestation::validate(&att);
-        if !errors.is_empty() {
-            return Err(crate::Error::Validation(errors.join("; ")));
+        // Validate attestation records
+        if let Some(att) = record.as_attestation() {
+            let errors = attestation::validate(att);
+            if !errors.is_empty() {
+                return Err(crate::Error::Validation(errors.join("; ")));
+            }
         }
 
-        let qual_path = qual_file::resolve_qual_path(&att.artifact, None)?;
+        let qual_path = qual_file::resolve_qual_path(record.artifact(), None)?;
 
-        if att.supersedes.is_some() {
+        if record.supersedes().is_some() {
             let existing = if qual_path.exists() {
-                qual_file::parse(&qual_path)?.attestations
+                qual_file::parse(&qual_path)?.records
             } else {
                 Vec::new()
             };
             let mut all = existing;
-            all.push(att.clone());
+            all.push(record.clone());
             attestation::check_supersession_cycles(&all)?;
             attestation::validate_supersession_targets(&all)?;
         }
 
-        qual_file::append(&qual_path, &att)?;
+        qual_file::append(&qual_path, &record)?;
         count += 1;
     }
 
-    println!("Attested {count} artifacts from stdin");
+    println!("Attested {count} records from stdin");
     Ok(())
 }
 

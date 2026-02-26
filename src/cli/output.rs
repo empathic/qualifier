@@ -1,6 +1,6 @@
 use comfy_table::{Cell, CellAlignment, Color, Table};
 
-use crate::attestation::Attestation;
+use crate::attestation::Record;
 use crate::scoring::{self, ScoreReport};
 
 /// Format a score for human display: `[+40]` or `[-30]` or `[  0]`.
@@ -75,13 +75,13 @@ pub fn scores_json(reports: &[(String, ScoreReport)]) -> String {
 }
 
 /// JSON output for a single artifact show.
-pub fn show_json(artifact: &str, report: &ScoreReport, attestations: &[Attestation]) -> String {
+pub fn show_json(artifact: &str, report: &ScoreReport, records: &[Record]) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "artifact": artifact,
         "raw_score": report.raw,
         "effective_score": report.effective,
         "limiting_path": report.limiting_path,
-        "attestations": attestations,
+        "records": records,
     }))
     .unwrap_or_default()
 }

@@ -371,8 +371,8 @@ fn test_show_json_output() {
     assert_eq!(parsed["artifact"], "api.rs");
     assert_eq!(parsed["raw_score"], 30);
     assert_eq!(parsed["effective_score"], 30);
-    assert!(parsed["attestations"].is_array());
-    assert_eq!(parsed["attestations"].as_array().unwrap().len(), 1);
+    assert!(parsed["records"].is_array());
+    assert_eq!(parsed["records"].as_array().unwrap().len(), 1);
 }
 
 // --- qualifier show nonexistent artifact ---
@@ -1007,7 +1007,7 @@ fn test_attest_with_ref() {
 }
 
 #[test]
-fn test_new_attestations_are_v2() {
+fn test_new_attestations_are_v3() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, _, code) = run_qualifier(
@@ -1031,8 +1031,12 @@ fn test_new_attestations_are_v2() {
     let qual_path = dir.path().join(".qual");
     let content = std::fs::read_to_string(&qual_path).unwrap();
     assert!(
-        content.contains("\"v\":2"),
-        "new attestations should be v2: {content}"
+        content.contains("\"v\":3"),
+        "new attestations should be v3: {content}"
+    );
+    assert!(
+        content.contains("\"type\":\"attestation\""),
+        "new attestations should have type field: {content}"
     );
 }
 
@@ -1060,5 +1064,81 @@ fn test_attest_invalid_author_type() {
     assert!(
         stderr.contains("author_type") || stderr.contains("banana"),
         "error should mention invalid author_type: {stderr}"
+    );
+}
+
+// --- span tests ---
+
+#[test]
+fn test_attest_with_span() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "lib.rs",
+            "--kind",
+            "concern",
+            "--score=-10",
+            "--summary",
+            "Problematic function",
+            "--author",
+            "test@test.com",
+            "--span",
+            "42:58",
+        ],
+    );
+
+    assert_eq!(code, 0, "attest with --span should succeed");
+
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"span\""),
+        "attestation should contain span: {content}"
+    );
+    assert!(
+        content.contains("\"line\":42"),
+        "span should contain start line: {content}"
+    );
+    assert!(
+        content.contains("\"line\":58"),
+        "span should contain end line: {content}"
+    );
+}
+
+#[test]
+fn test_attest_with_span_and_columns() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "lib.rs",
+            "--kind",
+            "concern",
+            "--score=-10",
+            "--summary",
+            "Bad code",
+            "--author",
+            "test@test.com",
+            "--span",
+            "10.5:20.80",
+        ],
+    );
+
+    assert_eq!(code, 0, "attest with --span line.col should succeed");
+
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"col\":5"),
+        "span should contain start col: {content}"
+    );
+    assert!(
+        content.contains("\"col\":80"),
+        "span should contain end col: {content}"
     );
 }

@@ -63,7 +63,7 @@ fn run_all(args: &Args) -> crate::Result<()> {
 }
 
 fn compact_one(qf: &qual_file::QualFile, snapshot: bool, dry_run: bool) -> crate::Result<()> {
-    let score_before = scoring::raw_score(&qf.attestations);
+    let score_before = scoring::raw_score(&qf.records);
 
     let (compacted, result) = if snapshot {
         compact_lib::snapshot(qf)
@@ -72,7 +72,7 @@ fn compact_one(qf: &qual_file::QualFile, snapshot: bool, dry_run: bool) -> crate
     };
 
     // Verify the invariant
-    let score_after = scoring::raw_score(&compacted.attestations);
+    let score_after = scoring::raw_score(&compacted.records);
     if score_before != score_after {
         return Err(crate::Error::Validation(format!(
             "BUG: compaction changed raw score from {} to {} for {}",
@@ -84,7 +84,7 @@ fn compact_one(qf: &qual_file::QualFile, snapshot: bool, dry_run: bool) -> crate
 
     if result.pruned == 0 {
         println!(
-            "  {}: {} attestations, nothing to compact",
+            "  {}: {} records, nothing to compact",
             qf.path.display(),
             result.before
         );
@@ -93,7 +93,7 @@ fn compact_one(qf: &qual_file::QualFile, snapshot: bool, dry_run: bool) -> crate
 
     if snapshot {
         println!(
-            "  {}: {} -> {} attestation (epoch, raw score: {})",
+            "  {}: {} -> {} record (epoch, raw score: {})",
             qf.path.display(),
             result.before,
             result.after,
@@ -101,7 +101,7 @@ fn compact_one(qf: &qual_file::QualFile, snapshot: bool, dry_run: bool) -> crate
         );
     } else {
         println!(
-            "  {}: {} -> {} attestations ({} superseded, pruned)",
+            "  {}: {} -> {} records ({} superseded, pruned)",
             qf.path.display(),
             result.before,
             result.after,
@@ -110,7 +110,7 @@ fn compact_one(qf: &qual_file::QualFile, snapshot: bool, dry_run: bool) -> crate
     }
 
     if !dry_run {
-        qual_file::write_all(&qf.path, &compacted.attestations)?;
+        qual_file::write_all(&qf.path, &compacted.records)?;
     } else {
         println!("  (dry run — no changes written)");
     }

@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::attestation::Attestation;
+use crate::attestation::{Attestation, Record};
 
 /// A parsed `.qual` file.
 #[derive(Debug, Clone)]
@@ -11,70 +11,70 @@ pub struct QualFile {
     pub path: PathBuf,
     /// The artifact this file describes (path minus `.qual` suffix).
     pub artifact: String,
-    /// Attestations in file order (oldest first).
-    pub attestations: Vec<Attestation>,
+    /// Records in file order (oldest first).
+    pub records: Vec<Record>,
 }
 
 /// Parse a `.qual` file from disk.
 ///
 /// Skips empty lines and lines starting with `//` (comments).
-/// Each non-comment line must be a valid JSON attestation.
+/// Each non-comment line must be a valid JSON record.
 pub fn parse(path: &Path) -> crate::Result<QualFile> {
     let content = fs::read_to_string(path)?;
     let artifact = artifact_name(path);
-    let mut attestations = Vec::new();
+    let mut records = Vec::new();
 
     for (line_no, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
-        let att: Attestation = serde_json::from_str(trimmed).map_err(|e| {
+        let record: Record = serde_json::from_str(trimmed).map_err(|e| {
             crate::Error::Validation(format!("{}:{}: {}", path.display(), line_no + 1, e))
         })?;
-        attestations.push(att);
+        records.push(record);
     }
 
     Ok(QualFile {
         path: path.to_path_buf(),
         artifact,
-        attestations,
+        records,
     })
 }
 
-/// Parse attestations from a string (for testing or in-memory use).
-pub fn parse_str(content: &str) -> crate::Result<Vec<Attestation>> {
-    let mut attestations = Vec::new();
+/// Parse records from a string (for testing or in-memory use).
+pub fn parse_str(content: &str) -> crate::Result<Vec<Record>> {
+    let mut records = Vec::new();
     for (line_no, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
-        let att: Attestation = serde_json::from_str(trimmed)
+        let record: Record = serde_json::from_str(trimmed)
             .map_err(|e| crate::Error::Validation(format!("line {}: {}", line_no + 1, e)))?;
-        attestations.push(att);
+        records.push(record);
     }
-    Ok(attestations)
+    Ok(records)
 }
 
-/// Append an attestation to a `.qual` file.
+/// Append a record to a `.qual` file.
 ///
 /// Creates the file if it doesn't exist. Always appends with a trailing newline.
-pub fn append(path: &Path, attestation: &Attestation) -> crate::Result<()> {
+pub fn append(path: &Path, record: &Record) -> crate::Result<()> {
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)?;
-    let json = serde_json::to_string(attestation)?;
+    let json = serde_json::to_string(record)?;
     writeln!(file, "{json}")?;
     Ok(())
 }
 
 /// Write a complete `.qual` file (used by compaction).
-pub fn write_all(path: &Path, attestations: &[Attestation]) -> crate::Result<()> {
+pub fn write_all(path: &Path, records: &[Record]) -> crate::Result<()> {
     let mut file = fs::File::create(path)?;
-    for att in attestations {
-        let json = serde_json::to_string(att)?;
+    for record in records {
+        let json = serde_json::to_string(record)?;
         writeln!(file, "{json}")?;
     }
     Ok(())
@@ -125,23 +125,31 @@ pub fn resolve_qual_path(artifact: &str, explicit_path: Option<&Path>) -> crate:
     Ok(dir_qual)
 }
 
+/// Find all records for a given artifact across all discovered `.qual` files.
+pub fn find_records_for<'a>(artifact: &str, qual_files: &'a [QualFile]) -> Vec<&'a Record> {
+    qual_files
+        .iter()
+        .flat_map(|qf| qf.records.iter())
+        .filter(|r| r.artifact() == artifact)
+        .collect()
+}
+
 /// Find all attestations for a given artifact across all discovered `.qual` files.
 ///
-/// Searches by the `artifact` field in the JSON attestations, not by
-/// the file path of the `.qual` file. This supports both 1:1 and directory-level
-/// layouts transparently.
+/// Filters to attestation records only (excludes epochs, dependencies, etc.).
 pub fn find_attestations_for<'a>(
     artifact: &str,
     qual_files: &'a [QualFile],
 ) -> Vec<&'a Attestation> {
     qual_files
         .iter()
-        .flat_map(|qf| qf.attestations.iter())
+        .flat_map(|qf| qf.records.iter())
+        .filter_map(|r| r.as_attestation())
         .filter(|att| att.artifact == artifact)
         .collect()
 }
 
-/// Find which `.qual` file on disk contains attestations for a given artifact.
+/// Find which `.qual` file on disk contains records for a given artifact.
 ///
 /// Checks for a 1:1 file first (`{artifact}.qual`), then the directory-level
 /// file (`{parent}/.qual`). Returns `None` if neither exists.
@@ -285,8 +293,10 @@ mod tests {
 
     fn make_attestation(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
         attestation::finalize(Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: artifact.into(),
+            span: None,
             kind,
             score,
             summary: summary.into(),
@@ -300,9 +310,12 @@ mod tests {
                 .with_timezone(&Utc),
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         })
+    }
+
+    fn make_record(artifact: &str, kind: Kind, score: i32, summary: &str) -> Record {
+        Record::Attestation(make_attestation(artifact, kind, score, summary))
     }
 
     #[test]
@@ -322,16 +335,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let qual_path = dir.path().join("test.rs.qual");
 
-        let att1 = make_attestation("test.rs", Kind::Praise, 40, "Good tests");
-        let att2 = make_attestation("test.rs", Kind::Concern, -20, "Missing docs");
+        let r1 = make_record("test.rs", Kind::Praise, 40, "Good tests");
+        let r2 = make_record("test.rs", Kind::Concern, -20, "Missing docs");
 
-        append(&qual_path, &att1).unwrap();
-        append(&qual_path, &att2).unwrap();
+        append(&qual_path, &r1).unwrap();
+        append(&qual_path, &r2).unwrap();
 
         let parsed = parse(&qual_path).unwrap();
-        assert_eq!(parsed.attestations.len(), 2);
-        assert_eq!(parsed.attestations[0].summary, "Good tests");
-        assert_eq!(parsed.attestations[1].summary, "Missing docs");
+        assert_eq!(parsed.records.len(), 2);
+        assert_eq!(
+            parsed.records[0].as_attestation().unwrap().summary,
+            "Good tests"
+        );
+        assert_eq!(
+            parsed.records[1].as_attestation().unwrap().summary,
+            "Missing docs"
+        );
         assert_eq!(
             parsed.artifact,
             qual_path.to_string_lossy().replace(".qual", "")
@@ -353,7 +372,7 @@ mod tests {
         .unwrap();
 
         let parsed = parse(&qual_path).unwrap();
-        assert_eq!(parsed.attestations.len(), 1);
+        assert_eq!(parsed.records.len(), 1);
     }
 
     #[test]
@@ -362,11 +381,11 @@ mod tests {
         let src = dir.path().join("src");
         fs::create_dir_all(&src).unwrap();
 
-        let att1 = make_attestation("src/a.rs", Kind::Pass, 10, "ok");
-        let att2 = make_attestation("src/b.rs", Kind::Fail, -10, "bad");
+        let r1 = make_record("src/a.rs", Kind::Pass, 10, "ok");
+        let r2 = make_record("src/b.rs", Kind::Fail, -10, "bad");
 
-        append(&src.join("a.rs.qual"), &att1).unwrap();
-        append(&src.join("b.rs.qual"), &att2).unwrap();
+        append(&src.join("a.rs.qual"), &r1).unwrap();
+        append(&src.join("b.rs.qual"), &r2).unwrap();
 
         // Also create a non-qual file that should be ignored
         fs::write(src.join("a.rs"), "fn main() {}").unwrap();
@@ -381,8 +400,8 @@ mod tests {
         let hidden = dir.path().join(".git");
         fs::create_dir_all(&hidden).unwrap();
 
-        let att = make_attestation("x", Kind::Pass, 10, "ok");
-        append(&hidden.join("x.qual"), &att).unwrap();
+        let r = make_record("x", Kind::Pass, 10, "ok");
+        append(&hidden.join("x.qual"), &r).unwrap();
 
         let found = discover(dir.path()).unwrap();
         assert_eq!(found.len(), 0);
@@ -393,15 +412,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let qual_path = dir.path().join("test.rs.qual");
 
-        let att1 = make_attestation("test.rs", Kind::Praise, 40, "Good");
-        let att2 = make_attestation("test.rs", Kind::Concern, -20, "Bad");
+        let r1 = make_record("test.rs", Kind::Praise, 40, "Good");
+        let r2 = make_record("test.rs", Kind::Concern, -20, "Bad");
+        let id1 = r1.id().to_string();
+        let id2 = r2.id().to_string();
 
-        write_all(&qual_path, &[att1.clone(), att2.clone()]).unwrap();
+        write_all(&qual_path, &[r1, r2]).unwrap();
 
         let parsed = parse(&qual_path).unwrap();
-        assert_eq!(parsed.attestations.len(), 2);
-        assert_eq!(parsed.attestations[0].id, att1.id);
-        assert_eq!(parsed.attestations[1].id, att2.id);
+        assert_eq!(parsed.records.len(), 2);
+        assert_eq!(parsed.records[0].id(), id1);
+        assert_eq!(parsed.records[1].id(), id2);
     }
 
     #[test]
@@ -488,12 +509,15 @@ mod tests {
             QualFile {
                 path: PathBuf::from("src/.qual"),
                 artifact: "src/".into(),
-                attestations: vec![att_a1.clone(), att_b.clone()],
+                records: vec![
+                    Record::Attestation(att_a1.clone()),
+                    Record::Attestation(att_b.clone()),
+                ],
             },
             QualFile {
                 path: PathBuf::from("src/a.rs.qual"),
                 artifact: "src/a.rs".into(),
-                attestations: vec![att_a2.clone()],
+                records: vec![Record::Attestation(att_a2.clone())],
             },
         ];
 

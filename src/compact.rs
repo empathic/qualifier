@@ -2,33 +2,34 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 
-use crate::attestation::{self, Attestation, AuthorType, Kind};
+use crate::attestation::{self, AuthorType, Epoch, Record};
 use crate::qual_file::QualFile;
 use crate::scoring;
 
 /// Result of a compaction operation.
 #[derive(Debug, Clone)]
 pub struct CompactResult {
-    /// Number of attestations before compaction.
+    /// Number of records before compaction.
     pub before: usize,
-    /// Number of attestations after compaction.
+    /// Number of records after compaction.
     pub after: usize,
-    /// Number of superseded attestations pruned.
+    /// Number of records pruned.
     pub pruned: usize,
 }
 
-/// Prune superseded attestations, keeping only chain tips.
+/// Prune superseded records, keeping only chain tips.
 ///
 /// The raw score of the artifact is preserved as an invariant.
+/// Non-attestation records (epochs, dependencies, unknowns) are always kept.
 pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult) {
-    let before = qual_file.attestations.len();
-    let active = scoring::filter_superseded(&qual_file.attestations);
+    let before = qual_file.records.len();
+    let active = scoring::filter_superseded(&qual_file.records);
     let after = active.len();
 
     let pruned_file = QualFile {
         path: qual_file.path.clone(),
         artifact: qual_file.artifact.clone(),
-        attestations: active.into_iter().cloned().collect(),
+        records: active.into_iter().cloned().collect(),
     };
 
     let result = CompactResult {
@@ -40,14 +41,14 @@ pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult) {
     (pruned_file, result)
 }
 
-/// Collapse all attestations into epoch attestations — one per distinct artifact.
+/// Collapse all scored records into epoch records — one per distinct artifact.
 ///
-/// Each epoch attestation's score equals the raw score of its artifact's
-/// non-superseded attestations, preserving the scoring invariant.
-/// For single-artifact `.qual` files this produces one epoch (same as before).
-/// For multi-artifact `.qual` files this produces one epoch per artifact.
+/// Each epoch record's score equals the raw score of its artifact's
+/// non-superseded scored records, preserving the scoring invariant.
+///
+/// Non-scored records (dependencies, unknowns) are passed through unchanged.
 pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
-    let before = qual_file.attestations.len();
+    let before = qual_file.records.len();
 
     if before == 0 {
         return (
@@ -60,49 +61,54 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
         );
     }
 
-    // Group attestations by their artifact field
-    let mut by_artifact: HashMap<&str, Vec<&Attestation>> = HashMap::new();
-    for att in &qual_file.attestations {
-        by_artifact
-            .entry(att.artifact.as_str())
-            .or_default()
-            .push(att);
+    // Separate scored records from passthrough (non-scored)
+    let mut by_artifact: HashMap<&str, Vec<&Record>> = HashMap::new();
+    let mut passthrough: Vec<Record> = Vec::new();
+
+    for record in &qual_file.records {
+        if record.is_scored() {
+            by_artifact
+                .entry(record.artifact())
+                .or_default()
+                .push(record);
+        } else {
+            passthrough.push(record.clone());
+        }
     }
 
-    let mut epoch_attestations = Vec::new();
-    for (artifact, atts) in &by_artifact {
-        let raw = scoring::raw_score_from_refs(atts);
-        let epoch_refs: Vec<String> = atts.iter().map(|a| a.id.clone()).collect();
-        let count = atts.len();
+    let mut epoch_records = Vec::new();
+    for (artifact, records) in &by_artifact {
+        let raw = scoring::raw_score_from_refs(records);
+        let refs: Vec<String> = records.iter().map(|r| r.id().to_string()).collect();
+        let count = records.len();
 
-        let epoch = attestation::finalize(Attestation {
-            v: 2,
+        let epoch = attestation::finalize_epoch(Epoch {
+            v: 3,
+            record_type: "epoch".into(),
             artifact: artifact.to_string(),
-            kind: Kind::Epoch,
+            span: None,
             score: raw,
-            summary: format!("Compacted from {} attestations", count),
-            detail: None,
-            suggested_fix: None,
-            tags: vec!["epoch".into()],
+            summary: format!("Compacted from {} records", count),
+            refs,
             author: "qualifier/compact".into(),
             author_type: Some(AuthorType::Tool),
             created_at: Utc::now(),
-            r#ref: None,
-            supersedes: None,
-            epoch_refs: Some(epoch_refs),
             id: String::new(),
         });
-        epoch_attestations.push(epoch);
+        epoch_records.push(Record::Epoch(epoch));
     }
 
     // Sort by artifact name for deterministic output
-    epoch_attestations.sort_by(|a, b| a.artifact.cmp(&b.artifact));
+    epoch_records.sort_by(|a, b| a.artifact().cmp(b.artifact()));
 
-    let after = epoch_attestations.len();
+    // Append passthrough records
+    epoch_records.extend(passthrough);
+
+    let after = epoch_records.len();
     let snapshot_file = QualFile {
         path: qual_file.path.clone(),
         artifact: qual_file.artifact.clone(),
-        attestations: epoch_attestations,
+        records: epoch_records,
     };
 
     let result = CompactResult {
@@ -117,14 +123,16 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attestation::{self, Kind};
+    use crate::attestation::{self, Attestation, Kind};
     use chrono::Utc;
     use std::path::PathBuf;
 
     fn make_att(artifact: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
         attestation::finalize(Attestation {
-            v: 2,
+            v: 3,
+            record_type: "attestation".into(),
             artifact: artifact.into(),
+            span: None,
             kind,
             score,
             summary: summary.into(),
@@ -138,15 +146,20 @@ mod tests {
                 .with_timezone(&Utc),
             r#ref: None,
             supersedes: None,
-            epoch_refs: None,
             id: String::new(),
         })
     }
 
-    fn make_superseding(artifact: &str, score: i32, supersedes_id: &str) -> Attestation {
-        attestation::finalize(Attestation {
-            v: 2,
+    fn make_record(artifact: &str, kind: Kind, score: i32, summary: &str) -> Record {
+        Record::Attestation(make_att(artifact, kind, score, summary))
+    }
+
+    fn make_superseding(artifact: &str, score: i32, supersedes_id: &str) -> Record {
+        Record::Attestation(attestation::finalize(Attestation {
+            v: 3,
+            record_type: "attestation".into(),
             artifact: artifact.into(),
+            span: None,
             kind: Kind::Pass,
             score,
             summary: "updated".into(),
@@ -160,60 +173,62 @@ mod tests {
                 .with_timezone(&Utc),
             r#ref: None,
             supersedes: Some(supersedes_id.into()),
-            epoch_refs: None,
             id: String::new(),
-        })
+        }))
     }
 
-    fn make_qual_file(attestations: Vec<Attestation>) -> QualFile {
+    fn make_qual_file(records: Vec<Record>) -> QualFile {
         QualFile {
             path: PathBuf::from("test.rs.qual"),
             artifact: "test.rs".into(),
-            attestations,
+            records,
         }
     }
 
     #[test]
     fn test_prune_no_supersession() {
-        let atts = vec![
-            make_att("test.rs", Kind::Praise, 40, "good"),
-            make_att("test.rs", Kind::Concern, -10, "meh"),
+        let records = vec![
+            make_record("test.rs", Kind::Praise, 40, "good"),
+            make_record("test.rs", Kind::Concern, -10, "meh"),
         ];
-        let qf = make_qual_file(atts);
+        let qf = make_qual_file(records);
         let (pruned, result) = prune(&qf);
 
         assert_eq!(result.before, 2);
         assert_eq!(result.after, 2);
         assert_eq!(result.pruned, 0);
-        assert_eq!(pruned.attestations.len(), 2);
+        assert_eq!(pruned.records.len(), 2);
     }
 
     #[test]
     fn test_prune_removes_superseded() {
-        let original = make_att("test.rs", Kind::Concern, -30, "bad");
-        let replacement = make_superseding("test.rs", 10, &original.id);
-        let unrelated = make_att("test.rs", Kind::Praise, 20, "nice");
+        let original = make_record("test.rs", Kind::Concern, -30, "bad");
+        let replacement = make_superseding("test.rs", 10, original.id());
+        let unrelated = make_record("test.rs", Kind::Praise, 20, "nice");
 
-        let qf = make_qual_file(vec![original, replacement.clone(), unrelated.clone()]);
+        let replacement_id = replacement.id().to_string();
+        let unrelated_id = unrelated.id().to_string();
+
+        let qf = make_qual_file(vec![original, replacement, unrelated]);
         let (pruned, result) = prune(&qf);
 
         assert_eq!(result.before, 3);
         assert_eq!(result.after, 2);
         assert_eq!(result.pruned, 1);
-        assert!(pruned.attestations.iter().any(|a| a.id == replacement.id));
-        assert!(pruned.attestations.iter().any(|a| a.id == unrelated.id));
+        assert!(pruned.records.iter().any(|r| r.id() == replacement_id));
+        assert!(pruned.records.iter().any(|r| r.id() == unrelated_id));
     }
 
     #[test]
     fn test_prune_preserves_score() {
-        let original = make_att("test.rs", Kind::Concern, -30, "bad");
-        let replacement = make_superseding("test.rs", 10, &original.id);
-        let extra = make_att("test.rs", Kind::Praise, 20, "nice");
+        let original = make_record("test.rs", Kind::Concern, -30, "bad");
+        let replacement = make_superseding("test.rs", 10, original.id());
+        let extra = make_record("test.rs", Kind::Praise, 20, "nice");
 
         let qf = make_qual_file(vec![original, replacement, extra]);
-        let score_before = scoring::raw_score(&qf.attestations);
+        let score_before = scoring::raw_score(&qf.records);
         let (pruned, _) = prune(&qf);
-        let score_after = scoring::raw_score(&pruned.attestations);
+        let score_after = scoring::raw_score(&pruned.records);
 
         assert_eq!(score_before, score_after, "prune must preserve raw score");
     }
@@ -224,40 +239,38 @@ mod tests {
         let (snapped, result) = snapshot(&qf);
         assert_eq!(result.before, 0);
         assert_eq!(result.after, 0);
-        assert!(snapped.attestations.is_empty());
+        assert!(snapped.records.is_empty());
     }
 
     #[test]
     fn test_snapshot_collapses_to_epoch() {
-        let atts = vec![
-            make_att("test.rs", Kind::Praise, 40, "good"),
-            make_att("test.rs", Kind::Concern, -10, "meh"),
+        let records = vec![
+            make_record("test.rs", Kind::Praise, 40, "good"),
+            make_record("test.rs", Kind::Concern, -10, "meh"),
         ];
-        let qf = make_qual_file(atts);
+        let qf = make_qual_file(records);
         let (snapped, result) = snapshot(&qf);
 
         assert_eq!(result.before, 2);
         assert_eq!(result.after, 1);
         assert_eq!(result.pruned, 1);
 
-        let epoch = &snapped.attestations[0];
-        assert_eq!(epoch.kind, Kind::Epoch);
+        let epoch = snapped.records[0].as_epoch().unwrap();
         assert_eq!(epoch.score, 30); // 40 + -10
         assert_eq!(epoch.author, "qualifier/compact");
-        assert!(epoch.tags.contains(&"epoch".to_string()));
-        assert_eq!(epoch.epoch_refs.as_ref().unwrap().len(), 2);
+        assert_eq!(epoch.refs.len(), 2);
     }
 
     #[test]
     fn test_snapshot_preserves_score() {
-        let original = make_att("test.rs", Kind::Concern, -30, "bad");
-        let replacement = make_superseding("test.rs", 10, &original.id);
-        let extra = make_att("test.rs", Kind::Praise, 20, "nice");
+        let original = make_record("test.rs", Kind::Concern, -30, "bad");
+        let replacement = make_superseding("test.rs", 10, original.id());
+        let extra = make_record("test.rs", Kind::Praise, 20, "nice");
 
         let qf = make_qual_file(vec![original, replacement, extra]);
-        let score_before = scoring::raw_score(&qf.attestations);
+        let score_before = scoring::raw_score(&qf.records);
         let (snapped, _) = snapshot(&qf);
-        let score_after = scoring::raw_score(&snapped.attestations);
+        let score_after = scoring::raw_score(&snapped.records);
 
         assert_eq!(
             score_before, score_after,
@@ -267,145 +280,149 @@ mod tests {
 
     #[test]
     fn test_snapshot_with_supersession_chain() {
-        let a = make_att("test.rs", Kind::Fail, -50, "terrible");
-        let b = make_superseding("test.rs", -20, &a.id);
-        let c = make_superseding("test.rs", 10, &b.id);
-        // Raw score: only c counts -> 10
+        let a = make_record("test.rs", Kind::Fail, -50, "terrible");
+        let b = make_superseding("test.rs", -20, a.id());
+        let c = make_superseding("test.rs", 10, b.id());
 
         let qf = make_qual_file(vec![a, b, c]);
-        let score_before = scoring::raw_score(&qf.attestations);
+        let score_before = scoring::raw_score(&qf.records);
         assert_eq!(score_before, 10);
 
         let (snapped, _) = snapshot(&qf);
-        assert_eq!(snapped.attestations.len(), 1);
-        assert_eq!(snapped.attestations[0].score, 10);
-        assert_eq!(
-            snapped.attestations[0].epoch_refs.as_ref().unwrap().len(),
-            3
-        );
+        assert_eq!(snapped.records.len(), 1);
+        assert_eq!(snapped.records[0].as_epoch().unwrap().score, 10);
+        assert_eq!(snapped.records[0].as_epoch().unwrap().refs.len(), 3);
     }
 
     #[test]
     fn test_prune_with_dangling_supersedes() {
-        // Attestation supersedes a non-existent ID — should be kept as active
-        let a = make_att("test.rs", Kind::Praise, 20, "good");
-        let mut b = make_att("test.rs", Kind::Pass, 10, "fixed");
-        b.supersedes = Some("nonexistent_id_12345".into());
-        b = attestation::finalize(b);
+        let a = make_record("test.rs", Kind::Praise, 20, "good");
+        let mut b_att = make_att("test.rs", Kind::Pass, 10, "fixed");
+        b_att.supersedes = Some("nonexistent_id_12345".into());
+        b_att = attestation::finalize(b_att);
+        let b = Record::Attestation(b_att);
 
-        let qf = make_qual_file(vec![a.clone(), b.clone()]);
+        let qf = make_qual_file(vec![a, b]);
         let (pruned, result) = prune(&qf);
-        // Both are active since the supersession target doesn't exist in this set
         assert_eq!(result.pruned, 0);
-        assert_eq!(pruned.attestations.len(), 2);
+        assert_eq!(pruned.records.len(), 2);
     }
 
     #[test]
     fn test_prune_multiple_disjoint_chains() {
-        // Two independent supersession chains
-        let a1 = make_att("test.rs", Kind::Concern, -10, "issue 1");
-        let a2 = make_superseding("test.rs", 5, &a1.id);
-        let b1 = make_att("test.rs", Kind::Concern, -20, "issue 2");
-        let b2 = make_superseding("test.rs", 10, &b1.id);
+        let a1 = make_record("test.rs", Kind::Concern, -10, "issue 1");
+        let a2 = make_superseding("test.rs", 5, a1.id());
+        let b1 = make_record("test.rs", Kind::Concern, -20, "issue 2");
+        let b2 = make_superseding("test.rs", 10, b1.id());
 
-        let qf = make_qual_file(vec![a1, a2.clone(), b1, b2.clone()]);
+        let a2_id = a2.id().to_string();
+        let b2_id = b2.id().to_string();
+
+        let qf = make_qual_file(vec![a1, a2, b1, b2]);
         let (pruned, result) = prune(&qf);
 
         assert_eq!(result.before, 4);
         assert_eq!(result.after, 2);
         assert_eq!(result.pruned, 2);
-        assert!(pruned.attestations.iter().any(|a| a.id == a2.id));
-        assert!(pruned.attestations.iter().any(|a| a.id == b2.id));
+        assert!(pruned.records.iter().any(|r| r.id() == a2_id));
+        assert!(pruned.records.iter().any(|r| r.id() == b2_id));
     }
 
     #[test]
     fn test_prune_deep_chain() {
-        // 5-level chain: a -> b -> c -> d -> e
-        let a = make_att("test.rs", Kind::Fail, -50, "step 1");
-        let b = make_superseding("test.rs", -40, &a.id);
-        let c = make_superseding("test.rs", -20, &b.id);
-        let d = make_superseding("test.rs", 0, &c.id);
-        let e = make_superseding("test.rs", 30, &d.id);
+        let a = make_record("test.rs", Kind::Fail, -50, "step 1");
+        let b = make_superseding("test.rs", -40, a.id());
+        let c = make_superseding("test.rs", -20, b.id());
+        let d = make_superseding("test.rs", 0, c.id());
+        let e = make_superseding("test.rs", 30, d.id());
 
-        let qf = make_qual_file(vec![a, b, c, d, e.clone()]);
-        let score_before = scoring::raw_score(&qf.attestations);
+        let e_id = e.id().to_string();
+
+        let qf = make_qual_file(vec![a, b, c, d, e]);
+        let score_before = scoring::raw_score(&qf.records);
         let (pruned, result) = prune(&qf);
-        let score_after = scoring::raw_score(&pruned.attestations);
+        let score_after = scoring::raw_score(&pruned.records);
 
-        assert_eq!(result.after, 1); // only tip survives
-        assert_eq!(pruned.attestations[0].id, e.id);
+        assert_eq!(result.after, 1);
+        assert_eq!(pruned.records[0].id(), e_id);
         assert_eq!(score_before, score_after);
     }
 
     #[test]
-    fn test_snapshot_single_attestation() {
-        let a = make_att("test.rs", Kind::Praise, 40, "good");
-        let qf = make_qual_file(vec![a]);
+    fn test_snapshot_single_record() {
+        let records = vec![make_record("test.rs", Kind::Praise, 40, "good")];
+        let qf = make_qual_file(records);
         let (snapped, result) = snapshot(&qf);
 
         assert_eq!(result.before, 1);
         assert_eq!(result.after, 1);
         assert_eq!(result.pruned, 0);
-        assert_eq!(snapped.attestations[0].kind, Kind::Epoch);
-        assert_eq!(snapped.attestations[0].score, 40);
+        assert!(snapped.records[0].as_epoch().is_some());
+        assert_eq!(snapped.records[0].as_epoch().unwrap().score, 40);
     }
 
     #[test]
     fn test_snapshot_multi_artifact() {
-        let a1 = make_att("src/a.rs", Kind::Praise, 40, "good");
-        let a2 = make_att("src/a.rs", Kind::Concern, -10, "meh");
-        let b1 = make_att("src/b.rs", Kind::Pass, 20, "ok");
+        let records = vec![
+            make_record("src/a.rs", Kind::Praise, 40, "good"),
+            make_record("src/a.rs", Kind::Concern, -10, "meh"),
+            make_record("src/b.rs", Kind::Pass, 20, "ok"),
+        ];
 
         let qf = QualFile {
             path: PathBuf::from("src/.qual"),
             artifact: "src/".into(),
-            attestations: vec![a1, a2, b1],
+            records,
         };
 
         let (snapped, result) = snapshot(&qf);
 
         assert_eq!(result.before, 3);
-        assert_eq!(result.after, 2); // one epoch per artifact
+        assert_eq!(result.after, 2);
         assert_eq!(result.pruned, 1);
 
-        // Find epochs by artifact (sorted by artifact name)
         let epoch_a = snapped
-            .attestations
+            .records
             .iter()
-            .find(|a| a.artifact == "src/a.rs")
+            .find(|r| r.artifact() == "src/a.rs")
+            .unwrap()
+            .as_epoch()
             .unwrap();
         let epoch_b = snapped
-            .attestations
+            .records
             .iter()
-            .find(|a| a.artifact == "src/b.rs")
+            .find(|r| r.artifact() == "src/b.rs")
+            .unwrap()
+            .as_epoch()
             .unwrap();
 
-        assert_eq!(epoch_a.kind, Kind::Epoch);
         assert_eq!(epoch_a.score, 30); // 40 + -10
-        assert_eq!(epoch_a.epoch_refs.as_ref().unwrap().len(), 2);
+        assert_eq!(epoch_a.refs.len(), 2);
 
-        assert_eq!(epoch_b.kind, Kind::Epoch);
         assert_eq!(epoch_b.score, 20);
-        assert_eq!(epoch_b.epoch_refs.as_ref().unwrap().len(), 1);
+        assert_eq!(epoch_b.refs.len(), 1);
     }
 
     #[test]
     fn test_prune_multi_artifact() {
-        let a1 = make_att("src/a.rs", Kind::Concern, -10, "issue");
-        let a2 = make_superseding("src/a.rs", 5, &a1.id);
-        let b1 = make_att("src/b.rs", Kind::Pass, 20, "ok");
+        let a1 = make_record("src/a.rs", Kind::Concern, -10, "issue");
+        let a2 = make_superseding("src/a.rs", 5, a1.id());
+        let b1 = make_record("src/b.rs", Kind::Pass, 20, "ok");
+
+        let a2_id = a2.id().to_string();
+        let b1_id = b1.id().to_string();
 
         let qf = QualFile {
             path: PathBuf::from("src/.qual"),
             artifact: "src/".into(),
-            attestations: vec![a1, a2.clone(), b1.clone()],
+            records: vec![a1, a2, b1],
         };
 
         let (pruned, result) = prune(&qf);
 
         assert_eq!(result.before, 3);
-        assert_eq!(result.after, 2); // a1 pruned, a2 + b1 remain
-        assert!(pruned.attestations.iter().any(|a| a.id == a2.id));
-        assert!(pruned.attestations.iter().any(|a| a.id == b1.id));
+        assert_eq!(result.after, 2);
+        assert!(pruned.records.iter().any(|r| r.id() == a2_id));
+        assert!(pruned.records.iter().any(|r| r.id() == b1_id));
     }
 }
