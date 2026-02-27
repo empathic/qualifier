@@ -33,12 +33,22 @@ pub enum Commands {
     Graph(commands::graph_cmd::Args),
     /// Initialize qualifier in a repository
     Init,
-    /// Show per-line VCS attribution for a .qual file
-    Blame(commands::blame::Args),
+    /// Show who attested an artifact and why
+    #[command(alias = "blame")]
+    Praise(commands::praise::Args),
 }
 
 pub fn run() {
+    // Detect if the user typed "blame" so we can print a hint
+    let used_blame_alias = std::env::args().nth(1).is_some_and(|arg| arg == "blame");
+
     let cli = Cli::parse();
+
+    if used_blame_alias {
+        eprintln!(
+            "hint: the command is \"praise\" \u{2014} qualifier tracks who helped, not who to blame"
+        );
+    }
 
     let result: crate::Result<()> = match cli.command {
         Commands::Attest(args) => commands::attest::run(*args),
@@ -49,7 +59,7 @@ pub fn run() {
         Commands::Compact(args) => commands::compact::run(args),
         Commands::Graph(args) => commands::graph_cmd::run(args),
         Commands::Init => commands::init::run(),
-        Commands::Blame(args) => commands::blame::run(args),
+        Commands::Praise(args) => commands::praise::run(args),
     };
 
     if let Err(e) = result {

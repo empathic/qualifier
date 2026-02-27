@@ -25,7 +25,7 @@ qualifier
   compact   <artifact> [options]     Compact a .qual file
   graph     [--format dot|json]      Visualize the dependency graph
   init                               Initialize qualifier in a repo
-  blame     <artifact>               Per-line VCS attribution
+  praise    <artifact>               Show who attested and why
 ```
 
 All commands that produce output accept `--format json` for machine-readable output.

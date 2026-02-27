@@ -1,9 +1,9 @@
 pub mod attest;
-pub mod blame;
 pub mod check;
 pub mod compact;
 pub mod graph_cmd;
 pub mod init;
 pub mod ls;
+pub mod praise;
 pub mod score;
 pub mod show;

@@ -769,13 +769,79 @@ fn test_ls_kind_filter() {
     assert!(!stdout.contains("b.rs"), "kind filter should hide praise");
 }
 
-// --- qualifier blame ---
+// --- qualifier praise ---
 
 #[test]
-fn test_blame_no_vcs() {
+fn test_praise_shows_records() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create an attestation so the .qual file exists
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "foo.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "40",
+            "--summary",
+            "Well structured code",
+            "--author",
+            "alice@example.com",
+        ],
+    );
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "foo.rs",
+            "--kind",
+            "concern",
+            "--score=-10",
+            "--summary",
+            "Missing error handling",
+            "--author",
+            "bob@example.com",
+        ],
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["praise", "foo.rs"]);
+    assert_eq!(code, 0, "praise should succeed");
+    assert!(
+        stdout.contains("foo.rs"),
+        "should show artifact name: {stdout}"
+    );
+    assert!(
+        stdout.contains("2 records"),
+        "should show record count: {stdout}"
+    );
+    assert!(
+        stdout.contains("[+40]"),
+        "should show praise score: {stdout}"
+    );
+    assert!(
+        stdout.contains("[-10]"),
+        "should show concern score: {stdout}"
+    );
+    assert!(
+        stdout.contains("alice@example.com"),
+        "should show author: {stdout}"
+    );
+    assert!(
+        stdout.contains("bob@example.com"),
+        "should show second author: {stdout}"
+    );
+    assert!(
+        stdout.contains("Well structured code"),
+        "should show summary: {stdout}"
+    );
+}
+
+#[test]
+fn test_praise_blame_alias() {
+    let dir = tempfile::tempdir().unwrap();
+
     run_qualifier(
         dir.path(),
         &[
@@ -790,10 +856,40 @@ fn test_blame_no_vcs() {
         ],
     );
 
-    let (_, stderr, code) = run_qualifier(dir.path(), &["blame", "foo.rs"]);
-    assert_ne!(code, 0, "blame should fail without VCS");
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["blame", "foo.rs"]);
+    assert_eq!(code, 0, "blame alias should succeed");
     assert!(
-        stderr.contains("No VCS") || stderr.contains("not supported"),
+        stderr.contains("hint") && stderr.contains("praise"),
+        "should print hint about praise: {stderr}"
+    );
+    assert!(
+        stdout.contains("foo.rs"),
+        "should still produce output: {stdout}"
+    );
+}
+
+#[test]
+fn test_praise_vcs_without_vcs() {
+    let dir = tempfile::tempdir().unwrap();
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "foo.rs",
+            "--kind",
+            "pass",
+            "--summary",
+            "ok",
+            "--author",
+            "test@test.com",
+        ],
+    );
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["praise", "foo.rs", "--vcs"]);
+    assert_ne!(code, 0, "praise --vcs should fail without VCS");
+    assert!(
+        stderr.contains("No VCS") || stderr.contains("--vcs"),
         "should mention VCS: {stderr}"
     );
 }
