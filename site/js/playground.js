@@ -1,6 +1,5 @@
 // Qualifier Playground — interactive terminal for the qualifier site
-// Adapted from the toolpath playground for the qualifier project.
-// Mock WASM layer with real score computation via QualifierCore.
+// Runs the real qualifier CLI compiled to wasm via Emscripten.
 
 (function () {
   "use strict";
@@ -136,56 +135,8 @@
     return ANSI.flint + s + ANSI.reset;
   }
 
-  function cyan(s) {
-    return ANSI.cyan + s + ANSI.reset;
-  }
-
   function bold(s) {
     return ANSI.bold + s + ANSI.reset;
-  }
-
-  // ---------------------------------------------------------------
-  // 4. Mock WASM layer — uses QualifierCore for real computation
-  // ---------------------------------------------------------------
-
-  function loadAllAttestations(fs) {
-    var QC = window.QualifierCore;
-    var all = [];
-    var files = fs.list();
-    for (var i = 0; i < files.length; i++) {
-      var f = files[i];
-      if (f.indexOf(".qual") !== -1) {
-        var content = fs.get(f);
-        if (content && QC) {
-          var parsed = QC.parseQualFile(content);
-          all = all.concat(parsed);
-        }
-      }
-    }
-    return all;
-  }
-
-  function loadGraph(fs) {
-    var QC = window.QualifierCore;
-    var files = fs.list();
-    for (var i = 0; i < files.length; i++) {
-      var f = files[i];
-      if (f.indexOf(".graph.jsonl") !== -1) {
-        var content = fs.get(f);
-        if (content && QC) {
-          return QC.parseGraph(content);
-        }
-      }
-    }
-    return [];
-  }
-
-  function computeScores(fs) {
-    var QC = window.QualifierCore;
-    if (!QC) return null;
-    var attestations = loadAllAttestations(fs);
-    var graphEntries = loadGraph(fs);
-    return QC.effectiveScores(graphEntries, attestations);
   }
 
   function pad(s, width, right) {
@@ -200,417 +151,68 @@
     return s;
   }
 
-  function statusColor(status, text) {
-    if (status === "blocker" || status === "concern") return red(text);
-    if (status === "healthy") return green(text);
-    return text;
-  }
+  // ---------------------------------------------------------------
+  // 4. WASM layer — real qualifier CLI via Emscripten
+  // ---------------------------------------------------------------
 
-  function barColor(effective, bar) {
-    if (effective <= -30) return red(bar);
-    if (effective < 0) return red(bar);
-    if (effective >= 50) return green(bar);
-    return ANSI.accent + bar + ANSI.reset;
-  }
+  var compiledWasm = null;
+  var wasmFiles = null;
+  var wasmReady = false;
+  var wasmError = null;
 
-  // qualifier score
-  function cmdScore(fs) {
-    var QC = window.QualifierCore;
-    if (!QC) return { output: red("error: QualifierCore not loaded") };
-
-    var scores = computeScores(fs);
-    if (!scores) return { output: red("error: no data found") };
-
-    var lines = [];
-    lines.push(
-      "  " +
-        dim("ARTIFACT") +
-        pad("", 14) +
-        dim(pad("RAW", 6)) +
-        dim(pad("EFF", 6)) +
-        "   " +
-        dim("STATUS")
-    );
-
-    // Sort artifacts: blockers first (lowest effective), then by name
-    var arts = [];
-    for (var art in scores) {
-      if (scores.hasOwnProperty(art)) arts.push(art);
+  function loadWasm(files) {
+    wasmFiles = files;
+    if (typeof createQualifierModule !== "function") {
+      wasmError = "Wasm module not loaded";
+      return Promise.reject(new Error(wasmError));
     }
-    arts.sort(function (a, b) {
-      var ea = scores[a].effective;
-      var eb = scores[b].effective;
-      if (ea !== eb) return ea - eb;
-      return a < b ? -1 : a > b ? 1 : 0;
+    return fetch("/wasm/qualifier.wasm")
+      .then(function (resp) {
+        return WebAssembly.compileStreaming(resp);
+      })
+      .then(function (mod) {
+        compiledWasm = mod;
+        wasmReady = true;
+      })
+      .catch(function (err) {
+        wasmError = err.message || String(err);
+        throw err;
+      });
+  }
+
+  // Fresh Emscripten instance per call — exit() kills the instance, not us
+  function runQualifier(args) {
+    var stdout = "";
+    var stderr = "";
+    return createQualifierModule({
+      noInitialRun: true,
+      instantiateWasm: function (imports, callback) {
+        WebAssembly.instantiate(compiledWasm, imports).then(function (
+          instance,
+        ) {
+          callback(instance);
+        });
+        return {};
+      },
+      print: function (text) {
+        stdout += text + "\n";
+      },
+      printErr: function (text) {
+        stderr += text + "\n";
+      },
+    }).then(function (mod) {
+      for (var name in wasmFiles) {
+        if (wasmFiles.hasOwnProperty(name)) {
+          mod.FS.writeFile("/" + name, wasmFiles[name]);
+        }
+      }
+      try {
+        mod.callMain(args);
+      } catch (e) {
+        // exit() throws to unwind — expected
+      }
+      return { stdout: stdout.trimEnd(), stderr: stderr.trimEnd() };
     });
-
-    for (var i = 0; i < arts.length; i++) {
-      var name = arts[i];
-      var s = scores[name];
-      var status = QC.scoreStatus(s.effective);
-      var bar = QC.scoreBar(s.effective, 10);
-
-      var line =
-        "  " +
-        pad(name, 22, true) +
-        pad(String(s.raw), 6) +
-        pad(String(s.effective), 6) +
-        "   " +
-        barColor(s.effective, bar) +
-        "  " +
-        statusColor(status, status);
-
-      lines.push(line);
-    }
-
-    return { output: lines.join("\r\n") };
-  }
-
-  // qualifier show <artifact>
-  function cmdShow(args, fs) {
-    var QC = window.QualifierCore;
-    if (!QC) return { output: red("error: QualifierCore not loaded") };
-
-    if (args.length < 1) {
-      return { output: red("error: ") + "usage: qualifier show <artifact>" };
-    }
-
-    var artifact = args[0];
-    var scores = computeScores(fs);
-    if (!scores || !scores[artifact]) {
-      return { output: red("error: ") + "unknown artifact: " + artifact };
-    }
-
-    var s = scores[artifact];
-    var status = QC.scoreStatus(s.effective);
-    var lines = [];
-
-    lines.push("");
-    lines.push("  " + copperBold(artifact));
-    lines.push(
-      "  Raw score:       " +
-        (s.raw >= 0 ? bold(String(s.raw)) : red(String(s.raw)))
-    );
-    lines.push(
-      "  Effective score: " +
-        (s.effective >= 0
-          ? bold(String(s.effective))
-          : red(String(s.effective)))
-    );
-
-    if (s.limitingPath && s.limitingPath.length > 0) {
-      lines.push(
-        "  " + red("Limited by: ") + dim(s.limitingPath.join(" -> "))
-      );
-    }
-
-    lines.push("");
-
-    var atts = s.attestations || [];
-    if (atts.length === 0) {
-      lines.push("  " + dim("No attestations."));
-    } else {
-      lines.push("  Attestations (" + atts.length + "):");
-      for (var i = 0; i < atts.length; i++) {
-        var a = atts[i];
-        var sign = a.score >= 0 ? "+" : "";
-        var scoreStr = "[" + sign + a.score + "]";
-        scoreStr = a.score >= 0 ? green(pad(scoreStr, 5)) : red(pad(scoreStr, 5));
-
-        var kindStr = pad(a.kind, 11, true);
-        var summaryStr = '"' + a.summary + '"';
-        var authorStr = (a.author || "").replace(/@.*/, "");
-        var dateStr = (a.created_at || "").substring(0, 10);
-
-        lines.push(
-          "    " +
-            scoreStr +
-            " " +
-            kindStr +
-            " " +
-            dim(summaryStr) +
-            "  " +
-            pencil(pad(authorStr, 6, true)) +
-            " " +
-            pencil(dateStr)
-        );
-      }
-    }
-
-    lines.push("");
-    return { output: lines.join("\r\n") };
-  }
-
-  // qualifier check [--min-score N]
-  function cmdCheck(args, fs) {
-    var QC = window.QualifierCore;
-    if (!QC) return { output: red("error: QualifierCore not loaded") };
-
-    var threshold = 0;
-    for (var i = 0; i < args.length; i++) {
-      if (args[i] === "--min-score" && i + 1 < args.length) {
-        threshold = parseInt(args[i + 1], 10);
-        if (isNaN(threshold)) threshold = 0;
-      }
-    }
-
-    var scores = computeScores(fs);
-    if (!scores) return { output: red("error: no data found") };
-
-    var failures = [];
-    var passes = [];
-    for (var art in scores) {
-      if (!scores.hasOwnProperty(art)) continue;
-      if (scores[art].effective < threshold) {
-        failures.push(art);
-      } else {
-        passes.push(art);
-      }
-    }
-
-    var lines = [];
-    failures.sort();
-    passes.sort();
-
-    for (var f = 0; f < failures.length; f++) {
-      var s = scores[failures[f]];
-      lines.push(
-        "  " +
-          red("FAIL") +
-          "  " +
-          pad(failures[f], 22, true) +
-          "eff: " +
-          red(String(s.effective)) +
-          "  " +
-          dim("(threshold: " + threshold + ")")
-      );
-    }
-
-    for (var p = 0; p < passes.length; p++) {
-      var sp = scores[passes[p]];
-      lines.push(
-        "  " +
-          green("PASS") +
-          "  " +
-          pad(passes[p], 22, true) +
-          "eff: " +
-          green(String(sp.effective)) +
-          "  " +
-          dim("(threshold: " + threshold + ")")
-      );
-    }
-
-    lines.push("");
-    if (failures.length > 0) {
-      lines.push(
-        red("check failed: ") +
-          failures.length +
-          " artifact" +
-          (failures.length !== 1 ? "s" : "") +
-          " below threshold " +
-          threshold
-      );
-    } else {
-      lines.push(
-        green("check passed: ") +
-          "all artifacts meet threshold " +
-          threshold
-      );
-    }
-
-    return { output: lines.join("\r\n") };
-  }
-
-  // qualifier ls [--below N]
-  function cmdLs(args, fs) {
-    var QC = window.QualifierCore;
-    if (!QC) return { output: red("error: QualifierCore not loaded") };
-
-    var below = null;
-    for (var i = 0; i < args.length; i++) {
-      if (args[i] === "--below" && i + 1 < args.length) {
-        below = parseInt(args[i + 1], 10);
-        if (isNaN(below)) below = null;
-      }
-    }
-
-    var scores = computeScores(fs);
-    if (!scores) return { output: red("error: no data found") };
-
-    var arts = [];
-    for (var art in scores) {
-      if (!scores.hasOwnProperty(art)) continue;
-      if (below !== null && scores[art].effective >= below) continue;
-      arts.push(art);
-    }
-
-    arts.sort(function (a, b) {
-      var ea = scores[a].effective;
-      var eb = scores[b].effective;
-      if (ea !== eb) return ea - eb;
-      return a < b ? -1 : a > b ? 1 : 0;
-    });
-
-    var lines = [];
-    for (var j = 0; j < arts.length; j++) {
-      var name = arts[j];
-      var s = scores[name];
-      var status = QC.scoreStatus(s.effective);
-      lines.push(
-        "  " +
-          pad(name, 22, true) +
-          pad(String(s.effective), 6) +
-          "  " +
-          statusColor(status, status)
-      );
-    }
-
-    if (lines.length === 0) {
-      lines.push(dim("  (no matching artifacts)"));
-    }
-
-    return { output: lines.join("\r\n") };
-  }
-
-  // qualifier attest
-  function cmdAttest() {
-    return {
-      output:
-        dim("qualifier attest <artifact> [options]") +
-        "\r\n\r\n" +
-        "  Records a quality attestation for an artifact.\r\n" +
-        "  " +
-        pencil("(playground is read-only -- cannot write .qual files)") +
-        "\r\n\r\n" +
-        "  Options:\r\n" +
-        "    --kind <kind>          blocker|concern|praise|pass|fail|suggestion|waiver\r\n" +
-        "    --score <n>            Score delta (-100..100)\r\n" +
-        "    --summary <text>       One-line description\r\n" +
-        "    --suggested-fix <text> Actionable suggestion\r\n" +
-        "    --tag <tag>            Classification tag (repeatable)\r\n" +
-        "    --author <email>       Attestation author",
-    };
-  }
-
-  // qualifier init
-  function cmdInit() {
-    return {
-      output:
-        "\r\n" +
-        "  Created " +
-        copperBold("qualifier.graph.jsonl") +
-        " " +
-        dim("(empty -- populate with your dependency graph)") +
-        "\r\n" +
-        "  Detected VCS: " +
-        bold("git") +
-        "\r\n" +
-        "  Added " +
-        copperBold("*.qual merge=union") +
-        " to .gitattributes\r\n",
-    };
-  }
-
-  // qualifier --help
-  function cmdHelp() {
-    var lines = [];
-    lines.push("");
-    lines.push(copperBold("qualifier") + " -- quality attestation toolkit");
-    lines.push("");
-    lines.push(bold("USAGE:"));
-    lines.push("    qualifier <COMMAND> [OPTIONS]");
-    lines.push("");
-    lines.push(bold("COMMANDS:"));
-    lines.push(
-      "    " +
-        copperBold(pad("score", 12, true)) +
-        "Compute and display scores for all artifacts"
-    );
-    lines.push(
-      "    " +
-        copperBold(pad("show", 12, true)) +
-        "Show attestations and scores for an artifact"
-    );
-    lines.push(
-      "    " +
-        copperBold(pad("check", 12, true)) +
-        "CI gate: exit non-zero if any score below threshold"
-    );
-    lines.push(
-      "    " +
-        copperBold(pad("ls", 12, true)) +
-        "List artifacts by score"
-    );
-    lines.push(
-      "    " +
-        copperBold(pad("attest", 12, true)) +
-        "Add an attestation to an artifact"
-    );
-    lines.push(
-      "    " +
-        copperBold(pad("compact", 12, true)) +
-        "Compact a .qual file (prune superseded)"
-    );
-    lines.push(
-      "    " +
-        copperBold(pad("graph", 12, true)) +
-        "Visualize the dependency graph"
-    );
-    lines.push(
-      "    " +
-        copperBold(pad("init", 12, true)) +
-        "Initialize qualifier in a repo"
-    );
-    lines.push(
-      "    " +
-        copperBold(pad("blame", 12, true)) +
-        "Per-line VCS attribution"
-    );
-    lines.push("");
-    lines.push(bold("OPTIONS:"));
-    lines.push("    -h, --help       Print help");
-    lines.push("    -V, --version    Print version");
-    lines.push("    --format <FMT>   Output format (text, json)");
-    lines.push("");
-    return { output: lines.join("\r\n") };
-  }
-
-  // Route qualifier subcommands
-  function dispatchQualifier(args, fs) {
-    if (args.length === 0) return cmdHelp();
-
-    var sub = args[0];
-    var rest = args.slice(1);
-
-    switch (sub) {
-      case "score":
-        return cmdScore(fs);
-      case "show":
-        return cmdShow(rest, fs);
-      case "check":
-        return cmdCheck(rest, fs);
-      case "ls":
-        return cmdLs(rest, fs);
-      case "attest":
-        return cmdAttest();
-      case "init":
-        return cmdInit();
-      case "--help":
-      case "-h":
-        return cmdHelp();
-      case "--version":
-      case "-V":
-        return { output: "qualifier 0.1.1" };
-      default:
-        return {
-          output:
-            red("error: ") +
-            "unrecognized command '" +
-            sub +
-            "'\r\n" +
-            dim("Run 'qualifier --help' for usage."),
-        };
-    }
   }
 
   // ---------------------------------------------------------------
@@ -646,58 +248,49 @@
 
     var lines = [];
     lines.push("");
-    lines.push(
-      copperBold("QUALIFIER PLAYGROUND") +
-        " " +
-        dim("-- mock CLI (wasm build pending)")
-    );
+    lines.push(copperBold("QUALIFIER PLAYGROUND"));
     lines.push("");
     lines.push(bold("Shell builtins:"));
     lines.push(
-      "  " + copperBold(pad("ls", 38, true)) + "List files"
+      "  " + copperBold(pad("ls", 38, true)) + "List files",
     );
     lines.push(
       "  " +
         copperBold(pad("cat <file>", 38, true)) +
-        "Display file contents"
+        "Display file contents",
     );
     lines.push(
-      "  " + copperBold(pad("clear", 38, true)) + "Clear terminal"
+      "  " + copperBold(pad("clear", 38, true)) + "Clear terminal",
     );
     lines.push(
-      "  " + copperBold(pad("help", 38, true)) + "Show this message"
+      "  " + copperBold(pad("help", 38, true)) + "Show this message",
     );
     lines.push("");
     lines.push(bold("CLI commands:"));
     lines.push(
       "  " +
         copperBold(pad("qualifier score", 38, true)) +
-        "Compute and display all scores"
+        "Compute and display all scores",
     );
     lines.push(
       "  " +
         copperBold(pad("qualifier show <artifact>", 38, true)) +
-        "Show attestations for an artifact"
+        "Show attestations for an artifact",
     );
     lines.push(
       "  " +
         copperBold(pad("qualifier check [--min-score N]", 38, true)) +
-        "CI gate check"
+        "CI gate check",
     );
     lines.push(
       "  " +
         copperBold(pad("qualifier ls [--below N]", 38, true)) +
-        "List artifacts by score"
-    );
-    lines.push(
-      "  " +
-        copperBold(pad("qualifier init", 38, true)) +
-        "Initialize qualifier in a repo"
+        "List artifacts by score",
     );
     lines.push(
       "  " +
         copperBold(pad("qualifier --help", 38, true)) +
-        "Full CLI usage"
+        "Full CLI usage",
     );
     lines.push("");
     lines.push(dim("Files: ") + fileList);
@@ -730,19 +323,31 @@
         return builtinHelp(fs);
     }
 
-    // qualifier commands
+    // qualifier commands — delegate to real wasm binary
     if (cmd === "qualifier") {
-      return dispatchQualifier(args.slice(1), fs);
+      if (!wasmReady) {
+        if (wasmError) {
+          return { output: red("Wasm failed to load: " + wasmError) };
+        }
+        return { output: dim("Loading CLI... try again in a moment.") };
+      }
+      var qualArgs = args.slice(1);
+      return runQualifier(qualArgs).then(function (result) {
+        var output = "";
+        if (result.stdout) output += result.stdout.replace(/\n/g, "\r\n");
+        if (result.stderr) {
+          if (output) output += "\r\n";
+          output += result.stderr.replace(/\n/g, "\r\n");
+        }
+        return { output: output };
+      });
     }
 
-    // cargo install qualifier -- special case for boot
+    // cargo install qualifier — special case for boot
     if (cmd === "cargo" && args[1] === "install" && args[2] === "qualifier") {
       return {
         output:
-          dim("  qualifier is already installed.") +
-          "\r\n" +
-          "  " +
-          pencil("(mock environment -- wasm build pending)"),
+          dim("  qualifier is already installed."),
       };
     }
 
@@ -827,6 +432,7 @@
     this.killRing = "";
     this.viOperator = null;
     this.pinnedText = "";
+    this.busy = false;
 
     var self = this;
 
@@ -899,11 +505,13 @@
 
     // --- Key handler ---
     this.term.onKey(function (e) {
+      if (self.busy) return;
       self.handleKey(e.key, e.domEvent);
     });
 
     // --- Paste handler ---
     this.term.onData(function (data) {
+      if (self.busy) return;
       // onData fires for paste events (multi-char data) and
       // other input sources. We handle paste only when length > 1
       // to avoid double-handling single keypresses.
@@ -978,7 +586,6 @@
 
   TermShell.prototype.refreshLine = function () {
     // Clear current line after prompt and rewrite
-    var promptLen = 6; // "qual $ " = 6 visible chars
     this.term.write("\r");
     this.term.write(copperBold("qual") + " " + pencil("$") + " ");
     this.term.write(this.buffer);
@@ -1040,24 +647,41 @@
     // Pin command
     this.pinCommand(line.trim());
 
+    var self = this;
     var result = dispatch(line, this.fs);
 
-    if (result.clear) {
-      this.term.clear();
-      this.pinnedText = "";
-      this.updatePinned();
+    if (result && typeof result.then === "function") {
+      // Async (wasm command) — disable input until done
+      this.busy = true;
+      result.then(function (r) {
+        if (r && r.output) {
+          self.term.write(r.output);
+          self.term.write("\r\n");
+        }
+        self.busy = false;
+        self.prompt();
+        self._attachScrollWatcher();
+      });
+    } else {
+      if (result.clear) {
+        this.term.clear();
+        this.pinnedText = "";
+        this.updatePinned();
+        this.prompt();
+        return;
+      }
+
+      if (result.output) {
+        this.term.write(result.output);
+        this.term.write("\r\n");
+      }
+
       this.prompt();
-      return;
+      this._attachScrollWatcher();
     }
+  };
 
-    if (result.output) {
-      this.term.write(result.output);
-      this.term.write("\r\n");
-    }
-
-    this.prompt();
-
-    // Set up scroll watcher for pinned header
+  TermShell.prototype._attachScrollWatcher = function () {
     var self = this;
     var viewport = this.term.element
       ? this.term.element.querySelector(".xterm-viewport")
@@ -1793,19 +1417,42 @@
     }
   };
 
-  // --- Programmatic execution ---
+  // --- Programmatic execution (async-aware) ---
   TermShell.prototype.exec = function (line, callback) {
     this.buffer = line;
     this.cursor = line.length;
     this.refreshLine();
     var self = this;
     setTimeout(function () {
-      self.submit();
-      if (callback) callback();
+      self.term.write("\r\n");
+      if (line.trim()) {
+        self.history.unshift(line);
+      }
+      self.pinCommand(line.trim());
+      var result = dispatch(line, self.fs);
+      if (result && typeof result.then === "function") {
+        result.then(function (r) {
+          if (r && r.output) {
+            self.term.write(r.output);
+            self.term.write("\r\n");
+          }
+          if (callback) callback();
+        });
+      } else {
+        if (result) {
+          if (result.clear) {
+            self.term.clear();
+          } else if (result.output) {
+            self.term.write(result.output);
+            self.term.write("\r\n");
+          }
+        }
+        if (callback) callback();
+      }
     }, 50);
   };
 
-  // --- Character-by-character typing animation ---
+  // --- Character-by-character typing animation (async-aware) ---
   TermShell.prototype.autoType = function (line, callback) {
     var self = this;
     var i = 0;
@@ -1820,8 +1467,27 @@
         setTimeout(typeNext, delay);
       } else {
         setTimeout(function () {
-          self.submit();
-          if (callback) callback();
+          self.term.write("\r\n");
+          if (line.trim()) {
+            self.history.unshift(line);
+          }
+          self.pinCommand(line.trim());
+          var result = dispatch(line, self.fs);
+          if (result && typeof result.then === "function") {
+            result.then(function (r) {
+              if (r && r.output) {
+                self.term.write(r.output);
+                self.term.write("\r\n");
+              }
+              if (callback) callback();
+            });
+          } else {
+            if (result && result.output) {
+              self.term.write(result.output);
+              self.term.write("\r\n");
+            }
+            if (callback) callback();
+          }
         }, 300);
       }
     }
@@ -1841,13 +1507,23 @@
     var fs = new VirtualFS(fileMap);
     var shell = new TermShell(container, fs);
 
-    // Auto-type boot sequence
-    shell.prompt();
-    shell.autoType("cargo install qualifier", function () {
-      shell.autoType("qualifier score", function () {
-        // Done — user has control
+    shell.term.write(dim("  Loading CLI...") + "\r\n\r\n");
+
+    loadWasm(fileMap)
+      .then(function () {
+        shell.prompt();
+        shell.autoType("qualifier score", function () {
+          shell.prompt();
+        });
+      })
+      .catch(function () {
+        shell.term.write(red("  Failed to load wasm binary.") + "\r\n");
+        shell.term.write(
+          dim("  Shell builtins (ls, cat, help) are still available.") +
+            "\r\n\r\n",
+        );
+        shell.prompt();
       });
-    });
   }
 
   // ---------------------------------------------------------------

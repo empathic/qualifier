@@ -45,9 +45,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-wasm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-wasm-
+
+      - name: Cache emsdk
+        uses: actions/cache@v4
+        with:
+          path: local/emsdk
+          key: emsdk-latest
+
+      - name: Build wasm
+        run: scripts/build-wasm.sh
+
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: latest
 
       - uses: actions/setup-node@v4
         with:
@@ -55,13 +79,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: site/pnpm-lock.yaml
 
-      - name: Install site deps
-        working-directory: site
-        run: pnpm install --frozen-lockfile
-
       - name: Build site
-        working-directory: site
-        run: pnpm run build
+        run: cd site && pnpm install && pnpm run build
 
       - name: Deploy to Cloudflare Pages
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

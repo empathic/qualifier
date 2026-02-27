@@ -1,9 +1,17 @@
-use std::fs;
-use std::path::Path;
-
-use crate::qual_file::{detect_vcs, find_project_root};
-
+#[cfg(target_os = "emscripten")]
 pub fn run() -> crate::Result<()> {
+    Err(crate::Error::Validation(
+        "init is not available in the browser".into(),
+    ))
+}
+
+#[cfg(not(target_os = "emscripten"))]
+pub fn run() -> crate::Result<()> {
+    use std::fs;
+    use std::path::Path;
+
+    use crate::qual_file::{detect_vcs, find_project_root};
+
     let root = find_project_root(Path::new(".")).unwrap_or_else(|| ".".into());
 
     // Create qualifier.graph.jsonl if it doesn't exist
