@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Publish the qualifier crate to crates.io
+# Release the qualifier crate to crates.io
 #
 # Prerequisites:
 #   cargo login <your-api-token>
 #
 # Usage:
-#   ./scripts/publish.sh                         # dry-run (default)
-#   ./scripts/publish.sh --execute               # actually publish
-#   ./scripts/publish.sh --allow-dirty            # dry-run, skip dirty check
-#   ./scripts/publish.sh --execute --allow-dirty  # publish with uncommitted changes
+#   ./scripts/release.sh                         # dry-run (default)
+#   ./scripts/release.sh --execute               # actually publish
+#   ./scripts/release.sh --allow-dirty            # dry-run, skip dirty check
+#   ./scripts/release.sh --execute --allow-dirty  # publish with uncommitted changes
 
 DRY_RUN=true
 ALLOW_DIRTY=""
@@ -34,7 +34,7 @@ cargo publish --dry-run $ALLOW_DIRTY
 if $DRY_RUN; then
     echo ""
     echo "Dry run complete. To publish for real, run:"
-    echo "  ./scripts/publish.sh --execute"
+    echo "  ./scripts/release.sh --execute"
 else
     echo "==> Publishing to crates.io..."
     cargo publish $ALLOW_DIRTY

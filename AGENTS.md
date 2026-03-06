@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - `src/` holds the Rust library plus CLI entry at `src/bin/qualifier.rs`; key modules include `attestation`, `qual_file`, `scoring`, and `graph`.
 - `tests/` contains integration coverage (`integration.rs`) and CLI/system tests (`cli_integration.rs`).
-- `scripts/` offers helpers: `dev.sh` (serve docs site with pnpm + Eleventy) and `publish.sh` (test, lint, and publish flow).
+- `scripts/` offers helpers: `dev.sh` (serve docs site with pnpm + Eleventy) and `release.sh` (test, lint, and publish flow).
 - `site/` is the marketing/docs site; `README.md` and `SPEC.md` describe concepts and the format.
 - Build artifacts land in `target/`; keep it out of commits.
 
@@ -13,7 +13,7 @@
 - `cargo test --all-features` — run library + CLI integration tests.
 - `cargo run --bin qualifier -- <args>` — run the CLI locally (e.g., `cargo run --bin qualifier -- score`).
 - `./scripts/dev.sh` — serve the Eleventy site locally; installs pnpm deps on first run.
-- `./scripts/publish.sh [--execute] [--allow-dirty]` — dry-run publish by default; `--execute` actually publishes after tests/clippy.
+- `./scripts/release.sh [--execute] [--allow-dirty]` — dry-run publish by default; `--execute` actually publishes after tests/clippy.
 
 ## Coding Style & Naming Conventions
 - Rust 2024; prefer small, deterministic functions and explicit error handling via `Result` + `thiserror` types.
@@ -31,7 +31,7 @@
 - Follow conventional commits (e.g., `feat:`, `fix:`, `chore:`) as used in history.
 - PRs should describe behavior changes, link issues, and call out impacts to `.qual` layout, scoring, or CLI output.
 - Include results for `cargo fmt`, `cargo clippy --all-targets --all-features`, and `cargo test --all-features`; attach CLI examples when changing text output.
-- For release work, note whether `./scripts/publish.sh --execute` should be run.
+- For release work, note whether `./scripts/release.sh --execute` should be run.
 
 ## Slash Command Discovery
 - Unrecognized slash commands should be looked up as files under `.claude/commands/` (e.g., `/foo` looks for `.claude/commands/foo.md`).
