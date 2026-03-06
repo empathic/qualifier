@@ -84,10 +84,10 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
             record_type: "epoch".into(),
             subject: subject.to_string(),
             issuer: "urn:qualifier:compact".into(),
+            issuer_type: Some(IssuerType::Tool),
             created_at: Utc::now(),
             id: String::new(),
             body: EpochBody {
-                issuer_type: Some(IssuerType::Tool),
                 refs,
                 score: raw,
                 span: None,
@@ -132,12 +132,12 @@ mod tests {
             record_type: "attestation".into(),
             subject: subject.into(),
             issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
             body: AttestationBody {
-                issuer_type: None,
                 detail: None,
                 kind,
                 r#ref: None,
@@ -161,12 +161,12 @@ mod tests {
             record_type: "attestation".into(),
             subject: subject.into(),
             issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
             body: AttestationBody {
-                issuer_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,

@@ -16,8 +16,8 @@ structured quality signals — and to compute aggregate quality scores that
 propagate through dependency graphs.
 
 Records use the [Metabox](METABOX.md) envelope format: a fixed envelope
-(`metabox`, `type`, `subject`, `issuer`, `created_at`, `id`) wrapping a
-type-specific `body` object. Records are content-addressed, append-only, and
+(`metabox`, `type`, `subject`, `issuer`, `issuer_type`, `created_at`, `id`)
+wrapping a type-specific `body` object. Records are content-addressed, append-only, and
 human-writable. No server, no database, no PKI required.
 
 ## 1. Design Principles
@@ -68,17 +68,18 @@ Every record has a **Metabox envelope** — a fixed set of fields that identify
 
 Every record uses the [Metabox](METABOX.md) envelope format with these fields:
 
-| Field        | Type     | Required | Description |
-|--------------|----------|----------|-------------|
-| `metabox`    | string   | yes      | Envelope version. MUST be `"1"`. |
-| `type`       | string   | yes*     | Record type identifier (see 2.5). *May be omitted in `.qual` files; defaults to `"attestation"`. |
-| `subject`    | string   | yes      | Qualified name of the target artifact |
-| `issuer`     | string   | yes      | Who or what created this record (URI) |
-| `created_at` | string   | yes      | RFC 3339 timestamp |
-| `id`         | string   | yes      | Content-addressed BLAKE3 hash (see 2.8) |
-| `body`       | object   | yes      | Type-specific payload (see 2.6, 3.2, 3.4) |
+| Field          | Type     | Required | Description |
+|----------------|----------|----------|-------------|
+| `metabox`      | string   | yes      | Envelope version. MUST be `"1"`. |
+| `type`         | string   | yes*     | Record type identifier (see 2.5). *May be omitted in `.qual` files; defaults to `"attestation"`. |
+| `subject`      | string   | yes      | Qualified name of the target artifact |
+| `issuer`       | string   | yes      | Who or what created this record (URI) |
+| `issuer_type`  | string   | no       | Issuer classification: `human`, `ai`, `tool`, `unknown` |
+| `created_at`   | string   | yes      | RFC 3339 timestamp |
+| `id`           | string   | yes      | Content-addressed BLAKE3 hash (see 2.8) |
+| `body`         | object   | yes      | Type-specific payload (see 2.6, 3.2, 3.4) |
 
-These seven fields form the **uniform interface**. They are the same for every
+These eight fields form the **uniform interface**. They are the same for every
 record type, they are stable across spec revisions, and they are sufficient
 to answer the questions "who said what kind of thing about what and when?"
 without understanding the body.
@@ -213,7 +214,6 @@ Metabox envelope fields (section 2.2) plus body fields:
 | Field           | Type     | Required | Description |
 |-----------------|----------|----------|-------------|
 | `detail`        | string   | no       | Extended description, markdown allowed |
-| `issuer_type`   | string   | no       | Issuer classification: `human`, `ai`, `tool`, `unknown` |
 | `kind`          | string   | yes      | The type of attestation (see 2.7) |
 | `ref`           | string   | no       | VCS reference pin (e.g., `"git:3aba500"`). Opaque to qualifier. |
 | `score`         | integer  | yes      | Signed quality delta, -100..100 |
@@ -229,7 +229,7 @@ Canonical Form (MCF) serialization order.
 **Example:**
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-25T10:00:00Z","id":"a1b2c3d4...","body":{"issuer_type":"human","kind":"concern","ref":"git:3aba500","score":-10,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Use the ? operator instead of unwrap()","summary":"Panics on malformed input","tags":["robustness"]}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-25T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","ref":"git:3aba500","score":-10,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Use the ? operator instead of unwrap()","summary":"Panics on malformed input","tags":["robustness"]}}
 ```
 
 **Shorthand (equivalent):** Since `type` defaults to `"attestation"`, it may
@@ -303,7 +303,8 @@ obey the following rules:
    - `id` MUST be set to `""` (the empty string).
 
 2. **Envelope field order.** Envelope fields MUST appear in this fixed order:
-   `metabox`, `type`, `subject`, `issuer`, `created_at`, `id`, `body`.
+   `metabox`, `type`, `subject`, `issuer`, `issuer_type`, `created_at`, `id`,
+   `body`. Optional envelope fields (`issuer_type`) are omitted when absent.
 
 3. **Body field order.** Body fields MUST appear in lexicographic
    (alphabetical) order. Nested objects (like `span`) also have their fields
@@ -338,11 +339,12 @@ Given an attestation with no optional body fields, the MCF is:
 With a span and issuer_type:
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"issuer_type":"human","kind":"concern","score":-30,"span":{"start":{"line":42},"end":{"line":42}},"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-30,"span":{"start":{"line":42},"end":{"line":42}},"summary":"Panics on malformed input"}}
 ```
 
 Note that `span.end` has been materialized (it was omitted in the input,
-defaulting to `start`), and body fields appear in alphabetical order.
+defaulting to `start`), body fields appear in alphabetical order, and
+`issuer_type` is in the envelope between `issuer` and `created_at`.
 
 > **Rationale.** MCF extends the behavior of serde_json with
 > `#[serde(skip_serializing_if)]` annotations. Alphabetical body field
@@ -401,8 +403,8 @@ All layouts are backwards-compatible and can coexist in the same project.
 **Example (mixed record types):**
 
 ```jsonl
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"issuer_type":"human","kind":"concern","ref":"git:3aba500","score":-30,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Replace .unwrap() with proper error propagation","summary":"Panics on malformed UTF-8 input","tags":["robustness","error-handling"]}}
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"issuer_type":"human","kind":"praise","score":40,"summary":"Excellent property-based test coverage","tags":["testing"]}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","ref":"git:3aba500","score":-30,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Replace .unwrap() with proper error propagation","summary":"Panics on malformed UTF-8 input","tags":["robustness","error-handling"]}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","issuer_type":"human","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent property-based test coverage","tags":["testing"]}}
 ```
 
 ## 3. Record Type Specifications
@@ -421,18 +423,18 @@ Body fields (alphabetical):
 
 | Field         | Type     | Required | Description |
 |---------------|----------|----------|-------------|
-| `issuer_type` | string   | no       | Always `"tool"` for epochs |
 | `refs`        | string[] | yes      | IDs of the compacted records |
 | `score`       | integer  | yes      | Raw score at compaction time |
 | `span`        | object   | no       | Sub-artifact range |
 | `summary`     | string   | yes      | `"Compacted from N records"` |
 
-Epoch records MUST set `issuer` to `"urn:qualifier:compact"`.
+Epoch records MUST set `issuer` to `"urn:qualifier:compact"` and
+`issuer_type` to `"tool"` (in the envelope).
 
 **Example:**
 
 ```json
-{"metabox":"1","type":"epoch","subject":"src/parser.rs","issuer":"urn:qualifier:compact","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6...","body":{"issuer_type":"tool","refs":["a1b2...","c3d4..."],"score":10,"summary":"Compacted from 12 records"}}
+{"metabox":"1","type":"epoch","subject":"src/parser.rs","issuer":"urn:qualifier:compact","issuer_type":"tool","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6...","body":{"refs":["a1b2...","c3d4..."],"score":10,"summary":"Compacted from 12 records"}}
 ```
 
 Epoch records are treated as normal scored records by the scoring engine. The
@@ -625,6 +627,7 @@ predicates for use with DSSE signing and Sigstore distribution.
 | `body.span` | `predicate.span` |
 | `id` | `predicate.qualifier_id` |
 | `issuer` | `predicate.issuer` (also DSSE signer) |
+| `issuer_type` | `predicate.issuer_type` |
 | All body fields | `predicate.*` |
 
 The in-toto `subject[0].digest` contains the content hash of the artifact
@@ -654,7 +657,7 @@ SARIF v2.1.0 results can be converted to qualifier attestations:
 | `result.level` | `body.score` (see mapping below) |
 | `result.message.text` | `body.summary` |
 | `run.tool.driver.name` | `issuer` |
-| (constant) | `body.issuer_type: "tool"` |
+| (constant) | `issuer_type: "tool"` (envelope) |
 
 **Level-to-score mapping:**
 
@@ -843,6 +846,7 @@ impl Record {
     pub fn score(&self) -> Option<i32>;         // Attestation | Epoch
     pub fn supersedes(&self) -> Option<&str>;   // Attestation only
     pub fn kind(&self) -> Option<&Kind>;        // Attestation only
+    pub fn issuer_type(&self) -> Option<&IssuerType>;
     pub fn as_attestation(&self) -> Option<&Attestation>;
     pub fn as_epoch(&self) -> Option<&Epoch>;
     pub fn is_scored(&self) -> bool;            // Attestation | Epoch
@@ -853,6 +857,7 @@ pub struct Attestation {
     pub record_type: String,                // "attestation"
     pub subject: String,
     pub issuer: String,
+    pub issuer_type: Option<IssuerType>,
     pub created_at: DateTime<Utc>,
     pub id: String,
     pub body: AttestationBody,
@@ -860,7 +865,6 @@ pub struct Attestation {
 
 pub struct AttestationBody {
     pub detail: Option<String>,
-    pub issuer_type: Option<IssuerType>,
     pub kind: Kind,
     pub r#ref: Option<String>,
     pub score: i32,
@@ -876,13 +880,13 @@ pub struct Epoch {
     pub record_type: String,                // "epoch"
     pub subject: String,
     pub issuer: String,
+    pub issuer_type: Option<IssuerType>,
     pub created_at: DateTime<Utc>,
     pub id: String,
     pub body: EpochBody,
 }
 
 pub struct EpochBody {
-    pub issuer_type: Option<IssuerType>,
     pub refs: Vec<String>,
     pub score: i32,
     pub span: Option<Span>,
@@ -894,6 +898,7 @@ pub struct DependencyRecord {
     pub record_type: String,                // "dependency"
     pub subject: String,
     pub issuer: String,
+    pub issuer_type: Option<IssuerType>,
     pub created_at: DateTime<Utc>,
     pub id: String,
     pub body: DependencyBody,

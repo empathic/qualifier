@@ -9,7 +9,7 @@
 ## Abstract
 
 Metabox is a minimal envelope format for content-addressed records. It defines
-seven fixed fields that answer "who said what, when" plus a `body` object for
+eight fixed fields that answer "who said what, when" plus a `body` object for
 domain-specific payload. Records are JSONL, IDs are BLAKE3 hashes of a
 canonical form.
 
@@ -19,20 +19,22 @@ that benefits from content addressing and a uniform envelope.
 
 ## 1. Envelope Fields
 
-Every Metabox record is a JSON object with exactly seven top-level fields, in
+Every Metabox record is a JSON object with exactly eight top-level fields, in
 this canonical order:
 
-| #   | Field        | Type   | Required | Description                                    |
-| --- | ------------ | ------ | -------- | ---------------------------------------------- |
-| 1   | `metabox`    | string | yes      | Envelope version. Always `"1"`.                |
-| 2   | `type`       | string | yes      | Body schema identifier.                        |
-| 3   | `subject`    | string | yes      | What this record is about.                     |
-| 4   | `issuer`     | string | yes      | Who or what created this record (URI).          |
-| 5   | `created_at` | string | yes      | RFC 3339 timestamp.                            |
-| 6   | `id`         | string | yes      | Content-addressed BLAKE3 hash (see section 3). |
-| 7   | `body`       | object | yes      | Type-specific payload.                         |
+| #   | Field          | Type   | Required | Description                                    |
+| --- | -------------- | ------ | -------- | ---------------------------------------------- |
+| 1   | `metabox`      | string | yes      | Envelope version. Always `"1"`.                |
+| 2   | `type`         | string | yes      | Body schema identifier.                        |
+| 3   | `subject`      | string | yes      | What this record is about.                     |
+| 4   | `issuer`       | string | yes      | Who or what created this record (URI).          |
+| 5   | `issuer_type`  | string | no       | Issuer classification (see 1.5).               |
+| 6   | `created_at`   | string | yes      | RFC 3339 timestamp.                            |
+| 7   | `id`           | string | yes      | Content-addressed BLAKE3 hash (see section 3). |
+| 8   | `body`         | object | yes      | Type-specific payload.                         |
 
-All seven fields are required. All seven are present in every record.
+Seven fields are required. `issuer_type` is optional. All eight are present in
+the canonical field order.
 
 ### 1.1 `metabox`
 
@@ -71,24 +73,33 @@ Examples: `"src/parser.rs"`, `"pkg:npm/lodash@4.17.21"`, `"service/health"`,
 Who or what created this record (URI). Typically a `mailto:` URI, `https:`
 service URL, or other URI-scheme identifier. The string is opaque to Metabox.
 
-### 1.5 `created_at`
+### 1.5 `issuer_type`
+
+Optional classification of the issuer entity. When present, it is one of:
+`"human"`, `"ai"`, `"tool"`, or `"unknown"`. Omitted when not applicable.
+
+This field lives in the envelope (not the body) because it answers an
+envelope-level question — "what kind of entity issued this record?" — and is
+uniform across all record types.
+
+### 1.6 `created_at`
 
 An RFC 3339 timestamp indicating when the record was created.
 
-### 1.6 `id`
+### 1.7 `id`
 
 A lowercase hex-encoded BLAKE3 hash of the record's Metabox Canonical Form
 (section 3), 64 characters. Content-addressed: the same record always produces
 the same ID.
 
-### 1.7 `body`
+### 1.8 `body`
 
 A JSON object containing the type-specific payload. The body is always present.
 Types with no fields use an empty object `{}`.
 
 The envelope never looks inside the body. Generic Metabox tooling (indexers,
-replicators, filters) can operate on the six envelope fields without
-understanding or parsing the body.
+replicators, filters) can operate on the envelope fields without understanding
+or parsing the body.
 
 ## 2. File Format
 
@@ -120,13 +131,15 @@ obey the following rules:
 Before serialization:
 
 - `id` MUST be set to `""` (the empty string).
-- All seven envelope fields MUST be present.
+- All eight envelope fields MUST be present (optional fields use their absent
+  representation: `issuer_type` is omitted when not set).
 - `body` MUST be present (empty `{}` if the type has no fields).
 
 ### 3.2 Field Order
 
 1. **Envelope fields** appear in the fixed order defined in section 1:
-   `metabox`, `type`, `subject`, `issuer`, `created_at`, `id`, `body`.
+   `metabox`, `type`, `subject`, `issuer`, `issuer_type`, `created_at`, `id`,
+   `body`. Optional envelope fields (`issuer_type`) are omitted when absent.
 2. **Body fields** are sorted lexicographically by key. Sorting is recursive:
    nested objects also have their keys sorted lexicographically.
 
@@ -192,11 +205,12 @@ define:
 A Qualifier attestation in Metabox format:
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8","body":{"issuer_type":"human","kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8","body":{"kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
 ```
 
-Note that body fields are sorted lexicographically: `issuer_type`, `kind`,
-`ref`, `score`, `summary`.
+Note that body fields are sorted lexicographically: `kind`, `ref`, `score`,
+`summary`. The `issuer_type` field is in the envelope, between `issuer` and
+`created_at`.
 
 A minimal record with an empty body:
 
@@ -232,11 +246,11 @@ All non-frame fields move into the `body` object:
 **Attestation** (`type: "attestation"`):
 
 `span`, `kind`, `score`, `summary`, `detail`, `suggested_fix`, `tags`,
-`issuer_type`, `ref`, `supersedes` → `body.*`
+`ref`, `supersedes` → `body.*`
 
 **Epoch** (`type: "epoch"`):
 
-`span`, `score`, `summary`, `refs`, `issuer_type` → `body.*`
+`span`, `score`, `summary`, `refs` → `body.*`
 
 **Dependency** (`type: "dependency"`):
 

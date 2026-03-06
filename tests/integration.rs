@@ -13,12 +13,12 @@ fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Attestation
         record_type: "attestation".into(),
         subject: subject.into(),
         issuer: "mailto:test@test.com".into(),
+        issuer_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            issuer_type: None,
             detail: None,
             kind,
             r#ref: None,
@@ -45,12 +45,12 @@ fn test_golden_attestation_id() {
         record_type: "attestation".into(),
         subject: "src/parser.rs".into(),
         issuer: "mailto:alice@example.com".into(),
+        issuer_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            issuer_type: None,
             detail: None,
             kind: Kind::Concern,
             r#ref: None,
@@ -79,12 +79,12 @@ fn test_golden_epoch_id() {
         record_type: "epoch".into(),
         subject: "src/parser.rs".into(),
         issuer: "urn:qualifier:compact".into(),
+        issuer_type: Some(IssuerType::Tool),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: EpochBody {
-            issuer_type: Some(IssuerType::Tool),
             refs: vec!["aaa".into(), "bbb".into(), "ccc".into()],
             score: 10,
             span: None,
@@ -92,7 +92,7 @@ fn test_golden_epoch_id() {
         },
     });
     assert_eq!(
-        epoch.id, "b0be0120b43116b0dbf0132bb6112babcd80ca25cf70caadfb63afeb1acc7993",
+        epoch.id, "2597b6594fdc1d8d1c1f7a4577637edccb865fa8024349c9caf87344b324bdb4",
         "Golden epoch ID changed! Canonical form or hashing is broken."
     );
 }
@@ -106,6 +106,7 @@ fn test_golden_dependency_id() {
         record_type: "dependency".into(),
         subject: "bin/server".into(),
         issuer: "https://build.example.com".into(),
+        issuer_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
@@ -249,12 +250,12 @@ fn test_compaction_roundtrip_preserves_scores() {
         record_type: "attestation".into(),
         subject: "mod.rs".into(),
         issuer: "mailto:test@test.com".into(),
+        issuer_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            issuer_type: None,
             detail: None,
             kind: Kind::Pass,
             r#ref: None,
@@ -329,10 +330,10 @@ fn test_supersession_cycle_detected() {
         record_type: "attestation".into(),
         subject: "x".into(),
         issuer: "mailto:test@test.com".into(),
+        issuer_type: None,
         created_at: now,
         id: "aaa".into(),
         body: AttestationBody {
-            issuer_type: None,
             detail: None,
             kind: Kind::Pass,
             r#ref: None,
@@ -349,10 +350,10 @@ fn test_supersession_cycle_detected() {
         record_type: "attestation".into(),
         subject: "x".into(),
         issuer: "mailto:test@test.com".into(),
+        issuer_type: None,
         created_at: now,
         id: "bbb".into(),
         body: AttestationBody {
-            issuer_type: None,
             detail: None,
             kind: Kind::Pass,
             r#ref: None,
@@ -391,12 +392,12 @@ fn test_cross_artifact_supersession_rejected() {
         record_type: "attestation".into(),
         subject: "bar.rs".into(),
         issuer: "mailto:test@test.com".into(),
+        issuer_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            issuer_type: None,
             detail: None,
             kind: Kind::Pass,
             r#ref: None,
@@ -423,10 +424,10 @@ fn test_kind_typo_detected_in_validation() {
         record_type: "attestation".into(),
         subject: "x.rs".into(),
         issuer: "mailto:test@test.com".into(),
+        issuer_type: None,
         created_at: Utc::now(),
         id: String::new(),
         body: AttestationBody {
-            issuer_type: None,
             detail: None,
             kind: Kind::Custom("pss".into()),
             r#ref: None,
@@ -468,12 +469,12 @@ fn test_metabox_roundtrip() {
         record_type: "attestation".into(),
         subject: "test.rs".into(),
         issuer: "mailto:alice@example.com".into(),
+        issuer_type: Some(IssuerType::Human),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            issuer_type: Some(IssuerType::Human),
             detail: None,
             kind: Kind::Praise,
             r#ref: Some("git:3aba500".into()),
@@ -493,7 +494,7 @@ fn test_metabox_roundtrip() {
 
     let parsed = qf.records[0].as_attestation().unwrap();
     assert_eq!(parsed.metabox, "1");
-    assert_eq!(parsed.body.issuer_type, Some(IssuerType::Human));
+    assert_eq!(parsed.issuer_type, Some(IssuerType::Human));
     assert_eq!(parsed.body.r#ref.as_deref(), Some("git:3aba500"));
     assert_eq!(parsed.id, att.id);
 }
@@ -517,7 +518,7 @@ fn test_compact_snapshot_produces_epoch() {
 
     let epoch = snapped.records[0].as_epoch().unwrap();
     assert_eq!(epoch.metabox, "1");
-    assert_eq!(epoch.body.issuer_type, Some(IssuerType::Tool));
+    assert_eq!(epoch.issuer_type, Some(IssuerType::Tool));
     assert_eq!(epoch.body.score, 30); // 40 + -10
 }
 
@@ -529,12 +530,12 @@ fn test_supersession_with_new_fields() {
         record_type: "attestation".into(),
         subject: "mod.rs".into(),
         issuer: "mailto:test@test.com".into(),
+        issuer_type: Some(qualifier::attestation::IssuerType::Human),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            issuer_type: Some(qualifier::attestation::IssuerType::Human),
             detail: None,
             kind: Kind::Pass,
             r#ref: Some("git:abc123".into()),

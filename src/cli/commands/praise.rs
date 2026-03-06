@@ -85,7 +85,7 @@ fn run_records(args: Args) -> crate::Result<()> {
             );
 
             // Line 2: issuer + date + truncated ID + (issuer_type)
-            let issuer_type_suffix = match &att.body.issuer_type {
+            let issuer_type_suffix = match &att.issuer_type {
                 Some(at) if *at != crate::attestation::IssuerType::Human => {
                     format!("  ({})", at)
                 }
@@ -128,7 +128,7 @@ fn run_records(args: Args) -> crate::Result<()> {
                 "epoch",
                 epoch.body.summary,
             );
-            let issuer_type_suffix = match &epoch.body.issuer_type {
+            let issuer_type_suffix = match &epoch.issuer_type {
                 Some(at) if *at != crate::attestation::IssuerType::Human => {
                     format!("  ({})", at)
                 }
@@ -162,7 +162,7 @@ fn record_to_json(record: &crate::attestation::Record) -> Option<serde_json::Val
             "issuer": att.issuer,
             "created_at": att.created_at.to_rfc3339(),
         });
-        if let Some(ref at) = att.body.issuer_type {
+        if let Some(ref at) = att.issuer_type {
             entry["issuer_type"] = serde_json::json!(at.to_string());
         }
         if let Some(ref fix) = att.body.suggested_fix {
@@ -184,7 +184,7 @@ fn record_to_json(record: &crate::attestation::Record) -> Option<serde_json::Val
             "issuer": epoch.issuer,
             "created_at": epoch.created_at.to_rfc3339(),
         });
-        if let Some(ref at) = epoch.body.issuer_type {
+        if let Some(ref at) = epoch.issuer_type {
             entry["issuer_type"] = serde_json::json!(at.to_string());
         }
         Some(entry)

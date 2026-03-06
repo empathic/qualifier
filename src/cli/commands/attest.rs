@@ -114,10 +114,10 @@ pub fn run(args: Args) -> crate::Result<()> {
         record_type: "attestation".into(),
         subject,
         issuer,
+        issuer_type,
         created_at: Utc::now(),
         id: String::new(),
         body: AttestationBody {
-            issuer_type,
             detail: args.detail,
             kind,
             r#ref: args.r#ref,
