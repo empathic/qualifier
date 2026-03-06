@@ -31,6 +31,8 @@ pub enum Commands {
     Compact(commands::compact::Args),
     /// Visualize the dependency graph
     Graph(commands::graph_cmd::Args),
+    /// Print a random qualifier haiku
+    Haiku,
     /// Initialize qualifier in a repository
     Init,
     /// Show who attested an artifact and why
@@ -58,6 +60,10 @@ pub fn run() {
         Commands::Check(args) => commands::check::run(args),
         Commands::Compact(args) => commands::compact::run(args),
         Commands::Graph(args) => commands::graph_cmd::run(args),
+        Commands::Haiku => {
+            commands::haiku::run();
+            Ok(())
+        }
         Commands::Init => commands::init::run(),
         Commands::Praise(args) => commands::praise::run(args),
     };

@@ -2,6 +2,7 @@ pub mod attest;
 pub mod check;
 pub mod compact;
 pub mod graph_cmd;
+pub mod haiku;
 pub mod init;
 pub mod ls;
 pub mod praise;

@@ -1,6 +1,6 @@
 [package]
 name = "qualifier"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "Deterministic quality attestations for software artifacts"
 license = "MIT OR Apache-2.0"
@@ -11,7 +11,7 @@ categories = ["command-line-utilities", "development-tools"]
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:comfy-table", "dep:figment"]
+cli = ["dep:clap", "dep:comfy-table", "dep:figment", "dep:rand"]
 
 [dependencies]
 blake3 = "1"
@@ -25,6 +25,7 @@ thiserror = "2"
 clap = { version = "4", features = ["derive"], optional = true }
 comfy-table = { version = "7", optional = true }
 figment = { version = "0.10", features = ["toml", "env"], optional = true }
+rand = { version = "0.9", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
