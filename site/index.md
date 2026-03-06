@@ -102,7 +102,8 @@ Qualifier gives you a structured, VCS-friendly way to **record what you know abo
       src/auth.rs: pass +20, concern -10          → raw +10, eff -20 (limited by crypto)
       src/api.rs:  praise +30                     → raw +30, eff +10 (limited by log)
       bin/server:  pass +20, praise +30           → raw +50, eff -20 (limited by auth)
-  -->
+
+-->
 
   <!-- ═══ L0: leaf libraries ═══ -->
 
@@ -178,22 +179,22 @@ Qualifier gives you a structured, VCS-friendly way to **record what you know abo
 
 ## What Qualifier adds
 
-| What                     | Without Qualifier             | With Qualifier                                      |
-| ------------------------ | ----------------------------- | --------------------------------------------------- |
-| Quality tracking         | Spreadsheets, tickets, memory | Structured `.qual` files in your repo                |
-| Score propagation        | Manual dependency analysis    | Automatic through the dependency graph               |
-| CI gating                | Custom scripts                | `qualifier check --min-score 0`                      |
-| Agent integration        | None                          | JSON output, batch attestation, suggested fixes      |
-| Merge conflicts          | Guaranteed with shared files  | Structurally impossible (append-only JSONL)           |
-| History                  | Lost in ticket graveyards     | VCS-native — blame, diff, bisect all work            |
+| What              | Without Qualifier             | With Qualifier                                  |
+| ----------------- | ----------------------------- | ----------------------------------------------- |
+| Quality tracking  | Spreadsheets, tickets, memory | Structured `.qual` files in your repo           |
+| Score propagation | Manual dependency analysis    | Automatic through the dependency graph          |
+| CI gating         | Custom scripts                | `qualifier check --min-score 0`                 |
+| Agent integration | None                          | JSON output, batch attestation, suggested fixes |
+| Merge conflicts   | Guaranteed with shared files  | Structurally impossible (append-only JSONL)     |
+| History           | Lost in ticket graveyards     | VCS-native — blame, diff, bisect all work       |
 
 ## Minimal example
 
 A `.qual` file is just JSONL — one attestation per line:
 
 ```jsonl
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-30,"summary":"Panics on malformed UTF-8 input"}}
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent property-based test coverage"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-30,"summary":"Panics on malformed UTF-8 input"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent property-based test coverage"}}
 ```
 
 No parents, no headers, no schema declarations. Each line is self-contained.
@@ -243,11 +244,11 @@ qualifier ls --below 0
 
 Qualifier is a Rust crate with a library and a CLI:
 
-| Component          | What it does                                               |
-| ------------------ | ---------------------------------------------------------- |
-| `.qual` files      | VCS-friendly JSONL attestations — the primary interface    |
-| `qualifier` CLI    | Human-friendly commands for attesting, scoring, gating     |
-| `qualifier` crate  | Library API for tools, agents, and editor plugins          |
-| Dependency graph   | `qualifier.graph.jsonl` — feeds the propagation engine     |
+| Component         | What it does                                            |
+| ----------------- | ------------------------------------------------------- |
+| `.qual` files     | VCS-friendly JSONL attestations — the primary interface |
+| `qualifier` CLI   | Human-friendly commands for attesting, scoring, gating  |
+| `qualifier` crate | Library API for tools, agents, and editor plugins       |
+| Dependency graph  | `qualifier.graph.jsonl` — feeds the propagation engine  |
 
 See [Format](/format/) for the file spec or [CLI](/cli/) for command reference.

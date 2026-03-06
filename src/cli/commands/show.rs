@@ -74,13 +74,17 @@ pub fn run(args: Args) -> crate::Result<()> {
     for record in &active {
         if let Some(att) = record.as_attestation() {
             let date = att.created_at.format("%Y-%m-%d");
-            let author_short = att.author.split('@').next().unwrap_or(&att.author);
+            let issuer_short = att
+                .issuer
+                .strip_prefix("mailto:")
+                .and_then(|e| e.split('@').next())
+                .unwrap_or(&att.issuer);
             println!(
                 "    {} {}  {:?}  {}  {}",
                 output::format_score(att.body.score),
                 att.body.kind,
                 att.body.summary,
-                author_short,
+                issuer_short,
                 date,
             );
         } else if let Some(epoch) = record.as_epoch() {
@@ -89,7 +93,7 @@ pub fn run(args: Args) -> crate::Result<()> {
                 "    {} epoch  {:?}  {}  {}",
                 output::format_score(epoch.body.score),
                 epoch.body.summary,
-                epoch.author,
+                epoch.issuer,
                 date,
             );
         }

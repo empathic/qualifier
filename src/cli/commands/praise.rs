@@ -84,16 +84,16 @@ fn run_records(args: Args) -> crate::Result<()> {
                 att.body.summary,
             );
 
-            // Line 2: author + date + truncated ID + (author_type)
-            let author_type_suffix = match &att.body.author_type {
-                Some(at) if *at != crate::attestation::AuthorType::Human => {
+            // Line 2: issuer + date + truncated ID + (issuer_type)
+            let issuer_type_suffix = match &att.issuer_type {
+                Some(at) if *at != crate::attestation::IssuerType::Human => {
                     format!("  ({})", at)
                 }
                 _ => String::new(),
             };
             println!(
                 "          {}  {}  {}{}",
-                att.author, date, id_short, author_type_suffix,
+                att.issuer, date, id_short, issuer_type_suffix,
             );
 
             // Line 3 (optional): suggested_fix, detail, or span
@@ -128,15 +128,15 @@ fn run_records(args: Args) -> crate::Result<()> {
                 "epoch",
                 epoch.body.summary,
             );
-            let author_type_suffix = match &epoch.body.author_type {
-                Some(at) if *at != crate::attestation::AuthorType::Human => {
+            let issuer_type_suffix = match &epoch.issuer_type {
+                Some(at) if *at != crate::attestation::IssuerType::Human => {
                     format!("  ({})", at)
                 }
                 _ => String::new(),
             };
             println!(
                 "          {}  {}  {}{}",
-                epoch.author, date, id_short, author_type_suffix,
+                epoch.issuer, date, id_short, issuer_type_suffix,
             );
             println!();
         }
@@ -159,11 +159,11 @@ fn record_to_json(record: &crate::attestation::Record) -> Option<serde_json::Val
             "kind": att.body.kind.to_string(),
             "score": att.body.score,
             "summary": att.body.summary,
-            "author": att.author,
+            "issuer": att.issuer,
             "created_at": att.created_at.to_rfc3339(),
         });
-        if let Some(ref at) = att.body.author_type {
-            entry["author_type"] = serde_json::json!(at.to_string());
+        if let Some(ref at) = att.issuer_type {
+            entry["issuer_type"] = serde_json::json!(at.to_string());
         }
         if let Some(ref fix) = att.body.suggested_fix {
             entry["suggested_fix"] = serde_json::json!(fix);
@@ -181,11 +181,11 @@ fn record_to_json(record: &crate::attestation::Record) -> Option<serde_json::Val
             "type": "epoch",
             "score": epoch.body.score,
             "summary": epoch.body.summary,
-            "author": epoch.author,
+            "issuer": epoch.issuer,
             "created_at": epoch.created_at.to_rfc3339(),
         });
-        if let Some(ref at) = epoch.body.author_type {
-            entry["author_type"] = serde_json::json!(at.to_string());
+        if let Some(ref at) = epoch.issuer_type {
+            entry["issuer_type"] = serde_json::json!(at.to_string());
         }
         Some(entry)
     } else {

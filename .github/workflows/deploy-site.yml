@@ -83,16 +83,15 @@ jobs:
         run: cd site && pnpm install && pnpm run build
 
       - name: Deploy to Cloudflare Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: deploy
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy site/_site --project-name=qualifier-dev --branch=main
+          command: pages deploy site/_site --project-name=qualifier-dev --branch=${{ github.event_name == 'push' && 'main' || github.head_ref }}
 
       - name: Comment preview URL on PR
-        if: github.event_name == 'pull_request' && steps.deploy.outputs.deployment-url
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |

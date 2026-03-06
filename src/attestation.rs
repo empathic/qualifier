@@ -155,39 +155,39 @@ impl Kind {
     }
 }
 
-// ─── AuthorType enum ────────────────────────────────────────────────────────
+// ─── IssuerType enum ────────────────────────────────────────────────────────
 
-/// Author classification for attestations.
+/// Issuer classification for attestations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AuthorType {
+pub enum IssuerType {
     Human,
     Ai,
     Tool,
     Unknown,
 }
 
-impl fmt::Display for AuthorType {
+impl fmt::Display for IssuerType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AuthorType::Human => write!(f, "human"),
-            AuthorType::Ai => write!(f, "ai"),
-            AuthorType::Tool => write!(f, "tool"),
-            AuthorType::Unknown => write!(f, "unknown"),
+            IssuerType::Human => write!(f, "human"),
+            IssuerType::Ai => write!(f, "ai"),
+            IssuerType::Tool => write!(f, "tool"),
+            IssuerType::Unknown => write!(f, "unknown"),
         }
     }
 }
 
-impl std::str::FromStr for AuthorType {
+impl std::str::FromStr for IssuerType {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "human" => Ok(AuthorType::Human),
-            "ai" => Ok(AuthorType::Ai),
-            "tool" => Ok(AuthorType::Tool),
-            "unknown" => Ok(AuthorType::Unknown),
-            other => Err(format!("unknown author_type: '{other}'")),
+            "human" => Ok(IssuerType::Human),
+            "ai" => Ok(IssuerType::Ai),
+            "tool" => Ok(IssuerType::Tool),
+            "unknown" => Ok(IssuerType::Unknown),
+            other => Err(format!("unknown issuer_type: '{other}'")),
         }
     }
 }
@@ -197,8 +197,6 @@ impl std::str::FromStr for AuthorType {
 /// Attestation body fields. Field order is alphabetical (MCF canonical form).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AttestationBody {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub author_type: Option<AuthorType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     pub kind: Kind,
@@ -219,8 +217,6 @@ pub struct AttestationBody {
 /// Epoch body fields. Field order is alphabetical (MCF canonical form).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EpochBody {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub author_type: Option<AuthorType>,
     pub refs: Vec<String>,
     pub score: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,7 +243,7 @@ fn default_metabox() -> String {
 /// A quality attestation against a software artifact (Metabox envelope).
 ///
 /// **IMPORTANT:** Envelope field order is fixed: metabox, type, subject,
-/// author, created_at, id, body. Body fields are alphabetical (MCF).
+/// issuer, issuer_type, created_at, id, body. Body fields are alphabetical (MCF).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Attestation {
     /// Metabox envelope version. Always "1".
@@ -261,8 +257,12 @@ pub struct Attestation {
     /// Qualified name of the subject (artifact).
     pub subject: String,
 
-    /// Who or what created this attestation.
-    pub author: String,
+    /// Who or what created this attestation (URI).
+    pub issuer: String,
+
+    /// Issuer classification (human, ai, tool, unknown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer_type: Option<IssuerType>,
 
     /// When this attestation was created (RFC 3339).
     pub created_at: DateTime<Utc>,
@@ -285,7 +285,9 @@ pub struct Epoch {
     #[serde(rename = "type")]
     pub record_type: String,
     pub subject: String,
-    pub author: String,
+    pub issuer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer_type: Option<IssuerType>,
     pub created_at: DateTime<Utc>,
     pub id: String,
     pub body: EpochBody,
@@ -301,7 +303,9 @@ pub struct DependencyRecord {
     #[serde(rename = "type")]
     pub record_type: String,
     pub subject: String,
-    pub author: String,
+    pub issuer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer_type: Option<IssuerType>,
     pub created_at: DateTime<Utc>,
     pub id: String,
     pub body: DependencyBody,
@@ -420,6 +424,16 @@ impl Record {
         }
     }
 
+    /// Get the issuer type classification.
+    pub fn issuer_type(&self) -> Option<&IssuerType> {
+        match self {
+            Record::Attestation(a) => a.issuer_type.as_ref(),
+            Record::Epoch(e) => e.issuer_type.as_ref(),
+            Record::Dependency(d) => d.issuer_type.as_ref(),
+            Record::Unknown(_) => None,
+        }
+    }
+
     /// Returns true if this is a scored record type (attestation or epoch).
     pub fn is_scored(&self) -> bool {
         matches!(self, Record::Attestation(_) | Record::Epoch(_))
@@ -435,7 +449,9 @@ struct AttestationCanonicalView<'a> {
     metabox: &'a str,
     r#type: &'a str,
     subject: &'a str,
-    author: &'a str,
+    issuer: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issuer_type: Option<&'a IssuerType>,
     created_at: &'a DateTime<Utc>,
     id: &'a str,
     body: &'a AttestationBody,
@@ -447,7 +463,9 @@ struct EpochCanonicalView<'a> {
     metabox: &'a str,
     r#type: &'a str,
     subject: &'a str,
-    author: &'a str,
+    issuer: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issuer_type: Option<&'a IssuerType>,
     created_at: &'a DateTime<Utc>,
     id: &'a str,
     body: &'a EpochBody,
@@ -459,7 +477,9 @@ struct DependencyCanonicalView<'a> {
     metabox: &'a str,
     r#type: &'a str,
     subject: &'a str,
-    author: &'a str,
+    issuer: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issuer_type: Option<&'a IssuerType>,
     created_at: &'a DateTime<Utc>,
     id: &'a str,
     body: &'a DependencyBody,
@@ -474,7 +494,8 @@ pub fn generate_id(attestation: &Attestation) -> String {
         metabox: &attestation.metabox,
         r#type: "attestation",
         subject: &attestation.subject,
-        author: &attestation.author,
+        issuer: &attestation.issuer,
+        issuer_type: attestation.issuer_type.as_ref(),
         created_at: &attestation.created_at,
         id: "",
         body: &attestation.body,
@@ -489,7 +510,8 @@ pub fn generate_epoch_id(epoch: &Epoch) -> String {
         metabox: &epoch.metabox,
         r#type: "epoch",
         subject: &epoch.subject,
-        author: &epoch.author,
+        issuer: &epoch.issuer,
+        issuer_type: epoch.issuer_type.as_ref(),
         created_at: &epoch.created_at,
         id: "",
         body: &epoch.body,
@@ -504,7 +526,8 @@ pub fn generate_dependency_id(dep: &DependencyRecord) -> String {
         metabox: &dep.metabox,
         r#type: "dependency",
         subject: &dep.subject,
-        author: &dep.author,
+        issuer: &dep.issuer,
+        issuer_type: dep.issuer_type.as_ref(),
         created_at: &dep.created_at,
         id: "",
         body: &dep.body,
@@ -541,8 +564,10 @@ pub fn validate(attestation: &Attestation) -> Vec<String> {
     if attestation.body.summary.is_empty() {
         errors.push("summary must not be empty".into());
     }
-    if attestation.author.is_empty() {
-        errors.push("author must not be empty".into());
+    if attestation.issuer.is_empty() {
+        errors.push("issuer must not be empty".into());
+    } else if !attestation.issuer.contains(':') {
+        errors.push("issuer must be a URI (e.g. mailto:user@example.com)".into());
     }
     if attestation.body.score < -100 || attestation.body.score > 100 {
         errors.push(format!(
@@ -769,13 +794,13 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "src/parser.rs".into(),
-            author: "alice@example.com".into(),
+            issuer: "mailto:alice@example.com".into(),
+            issuer_type: None,
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
@@ -823,11 +848,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: String::new(),
-            author: String::new(),
+            issuer: String::new(),
+            issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -842,7 +867,7 @@ mod tests {
         let errors = validate(&att);
         assert!(errors.iter().any(|e| e.contains("subject")));
         assert!(errors.iter().any(|e| e.contains("summary")));
-        assert!(errors.iter().any(|e| e.contains("author")));
+        assert!(errors.iter().any(|e| e.contains("issuer")));
         assert!(errors.iter().any(|e| e.contains("id")));
     }
 
@@ -878,11 +903,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "test".into(),
-            author: "bot".into(),
+            issuer: "mailto:bot@localhost".into(),
+            issuer_type: None,
             created_at: Utc::now(),
             id: "will be replaced".into(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -906,11 +931,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "test.rs".into(),
-            author: "test".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
@@ -949,11 +974,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "x.rs".into(),
-            author: "test".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: now,
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
@@ -970,11 +995,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "x.rs".into(),
-            author: "test".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: now,
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
@@ -1003,11 +1028,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "x".into(),
-            author: "test".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: now,
             id: "aaa".into(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1023,11 +1048,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "x".into(),
-            author: "test".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: now,
             id: "bbb".into(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1120,11 +1145,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "foo.rs".into(),
-            author: "test".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1141,11 +1166,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "bar.rs".into(),
-            author: "test".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1168,11 +1193,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "foo.rs".into(),
-            author: "test".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
@@ -1189,11 +1214,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "foo.rs".into(),
-            author: "test".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1224,11 +1249,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "test.rs".into(),
-            author: "test@test.com".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1254,11 +1279,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "x.rs".into(),
-            author: "test@test.com".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: now,
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1271,15 +1296,15 @@ mod tests {
             },
         });
 
-        let with_author_type = finalize(Attestation {
+        let with_issuer_type = finalize(Attestation {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "x.rs".into(),
-            author: "test@test.com".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: Some(IssuerType::Human),
             created_at: now,
             id: String::new(),
             body: AttestationBody {
-                author_type: Some(AuthorType::Human),
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1296,11 +1321,11 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "x.rs".into(),
-            author: "test@test.com".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: now,
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: Some("git:abc123".into()),
@@ -1314,9 +1339,9 @@ mod tests {
         });
 
         assert_eq!(base.metabox, "1");
-        assert_ne!(base.id, with_author_type.id, "author_type should affect ID");
+        assert_ne!(base.id, with_issuer_type.id, "issuer_type should affect ID");
         assert_ne!(base.id, with_ref.id, "ref should affect ID");
-        assert_ne!(with_author_type.id, with_ref.id);
+        assert_ne!(with_issuer_type.id, with_ref.id);
     }
 
     #[test]
@@ -1325,11 +1350,11 @@ mod tests {
             metabox: "99".into(),
             record_type: "attestation".into(),
             subject: "x.rs".into(),
-            author: "test@test.com".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1358,13 +1383,13 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "x.rs".into(),
-            author: "alice@example.com".into(),
+            issuer: "mailto:alice@example.com".into(),
+            issuer_type: Some(IssuerType::Human),
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
             body: AttestationBody {
-                author_type: Some(AuthorType::Human),
                 detail: None,
                 kind: Kind::Praise,
                 r#ref: Some("git:3aba500".into()),
@@ -1381,7 +1406,7 @@ mod tests {
         assert!(json.contains("\"metabox\":\"1\""));
         assert!(json.contains("\"type\":\"attestation\""));
         assert!(json.contains("\"body\""));
-        assert!(json.contains("\"author_type\":\"human\""));
+        assert!(json.contains("\"issuer_type\":\"human\""));
         assert!(json.contains("\"ref\":\"git:3aba500\""));
 
         let parsed: Attestation = serde_json::from_str(&json).unwrap();
@@ -1394,13 +1419,13 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: "x.rs".into(),
-            author: "test".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1422,7 +1447,7 @@ mod tests {
     #[test]
     fn test_record_type_defaults_to_attestation() {
         // JSON without "type" field should parse as attestation
-        let json = r#"{"metabox":"1","subject":"x.rs","author":"test","created_at":"2026-02-24T10:00:00Z","id":"abc","body":{"kind":"pass","score":10,"summary":"ok"}}"#;
+        let json = r#"{"metabox":"1","subject":"x.rs","issuer":"mailto:test@test.com","created_at":"2026-02-24T10:00:00Z","id":"abc","body":{"kind":"pass","score":10,"summary":"ok"}}"#;
         let record: Record = serde_json::from_str(json).unwrap();
         assert!(record.as_attestation().is_some());
     }
@@ -1433,13 +1458,13 @@ mod tests {
             metabox: "1".into(),
             record_type: "epoch".into(),
             subject: "x.rs".into(),
-            author: "qualifier/compact".into(),
+            issuer: "urn:qualifier:compact".into(),
+            issuer_type: Some(IssuerType::Tool),
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
             body: EpochBody {
-                author_type: Some(AuthorType::Tool),
                 refs: vec!["aaa".into(), "bbb".into()],
                 score: 30,
                 span: None,
@@ -1458,7 +1483,7 @@ mod tests {
 
     #[test]
     fn test_unknown_record_type_preserved() {
-        let json = r#"{"metabox":"1","type":"custom-thing","subject":"x.rs","author":"test","created_at":"2026-02-24T10:00:00Z","id":"abc","body":{"foo":"bar"}}"#;
+        let json = r#"{"metabox":"1","type":"custom-thing","subject":"x.rs","issuer":"mailto:test@test.com","created_at":"2026-02-24T10:00:00Z","id":"abc","body":{"foo":"bar"}}"#;
         let record: Record = serde_json::from_str(json).unwrap();
         match record {
             Record::Unknown(v) => {
@@ -1520,16 +1545,16 @@ mod tests {
     }
 
     #[test]
-    fn test_author_type_roundtrip() {
+    fn test_issuer_type_roundtrip() {
         let types = vec![
-            AuthorType::Human,
-            AuthorType::Ai,
-            AuthorType::Tool,
-            AuthorType::Unknown,
+            IssuerType::Human,
+            IssuerType::Ai,
+            IssuerType::Tool,
+            IssuerType::Unknown,
         ];
         for at in &types {
             let s = at.to_string();
-            let parsed: AuthorType = s.parse().unwrap();
+            let parsed: IssuerType = s.parse().unwrap();
             assert_eq!(&parsed, at);
         }
     }
