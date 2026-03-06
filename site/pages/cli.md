@@ -157,11 +157,10 @@ cat attestations.jsonl | qualifier attest --stdin
 
 Qualifier uses layered configuration (highest wins):
 
-| Priority | Source             | Example                                    |
-| -------- | ------------------ | ------------------------------------------ |
-| 1        | CLI flags          | `--graph path/to/graph.jsonl`              |
-| 2        | Environment        | `QUALIFIER_GRAPH`, `QUALIFIER_ISSUER`      |
-| 3        | Project config     | `.qualifier.toml`                          |
-| 4        | User config        | `~/.config/qualifier/config.toml`          |
-| 5        | Built-in defaults  |                                            |
-
+| Priority | Source            | Example                               |
+| -------- | ----------------- | ------------------------------------- |
+| 1        | CLI flags         | `--graph path/to/graph.jsonl`         |
+| 2        | Environment       | `QUALIFIER_GRAPH`, `QUALIFIER_ISSUER` |
+| 3        | Project config    | `.qualifier.toml`                     |
+| 4        | User config       | `~/.config/qualifier/config.toml`     |
+| 5        | Built-in defaults |                                       |

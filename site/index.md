@@ -102,7 +102,8 @@ Qualifier gives you a structured, VCS-friendly way to **record what you know abo
       src/auth.rs: pass +20, concern -10          → raw +10, eff -20 (limited by crypto)
       src/api.rs:  praise +30                     → raw +30, eff +10 (limited by log)
       bin/server:  pass +20, praise +30           → raw +50, eff -20 (limited by auth)
-  -->
+
+-->
 
   <!-- ═══ L0: leaf libraries ═══ -->
 
@@ -178,14 +179,14 @@ Qualifier gives you a structured, VCS-friendly way to **record what you know abo
 
 ## What Qualifier adds
 
-| What                     | Without Qualifier             | With Qualifier                                      |
-| ------------------------ | ----------------------------- | --------------------------------------------------- |
-| Quality tracking         | Spreadsheets, tickets, memory | Structured `.qual` files in your repo                |
-| Score propagation        | Manual dependency analysis    | Automatic through the dependency graph               |
-| CI gating                | Custom scripts                | `qualifier check --min-score 0`                      |
-| Agent integration        | None                          | JSON output, batch attestation, suggested fixes      |
-| Merge conflicts          | Guaranteed with shared files  | Structurally impossible (append-only JSONL)           |
-| History                  | Lost in ticket graveyards     | VCS-native — blame, diff, bisect all work            |
+| What              | Without Qualifier             | With Qualifier                                  |
+| ----------------- | ----------------------------- | ----------------------------------------------- |
+| Quality tracking  | Spreadsheets, tickets, memory | Structured `.qual` files in your repo           |
+| Score propagation | Manual dependency analysis    | Automatic through the dependency graph          |
+| CI gating         | Custom scripts                | `qualifier check --min-score 0`                 |
+| Agent integration | None                          | JSON output, batch attestation, suggested fixes |
+| Merge conflicts   | Guaranteed with shared files  | Structurally impossible (append-only JSONL)     |
+| History           | Lost in ticket graveyards     | VCS-native — blame, diff, bisect all work       |
 
 ## Minimal example
 
@@ -243,11 +244,11 @@ qualifier ls --below 0
 
 Qualifier is a Rust crate with a library and a CLI:
 
-| Component          | What it does                                               |
-| ------------------ | ---------------------------------------------------------- |
-| `.qual` files      | VCS-friendly JSONL attestations — the primary interface    |
-| `qualifier` CLI    | Human-friendly commands for attesting, scoring, gating     |
-| `qualifier` crate  | Library API for tools, agents, and editor plugins          |
-| Dependency graph   | `qualifier.graph.jsonl` — feeds the propagation engine     |
+| Component         | What it does                                            |
+| ----------------- | ------------------------------------------------------- |
+| `.qual` files     | VCS-friendly JSONL attestations — the primary interface |
+| `qualifier` CLI   | Human-friendly commands for attesting, scoring, gating  |
+| `qualifier` crate | Library API for tools, agents, and editor plugins       |
+| Dependency graph  | `qualifier.graph.jsonl` — feeds the propagation engine  |
 
 See [Format](/format/) for the file spec or [CLI](/cli/) for command reference.

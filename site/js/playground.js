@@ -187,11 +187,11 @@
     return createQualifierModule({
       noInitialRun: true,
       instantiateWasm: function (imports, callback) {
-        WebAssembly.instantiate(compiledWasm, imports).then(function (
-          instance,
-        ) {
-          callback(instance);
-        });
+        WebAssembly.instantiate(compiledWasm, imports).then(
+          function (instance) {
+            callback(instance);
+          },
+        );
         return {};
       },
       print: function (text) {
@@ -251,20 +251,12 @@
     lines.push(copperBold("QUALIFIER PLAYGROUND"));
     lines.push("");
     lines.push(bold("Shell builtins:"));
+    lines.push("  " + copperBold(pad("ls", 38, true)) + "List files");
     lines.push(
-      "  " + copperBold(pad("ls", 38, true)) + "List files",
+      "  " + copperBold(pad("cat <file>", 38, true)) + "Display file contents",
     );
-    lines.push(
-      "  " +
-        copperBold(pad("cat <file>", 38, true)) +
-        "Display file contents",
-    );
-    lines.push(
-      "  " + copperBold(pad("clear", 38, true)) + "Clear terminal",
-    );
-    lines.push(
-      "  " + copperBold(pad("help", 38, true)) + "Show this message",
-    );
+    lines.push("  " + copperBold(pad("clear", 38, true)) + "Clear terminal");
+    lines.push("  " + copperBold(pad("help", 38, true)) + "Show this message");
     lines.push("");
     lines.push(bold("CLI commands:"));
     lines.push(
@@ -288,9 +280,7 @@
         "List artifacts by score",
     );
     lines.push(
-      "  " +
-        copperBold(pad("qualifier --help", 38, true)) +
-        "Full CLI usage",
+      "  " + copperBold(pad("qualifier --help", 38, true)) + "Full CLI usage",
     );
     lines.push("");
     lines.push(dim("Files: ") + fileList);
@@ -346,8 +336,7 @@
     // cargo install qualifier — special case for boot
     if (cmd === "cargo" && args[1] === "install" && args[2] === "qualifier") {
       return {
-        output:
-          dim("  qualifier is already installed."),
+        output: dim("  qualifier is already installed."),
       };
     }
 
@@ -625,8 +614,7 @@
     // Show pinned header if scrolled past the original command
     if (viewport && viewport.scrollTop > 30) {
       this.pinnedEl.style.display = "";
-      this.pinnedEl.querySelector(".pinned-text").textContent =
-        this.pinnedText;
+      this.pinnedEl.querySelector(".pinned-text").textContent = this.pinnedText;
     } else {
       this.pinnedEl.style.display = "none";
     }
@@ -1303,10 +1291,7 @@
           this.buffer =
             this.buffer.substring(0, this.cursor) +
             this.buffer.substring(this.cursor + 1);
-          if (
-            this.cursor >= this.buffer.length &&
-            this.buffer.length > 0
-          )
+          if (this.cursor >= this.buffer.length && this.buffer.length > 0)
             this.cursor = this.buffer.length - 1;
           this.refreshLine();
         }
