@@ -27,7 +27,7 @@ this canonical order:
 | 1   | `metabox`    | string | yes      | Envelope version. Always `"1"`.                |
 | 2   | `type`       | string | yes      | Body schema identifier.                        |
 | 3   | `subject`    | string | yes      | What this record is about.                     |
-| 4   | `author`     | string | yes      | Who or what created this record.               |
+| 4   | `issuer`     | string | yes      | Who or what created this record (URI).          |
 | 5   | `created_at` | string | yes      | RFC 3339 timestamp.                            |
 | 6   | `id`         | string | yes      | Content-addressed BLAKE3 hash (see section 3). |
 | 7   | `body`       | object | yes      | Type-specific payload.                         |
@@ -66,10 +66,10 @@ conventions are a project-level decision.
 Examples: `"src/parser.rs"`, `"pkg:npm/lodash@4.17.21"`, `"service/health"`,
 `"https://example.com/api/v2"`.
 
-### 1.4 `author`
+### 1.4 `issuer`
 
-Who or what created this record. Typically an email address, tool identifier,
-or service account name. The string is opaque to Metabox.
+Who or what created this record (URI). Typically a `mailto:` URI, `https:`
+service URL, or other URI-scheme identifier. The string is opaque to Metabox.
 
 ### 1.5 `created_at`
 
@@ -126,7 +126,7 @@ Before serialization:
 ### 3.2 Field Order
 
 1. **Envelope fields** appear in the fixed order defined in section 1:
-   `metabox`, `type`, `subject`, `author`, `created_at`, `id`, `body`.
+   `metabox`, `type`, `subject`, `issuer`, `created_at`, `id`, `body`.
 2. **Body fields** are sorted lexicographically by key. Sorting is recursive:
    nested objects also have their keys sorted lexicographically.
 
@@ -192,22 +192,22 @@ define:
 A Qualifier attestation in Metabox format:
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8","body":{"author_type":"human","kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8","body":{"issuer_type":"human","kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
 ```
 
-Note that body fields are sorted lexicographically: `author_type`, `kind`,
+Note that body fields are sorted lexicographically: `issuer_type`, `kind`,
 `ref`, `score`, `summary`.
 
 A minimal record with an empty body:
 
 ```json
-{"metabox":"1","type":"ping","subject":"service/health","author":"monitor","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6b5a4f9e8d7c6b5a4f9e8d7c6b5a4f9e8d7c6b5a4f9e8d7c6b5a4f9e8","body":{}}
+{"metabox":"1","type":"ping","subject":"service/health","issuer":"https://monitor.example.com","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6b5a4f9e8d7c6b5a4f9e8d7c6b5a4f9e8d7c6b5a4f9e8d7c6b5a4f9e8","body":{}}
 ```
 
 A dependency declaration:
 
 ```json
-{"metabox":"1","type":"dependency","subject":"bin/server","author":"build-system","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b","body":{"depends_on":["lib/auth","lib/http","lib/db"]}}
+{"metabox":"1","type":"dependency","subject":"bin/server","issuer":"https://build.example.com","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b","body":{"depends_on":["lib/auth","lib/http","lib/db"]}}
 ```
 
 ## 7. Qualifier Mapping
@@ -221,7 +221,7 @@ Qualifier v3 records map to Metabox as follows:
 | `v: 3`             | `metabox: "1"`    | Version field changes name/value |
 | `type`             | `type`            | Unchanged                        |
 | `artifact`         | `subject`         | Renamed for generality           |
-| `author`           | `author`          | Unchanged                        |
+| `author`           | `issuer`          | Renamed to issuer (URI-based identity) |
 | `created_at`       | `created_at`      | Unchanged                        |
 | `id`               | `id`              | Unchanged                        |
 
@@ -232,11 +232,11 @@ All non-frame fields move into the `body` object:
 **Attestation** (`type: "attestation"`):
 
 `span`, `kind`, `score`, `summary`, `detail`, `suggested_fix`, `tags`,
-`author_type`, `ref`, `supersedes` → `body.*`
+`issuer_type`, `ref`, `supersedes` → `body.*`
 
 **Epoch** (`type: "epoch"`):
 
-`span`, `score`, `summary`, `refs`, `author_type` → `body.*`
+`span`, `score`, `summary`, `refs`, `issuer_type` → `body.*`
 
 **Dependency** (`type: "dependency"`):
 

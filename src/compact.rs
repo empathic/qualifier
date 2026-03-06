@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 
-use crate::attestation::{self, AuthorType, Epoch, EpochBody, Record};
+use crate::attestation::{self, Epoch, EpochBody, IssuerType, Record};
 use crate::qual_file::QualFile;
 use crate::scoring;
 
@@ -83,11 +83,11 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
             metabox: "1".into(),
             record_type: "epoch".into(),
             subject: subject.to_string(),
-            author: "qualifier/compact".into(),
+            issuer: "urn:qualifier:compact".into(),
             created_at: Utc::now(),
             id: String::new(),
             body: EpochBody {
-                author_type: Some(AuthorType::Tool),
+                issuer_type: Some(IssuerType::Tool),
                 refs,
                 score: raw,
                 span: None,
@@ -131,13 +131,13 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: subject.into(),
-            author: "test@test.com".into(),
+            issuer: "mailto:test@test.com".into(),
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
+                issuer_type: None,
                 detail: None,
                 kind,
                 r#ref: None,
@@ -160,13 +160,13 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: subject.into(),
-            author: "test@test.com".into(),
+            issuer: "mailto:test@test.com".into(),
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
+                issuer_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -260,7 +260,7 @@ mod tests {
 
         let epoch = snapped.records[0].as_epoch().unwrap();
         assert_eq!(epoch.body.score, 30); // 40 + -10
-        assert_eq!(epoch.author, "qualifier/compact");
+        assert_eq!(epoch.issuer, "urn:qualifier:compact");
         assert_eq!(epoch.body.refs.len(), 2);
     }
 

@@ -16,7 +16,7 @@ structured quality signals — and to compute aggregate quality scores that
 propagate through dependency graphs.
 
 Records use the [Metabox](METABOX.md) envelope format: a fixed envelope
-(`metabox`, `type`, `subject`, `author`, `created_at`, `id`) wrapping a
+(`metabox`, `type`, `subject`, `issuer`, `created_at`, `id`) wrapping a
 type-specific `body` object. Records are content-addressed, append-only, and
 human-writable. No server, no database, no PKI required.
 
@@ -73,7 +73,7 @@ Every record uses the [Metabox](METABOX.md) envelope format with these fields:
 | `metabox`    | string   | yes      | Envelope version. MUST be `"1"`. |
 | `type`       | string   | yes*     | Record type identifier (see 2.5). *May be omitted in `.qual` files; defaults to `"attestation"`. |
 | `subject`    | string   | yes      | Qualified name of the target artifact |
-| `author`     | string   | yes      | Who or what created this record |
+| `issuer`     | string   | yes      | Who or what created this record (URI) |
 | `created_at` | string   | yes      | RFC 3339 timestamp |
 | `id`         | string   | yes      | Content-addressed BLAKE3 hash (see 2.8) |
 | `body`       | object   | yes      | Type-specific payload (see 2.6, 3.2, 3.4) |
@@ -212,8 +212,8 @@ Metabox envelope fields (section 2.2) plus body fields:
 
 | Field           | Type     | Required | Description |
 |-----------------|----------|----------|-------------|
-| `author_type`   | string   | no       | Author classification: `human`, `ai`, `tool`, `unknown` |
 | `detail`        | string   | no       | Extended description, markdown allowed |
+| `issuer_type`   | string   | no       | Issuer classification: `human`, `ai`, `tool`, `unknown` |
 | `kind`          | string   | yes      | The type of attestation (see 2.7) |
 | `ref`           | string   | no       | VCS reference pin (e.g., `"git:3aba500"`). Opaque to qualifier. |
 | `score`         | integer  | yes      | Signed quality delta, -100..100 |
@@ -229,14 +229,14 @@ Canonical Form (MCF) serialization order.
 **Example:**
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-25T10:00:00Z","id":"a1b2c3d4...","body":{"author_type":"human","kind":"concern","ref":"git:3aba500","score":-10,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Use the ? operator instead of unwrap()","summary":"Panics on malformed input","tags":["robustness"]}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-25T10:00:00Z","id":"a1b2c3d4...","body":{"issuer_type":"human","kind":"concern","ref":"git:3aba500","score":-10,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Use the ? operator instead of unwrap()","summary":"Panics on malformed input","tags":["robustness"]}}
 ```
 
 **Shorthand (equivalent):** Since `type` defaults to `"attestation"`, it may
 be omitted:
 
 ```json
-{"metabox":"1","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-25T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-10,"summary":"Panics on malformed input"}}
+{"metabox":"1","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-25T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-10,"summary":"Panics on malformed input"}}
 ```
 
 ### 2.7 Attestation Kinds
@@ -303,7 +303,7 @@ obey the following rules:
    - `id` MUST be set to `""` (the empty string).
 
 2. **Envelope field order.** Envelope fields MUST appear in this fixed order:
-   `metabox`, `type`, `subject`, `author`, `created_at`, `id`, `body`.
+   `metabox`, `type`, `subject`, `issuer`, `created_at`, `id`, `body`.
 
 3. **Body field order.** Body fields MUST appear in lexicographic
    (alphabetical) order. Nested objects (like `span`) also have their fields
@@ -332,13 +332,13 @@ See the [Metabox specification](METABOX.md) for the full MCF definition.
 Given an attestation with no optional body fields, the MCF is:
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-30,"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-30,"summary":"Panics on malformed input"}}
 ```
 
-With a span and author_type:
+With a span and issuer_type:
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"author_type":"human","kind":"concern","score":-30,"span":{"start":{"line":42},"end":{"line":42}},"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"issuer_type":"human","kind":"concern","score":-30,"span":{"start":{"line":42},"end":{"line":42}},"summary":"Panics on malformed input"}}
 ```
 
 Note that `span.end` has been materialized (it was omitted in the input,
@@ -401,8 +401,8 @@ All layouts are backwards-compatible and can coexist in the same project.
 **Example (mixed record types):**
 
 ```jsonl
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"author_type":"human","kind":"concern","ref":"git:3aba500","score":-30,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Replace .unwrap() with proper error propagation","summary":"Panics on malformed UTF-8 input","tags":["robustness","error-handling"]}}
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"author_type":"human","kind":"praise","score":40,"summary":"Excellent property-based test coverage","tags":["testing"]}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"issuer_type":"human","kind":"concern","ref":"git:3aba500","score":-30,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Replace .unwrap() with proper error propagation","summary":"Panics on malformed UTF-8 input","tags":["robustness","error-handling"]}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"issuer_type":"human","kind":"praise","score":40,"summary":"Excellent property-based test coverage","tags":["testing"]}}
 ```
 
 ## 3. Record Type Specifications
@@ -421,18 +421,18 @@ Body fields (alphabetical):
 
 | Field         | Type     | Required | Description |
 |---------------|----------|----------|-------------|
-| `author_type` | string   | no       | Always `"tool"` for epochs |
+| `issuer_type` | string   | no       | Always `"tool"` for epochs |
 | `refs`        | string[] | yes      | IDs of the compacted records |
 | `score`       | integer  | yes      | Raw score at compaction time |
 | `span`        | object   | no       | Sub-artifact range |
 | `summary`     | string   | yes      | `"Compacted from N records"` |
 
-Epoch records MUST set `author` to `"qualifier/compact"`.
+Epoch records MUST set `issuer` to `"urn:qualifier:compact"`.
 
 **Example:**
 
 ```json
-{"metabox":"1","type":"epoch","subject":"src/parser.rs","author":"qualifier/compact","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6...","body":{"author_type":"tool","refs":["a1b2...","c3d4..."],"score":10,"summary":"Compacted from 12 records"}}
+{"metabox":"1","type":"epoch","subject":"src/parser.rs","issuer":"urn:qualifier:compact","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6...","body":{"issuer_type":"tool","refs":["a1b2...","c3d4..."],"score":10,"summary":"Compacted from 12 records"}}
 ```
 
 Epoch records are treated as normal scored records by the scoring engine. The
@@ -476,7 +476,7 @@ Body fields:
 **Example:**
 
 ```json
-{"metabox":"1","type":"dependency","subject":"bin/server","author":"build-system","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d...","body":{"depends_on":["lib/auth","lib/http","lib/db"]}}
+{"metabox":"1","type":"dependency","subject":"bin/server","issuer":"https://build.example.com","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d...","body":{"depends_on":["lib/auth","lib/http","lib/db"]}}
 ```
 
 The dependency graph MUST be a DAG. Implementations MUST detect and reject
@@ -504,7 +504,7 @@ New record types are identified by a string value in the `type` field. Types
 defined outside this spec SHOULD use a URI to avoid collisions:
 
 ```json
-{"metabox":"1","type":"https://example.com/qualifier/license/v1","subject":"src/parser.rs","author":"license-scanner","created_at":"...","id":"...","body":{"license":"MIT"}}
+{"metabox":"1","type":"https://example.com/qualifier/license/v1","subject":"src/parser.rs","issuer":"https://license-scanner.example.com","created_at":"...","id":"...","body":{"license":"MIT"}}
 ```
 
 Types defined in this spec use short aliases (`attestation`, `epoch`,
@@ -608,8 +608,8 @@ predicates for use with DSSE signing and Sigstore distribution.
     "span": {"start": {"line": 42}, "end": {"line": 58}},
     "summary": "Panics on malformed input",
     "tags": ["robustness"],
-    "author": "alice@example.com",
-    "author_type": "human",
+    "issuer": "mailto:alice@example.com",
+    "issuer_type": "human",
     "created_at": "2026-02-25T10:00:00Z",
     "ref": "git:3aba500",
     "supersedes": null
@@ -624,7 +624,7 @@ predicates for use with DSSE signing and Sigstore distribution.
 | `subject` | `subject[0].name` |
 | `body.span` | `predicate.span` |
 | `id` | `predicate.qualifier_id` |
-| `author` | `predicate.author` (also DSSE signer) |
+| `issuer` | `predicate.issuer` (also DSSE signer) |
 | All body fields | `predicate.*` |
 
 The in-toto `subject[0].digest` contains the content hash of the artifact
@@ -653,8 +653,8 @@ SARIF v2.1.0 results can be converted to qualifier attestations:
 | `result.ruleId` | `body.kind` (as custom kind) |
 | `result.level` | `body.score` (see mapping below) |
 | `result.message.text` | `body.summary` |
-| `run.tool.driver.name` | `author` |
-| (constant) | `body.author_type: "tool"` |
+| `run.tool.driver.name` | `issuer` |
+| (constant) | `body.issuer_type: "tool"` |
 
 **Level-to-score mapping:**
 
@@ -698,7 +698,7 @@ qualifier attest src/parser.rs \
   --suggested-fix "Use proper error propagation" \
   --tag robustness \
   --tag error-handling \
-  --author "alice@example.com" \
+  --issuer "mailto:alice@example.com" \
   --span 42:58
 ```
 
@@ -725,7 +725,7 @@ given kind (see section 2.7.1).
 `--file <path>` writes the attestation to a specific `.qual` file instead
 of using the default layout resolution.
 
-When `--author` is omitted, defaults to the VCS user identity (see 8.4).
+When `--issuer` is omitted, defaults to the VCS user identity (see 8.4).
 
 ### 6.3 `qualifier show`
 
@@ -808,7 +808,7 @@ Qualifier uses layered configuration. Precedence (highest wins):
 | Key         | CLI flag       | Env var              | Default |
 |-------------|----------------|----------------------|---------|
 | `graph`     | `--graph`      | `QUALIFIER_GRAPH`    | `qualifier.graph.jsonl` |
-| `author`    | `--author`     | `QUALIFIER_AUTHOR`   | VCS identity (see 8.4) |
+| `issuer`    | `--issuer`     | `QUALIFIER_ISSUER`   | VCS identity (see 8.4) |
 | `format`    | `--format`     | `QUALIFIER_FORMAT`   | `human` |
 | `min_score` | `--min-score`  | `QUALIFIER_MIN_SCORE`| `0` |
 
@@ -852,15 +852,15 @@ pub struct Attestation {
     pub metabox: String,                    // always "1"
     pub record_type: String,                // "attestation"
     pub subject: String,
-    pub author: String,
+    pub issuer: String,
     pub created_at: DateTime<Utc>,
     pub id: String,
     pub body: AttestationBody,
 }
 
 pub struct AttestationBody {
-    pub author_type: Option<AuthorType>,
     pub detail: Option<String>,
+    pub issuer_type: Option<IssuerType>,
     pub kind: Kind,
     pub r#ref: Option<String>,
     pub score: i32,
@@ -875,14 +875,14 @@ pub struct Epoch {
     pub metabox: String,                    // always "1"
     pub record_type: String,                // "epoch"
     pub subject: String,
-    pub author: String,
+    pub issuer: String,
     pub created_at: DateTime<Utc>,
     pub id: String,
     pub body: EpochBody,
 }
 
 pub struct EpochBody {
-    pub author_type: Option<AuthorType>,
+    pub issuer_type: Option<IssuerType>,
     pub refs: Vec<String>,
     pub score: i32,
     pub span: Option<Span>,
@@ -893,7 +893,7 @@ pub struct DependencyRecord {
     pub metabox: String,                    // always "1"
     pub record_type: String,                // "dependency"
     pub subject: String,
-    pub author: String,
+    pub issuer: String,
     pub created_at: DateTime<Utc>,
     pub id: String,
     pub body: DependencyBody,
@@ -914,7 +914,7 @@ pub struct Position {
 }
 
 pub enum Kind { Pass, Fail, Blocker, Concern, Praise, Suggestion, Waiver, Custom(String) }
-pub enum AuthorType { Human, Ai, Tool, Unknown }
+pub enum IssuerType { Human, Ai, Tool, Unknown }
 
 pub fn generate_id(attestation: &Attestation) -> String;
 pub fn generate_epoch_id(epoch: &Epoch) -> String;
@@ -971,13 +971,13 @@ Delegates to the underlying VCS blame/annotate command:
 - Mercurial: `hg annotate`
 - Fallback: not available (prints guidance)
 
-### 8.4 Author Defaults
+### 8.4 Issuer Defaults
 
-When `--author` is omitted:
+When `--issuer` is omitted:
 
 - Git: `git config user.email`
 - Mercurial: `hg config ui.username`
-- Fallback: `$USER@localhost`
+- Fallback: `mailto:$USER@localhost`
 
 ## 9. Agent Integration
 
@@ -1014,7 +1014,7 @@ qualifier/
 ├── qualifier.graph.jsonl      # Example / self-hosted graph
 └── src/
     ├── lib.rs                 # Public library API
-    ├── attestation.rs         # Record types, body structs, Kind, AuthorType, validation
+    ├── attestation.rs         # Record types, body structs, Kind, IssuerType, validation
     ├── qual_file.rs           # .qual file parsing, appending, discovery
     ├── graph.rs               # Dependency graph loading, cycle detection
     ├── scoring.rs             # Raw + effective score computation

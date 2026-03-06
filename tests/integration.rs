@@ -12,13 +12,13 @@ fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Attestation
         metabox: "1".into(),
         record_type: "attestation".into(),
         subject: subject.into(),
-        author: "test@test.com".into(),
+        issuer: "mailto:test@test.com".into(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            author_type: None,
+            issuer_type: None,
             detail: None,
             kind,
             r#ref: None,
@@ -44,13 +44,13 @@ fn test_golden_attestation_id() {
         metabox: "1".into(),
         record_type: "attestation".into(),
         subject: "src/parser.rs".into(),
-        author: "alice@example.com".into(),
+        issuer: "mailto:alice@example.com".into(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            author_type: None,
+            issuer_type: None,
             detail: None,
             kind: Kind::Concern,
             r#ref: None,
@@ -65,26 +65,26 @@ fn test_golden_attestation_id() {
     // If this assertion fails, the canonical form or hashing has changed —
     // all existing record IDs in the wild are now broken.
     assert_eq!(
-        att.id, "ea7ddda3cc31412ef7b0499956c2811a9108ce0455d21174c4967c53e54a8b15",
+        att.id, "47aecd917e3f1517158f9d084b00c79d45be849b21e1923da1c7706db94935a1",
         "Golden attestation ID changed! Canonical form or hashing is broken."
     );
 }
 
 #[test]
 fn test_golden_epoch_id() {
-    use qualifier::attestation::{self, AuthorType, Epoch, EpochBody};
+    use qualifier::attestation::{self, Epoch, EpochBody, IssuerType};
 
     let epoch = attestation::finalize_epoch(Epoch {
         metabox: "1".into(),
         record_type: "epoch".into(),
         subject: "src/parser.rs".into(),
-        author: "qualifier/compact".into(),
+        issuer: "urn:qualifier:compact".into(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: EpochBody {
-            author_type: Some(AuthorType::Tool),
+            issuer_type: Some(IssuerType::Tool),
             refs: vec!["aaa".into(), "bbb".into(), "ccc".into()],
             score: 10,
             span: None,
@@ -92,7 +92,7 @@ fn test_golden_epoch_id() {
         },
     });
     assert_eq!(
-        epoch.id, "1e9d1a1177aaf80745176ecb65be5fb8ac8f21fdb35763443e78d84ddfda2b37",
+        epoch.id, "b0be0120b43116b0dbf0132bb6112babcd80ca25cf70caadfb63afeb1acc7993",
         "Golden epoch ID changed! Canonical form or hashing is broken."
     );
 }
@@ -105,7 +105,7 @@ fn test_golden_dependency_id() {
         metabox: "1".into(),
         record_type: "dependency".into(),
         subject: "bin/server".into(),
-        author: "build-system".into(),
+        issuer: "https://build.example.com".into(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
@@ -116,7 +116,7 @@ fn test_golden_dependency_id() {
     }));
     assert_eq!(
         dep.id(),
-        "9fd88c26fbb436740f9483e411279ebeeb1cfa84d06839ede0f4854587f7cf67",
+        "dc97e9f3fa9b8d1f0c70e1a8aae30ddf305dba6f6c1d9720ef7e9d5db57eacfe",
         "Golden dependency ID changed! Canonical form or hashing is broken."
     );
 }
@@ -248,13 +248,13 @@ fn test_compaction_roundtrip_preserves_scores() {
         metabox: "1".into(),
         record_type: "attestation".into(),
         subject: "mod.rs".into(),
-        author: "test@test.com".into(),
+        issuer: "mailto:test@test.com".into(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            author_type: None,
+            issuer_type: None,
             detail: None,
             kind: Kind::Pass,
             r#ref: None,
@@ -328,11 +328,11 @@ fn test_supersession_cycle_detected() {
         metabox: "1".into(),
         record_type: "attestation".into(),
         subject: "x".into(),
-        author: "test".into(),
+        issuer: "mailto:test@test.com".into(),
         created_at: now,
         id: "aaa".into(),
         body: AttestationBody {
-            author_type: None,
+            issuer_type: None,
             detail: None,
             kind: Kind::Pass,
             r#ref: None,
@@ -348,11 +348,11 @@ fn test_supersession_cycle_detected() {
         metabox: "1".into(),
         record_type: "attestation".into(),
         subject: "x".into(),
-        author: "test".into(),
+        issuer: "mailto:test@test.com".into(),
         created_at: now,
         id: "bbb".into(),
         body: AttestationBody {
-            author_type: None,
+            issuer_type: None,
             detail: None,
             kind: Kind::Pass,
             r#ref: None,
@@ -390,13 +390,13 @@ fn test_cross_artifact_supersession_rejected() {
         metabox: "1".into(),
         record_type: "attestation".into(),
         subject: "bar.rs".into(),
-        author: "test@test.com".into(),
+        issuer: "mailto:test@test.com".into(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            author_type: None,
+            issuer_type: None,
             detail: None,
             kind: Kind::Pass,
             r#ref: None,
@@ -422,11 +422,11 @@ fn test_kind_typo_detected_in_validation() {
         metabox: "1".into(),
         record_type: "attestation".into(),
         subject: "x.rs".into(),
-        author: "test@test.com".into(),
+        issuer: "mailto:test@test.com".into(),
         created_at: Utc::now(),
         id: String::new(),
         body: AttestationBody {
-            author_type: None,
+            issuer_type: None,
             detail: None,
             kind: Kind::Custom("pss".into()),
             r#ref: None,
@@ -458,7 +458,7 @@ fn test_parse_qual_file_only_comments() {
 
 #[test]
 fn test_metabox_roundtrip() {
-    use qualifier::attestation::AuthorType;
+    use qualifier::attestation::IssuerType;
 
     let dir = tempfile::tempdir().unwrap();
     let qual_path = dir.path().join("test.rs.qual");
@@ -467,13 +467,13 @@ fn test_metabox_roundtrip() {
         metabox: "1".into(),
         record_type: "attestation".into(),
         subject: "test.rs".into(),
-        author: "alice@example.com".into(),
+        issuer: "mailto:alice@example.com".into(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            author_type: Some(AuthorType::Human),
+            issuer_type: Some(IssuerType::Human),
             detail: None,
             kind: Kind::Praise,
             r#ref: Some("git:3aba500".into()),
@@ -493,14 +493,14 @@ fn test_metabox_roundtrip() {
 
     let parsed = qf.records[0].as_attestation().unwrap();
     assert_eq!(parsed.metabox, "1");
-    assert_eq!(parsed.body.author_type, Some(AuthorType::Human));
+    assert_eq!(parsed.body.issuer_type, Some(IssuerType::Human));
     assert_eq!(parsed.body.r#ref.as_deref(), Some("git:3aba500"));
     assert_eq!(parsed.id, att.id);
 }
 
 #[test]
 fn test_compact_snapshot_produces_epoch() {
-    use qualifier::attestation::AuthorType;
+    use qualifier::attestation::IssuerType;
 
     let records = vec![
         make_record("src/a.rs", Kind::Praise, 40, "good"),
@@ -517,7 +517,7 @@ fn test_compact_snapshot_produces_epoch() {
 
     let epoch = snapped.records[0].as_epoch().unwrap();
     assert_eq!(epoch.metabox, "1");
-    assert_eq!(epoch.body.author_type, Some(AuthorType::Tool));
+    assert_eq!(epoch.body.issuer_type, Some(IssuerType::Tool));
     assert_eq!(epoch.body.score, 30); // 40 + -10
 }
 
@@ -528,13 +528,13 @@ fn test_supersession_with_new_fields() {
         metabox: "1".into(),
         record_type: "attestation".into(),
         subject: "mod.rs".into(),
-        author: "test@test.com".into(),
+        issuer: "mailto:test@test.com".into(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
             .with_timezone(&Utc),
         id: String::new(),
         body: AttestationBody {
-            author_type: Some(qualifier::attestation::AuthorType::Human),
+            issuer_type: Some(qualifier::attestation::IssuerType::Human),
             detail: None,
             kind: Kind::Pass,
             r#ref: Some("git:abc123".into()),

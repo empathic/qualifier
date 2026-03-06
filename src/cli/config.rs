@@ -17,9 +17,9 @@ pub struct Config {
     #[serde(default = "default_graph_path")]
     pub graph: PathBuf,
 
-    /// Default author for attestations.
+    /// Default issuer for attestations.
     #[serde(default)]
-    pub author: Option<String>,
+    pub issuer: Option<String>,
 
     /// Default output format ("human" or "json").
     #[serde(default = "default_format")]
@@ -42,7 +42,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             graph: default_graph_path(),
-            author: None,
+            issuer: None,
             format: default_format(),
             min_score: 0,
         }
@@ -68,7 +68,7 @@ pub fn load(project_root: Option<&Path>) -> Config {
         figment = figment.merge(Toml::file(project_config));
     }
 
-    // Environment variables: QUALIFIER_GRAPH, QUALIFIER_AUTHOR, etc.
+    // Environment variables: QUALIFIER_GRAPH, QUALIFIER_ISSUER, etc.
     figment = figment.merge(Env::prefixed("QUALIFIER_"));
 
     figment.extract().unwrap_or_default()

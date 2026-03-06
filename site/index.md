@@ -192,8 +192,8 @@ Qualifier gives you a structured, VCS-friendly way to **record what you know abo
 A `.qual` file is just JSONL — one attestation per line:
 
 ```jsonl
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-30,"summary":"Panics on malformed UTF-8 input"}}
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent property-based test coverage"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-30,"summary":"Panics on malformed UTF-8 input"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent property-based test coverage"}}
 ```
 
 No parents, no headers, no schema declarations. Each line is self-contained.

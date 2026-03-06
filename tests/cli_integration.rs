@@ -96,8 +96,8 @@ fn test_attest_and_show_roundtrip() {
             "40",
             "--summary",
             "Well structured code",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -148,8 +148,8 @@ fn test_score_json_output_structure() {
             "50",
             "--summary",
             "nice",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -213,8 +213,8 @@ fn test_check_passes_with_good_scores() {
             "50",
             "--summary",
             "excellent",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -237,8 +237,8 @@ fn test_check_fails_with_bad_scores() {
             "--score=-50",
             "--summary",
             "critical issue",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -273,8 +273,8 @@ fn test_attest_blocker_uses_default_score() {
             "blocker",
             "--summary",
             "security vulnerability",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -299,8 +299,8 @@ fn test_attest_pass_uses_default_score() {
             "pass",
             "--summary",
             "looks good",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -325,8 +325,8 @@ fn test_attest_concern_uses_default_score() {
             "concern",
             "--summary",
             "could be better",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -355,8 +355,8 @@ fn test_show_json_output() {
             "30",
             "--summary",
             "clean API",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -408,8 +408,8 @@ fn test_multiple_attestations_accumulate() {
             "30",
             "--summary",
             "good structure",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
     run_qualifier(
@@ -422,8 +422,8 @@ fn test_multiple_attestations_accumulate() {
             "--score=-10",
             "--summary",
             "needs docs",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -456,8 +456,8 @@ fn test_attest_writes_to_directory_qual_by_default() {
             "pass",
             "--summary",
             "looks good",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -487,8 +487,8 @@ fn test_attest_respects_existing_1to1_file() {
             "pass",
             "--summary",
             "looks good",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -522,8 +522,8 @@ fn test_attest_file_flag_override() {
             "praise",
             "--summary",
             "nice",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
             "--file",
             "custom.qual",
         ],
@@ -556,8 +556,8 @@ fn test_show_finds_attestation_in_directory_qual() {
             "30",
             "--summary",
             "clean code",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -586,8 +586,8 @@ fn test_score_accumulates_across_layouts() {
             "40",
             "--summary",
             "good",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -602,8 +602,8 @@ fn test_score_accumulates_across_layouts() {
             "--score=-10",
             "--summary",
             "needs work",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
             "--file",
             "src/mixed.rs.qual",
         ],
@@ -636,8 +636,8 @@ fn test_attest_creates_parent_dirs() {
             "pass",
             "--summary",
             "ok",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -662,8 +662,8 @@ fn test_ls_basic_listing() {
             "50",
             "--summary",
             "great",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
     run_qualifier(
@@ -676,8 +676,8 @@ fn test_ls_basic_listing() {
             "--score=-20",
             "--summary",
             "meh",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -702,8 +702,8 @@ fn test_ls_below_filter() {
             "50",
             "--summary",
             "nice",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
     run_qualifier(
@@ -716,8 +716,8 @@ fn test_ls_below_filter() {
             "--score=-50",
             "--summary",
             "broken",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -743,8 +743,8 @@ fn test_ls_kind_filter() {
             "blocker",
             "--summary",
             "bad",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
     run_qualifier(
@@ -758,8 +758,8 @@ fn test_ls_kind_filter() {
             "30",
             "--summary",
             "good",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -786,8 +786,8 @@ fn test_praise_shows_records() {
             "40",
             "--summary",
             "Well structured code",
-            "--author",
-            "alice@example.com",
+            "--issuer",
+            "mailto:alice@example.com",
         ],
     );
 
@@ -801,8 +801,8 @@ fn test_praise_shows_records() {
             "--score=-10",
             "--summary",
             "Missing error handling",
-            "--author",
-            "bob@example.com",
+            "--issuer",
+            "mailto:bob@example.com",
         ],
     );
 
@@ -826,11 +826,11 @@ fn test_praise_shows_records() {
     );
     assert!(
         stdout.contains("alice@example.com"),
-        "should show author: {stdout}"
+        "should show issuer: {stdout}"
     );
     assert!(
         stdout.contains("bob@example.com"),
-        "should show second author: {stdout}"
+        "should show second issuer: {stdout}"
     );
     assert!(
         stdout.contains("Well structured code"),
@@ -851,8 +851,8 @@ fn test_praise_blame_alias() {
             "pass",
             "--summary",
             "ok",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -881,8 +881,8 @@ fn test_praise_vcs_without_vcs() {
             "pass",
             "--summary",
             "ok",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -958,8 +958,8 @@ fn test_score_overflow_clamped() {
                 "100",
                 "--summary",
                 &format!("praise {i}"),
-                "--author",
-                "test@test.com",
+                "--issuer",
+                "mailto:test@test.com",
             ],
         );
     }
@@ -990,7 +990,7 @@ fn test_attest_batch_validates() {
             "score": 10,
             "summary": ""
         },
-        "author": "test@test.com",
+        "issuer": "mailto:test@test.com",
         "created_at": "2026-01-01T00:00:00Z"
     });
 
@@ -1019,7 +1019,7 @@ fn test_attest_batch_validates() {
 // --- metabox format tests ---
 
 #[test]
-fn test_attest_with_author_type() {
+fn test_attest_with_issuer_type() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, _, code) = run_qualifier(
@@ -1033,21 +1033,21 @@ fn test_attest_with_author_type() {
             "30",
             "--summary",
             "Clean code",
-            "--author",
-            "test@test.com",
-            "--author-type",
+            "--issuer",
+            "mailto:test@test.com",
+            "--issuer-type",
             "human",
         ],
     );
 
-    assert_eq!(code, 0, "attest with --author-type should succeed");
+    assert_eq!(code, 0, "attest with --issuer-type should succeed");
 
-    // Read the .qual file and verify author_type is present
+    // Read the .qual file and verify issuer_type is present
     let qual_path = dir.path().join(".qual");
     let content = std::fs::read_to_string(&qual_path).unwrap();
     assert!(
-        content.contains("\"author_type\":\"human\""),
-        "attestation should contain author_type: {content}"
+        content.contains("\"issuer_type\":\"human\""),
+        "attestation should contain issuer_type: {content}"
     );
 }
 
@@ -1066,8 +1066,8 @@ fn test_attest_with_ref() {
             "20",
             "--summary",
             "Looks good",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
             "--ref",
             "git:3aba500",
         ],
@@ -1098,8 +1098,8 @@ fn test_new_attestations_are_metabox() {
             "50",
             "--summary",
             "nice",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
         ],
     );
 
@@ -1118,7 +1118,7 @@ fn test_new_attestations_are_metabox() {
 }
 
 #[test]
-fn test_attest_invalid_author_type() {
+fn test_attest_invalid_issuer_type() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, stderr, code) = run_qualifier(
@@ -1130,17 +1130,17 @@ fn test_attest_invalid_author_type() {
             "pass",
             "--summary",
             "ok",
-            "--author",
-            "test@test.com",
-            "--author-type",
+            "--issuer",
+            "mailto:test@test.com",
+            "--issuer-type",
             "banana",
         ],
     );
 
-    assert_ne!(code, 0, "invalid author_type should fail");
+    assert_ne!(code, 0, "invalid issuer_type should fail");
     assert!(
-        stderr.contains("author_type") || stderr.contains("banana"),
-        "error should mention invalid author_type: {stderr}"
+        stderr.contains("issuer_type") || stderr.contains("banana"),
+        "error should mention invalid issuer_type: {stderr}"
     );
 }
 
@@ -1160,8 +1160,8 @@ fn test_attest_with_span() {
             "--score=-10",
             "--summary",
             "Problematic function",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
             "--span",
             "42:58",
         ],
@@ -1199,8 +1199,8 @@ fn test_attest_with_span_and_columns() {
             "--score=-10",
             "--summary",
             "Bad code",
-            "--author",
-            "test@test.com",
+            "--issuer",
+            "mailto:test@test.com",
             "--span",
             "10.5:20.80",
         ],

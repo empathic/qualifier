@@ -242,13 +242,13 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: subject.into(),
-            author: "test@test.com".into(),
+            issuer: "mailto:test@test.com".into(),
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
+                issuer_type: None,
                 detail: None,
                 kind,
                 r#ref: None,
@@ -271,13 +271,13 @@ mod tests {
             metabox: "1".into(),
             record_type: "attestation".into(),
             subject: subject.into(),
-            author: "test@test.com".into(),
+            issuer: "mailto:test@test.com".into(),
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
             body: AttestationBody {
-                author_type: None,
+                issuer_type: None,
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,

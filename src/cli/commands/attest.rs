@@ -3,7 +3,7 @@ use clap::Args as ClapArgs;
 use std::io::{self, BufRead};
 use std::path::Path;
 
-use crate::attestation::{self, Attestation, AttestationBody, AuthorType, Kind, Record};
+use crate::attestation::{self, Attestation, AttestationBody, IssuerType, Kind, Record};
 use crate::qual_file;
 
 #[derive(ClapArgs)]
@@ -35,13 +35,13 @@ pub struct Args {
     #[arg(long = "tag")]
     pub tags: Vec<String>,
 
-    /// Author identity (defaults to VCS user)
+    /// Issuer identity URI (defaults to VCS user email with mailto:)
     #[arg(long)]
-    pub author: Option<String>,
+    pub issuer: Option<String>,
 
-    /// Author type (human, ai, tool, unknown)
+    /// Issuer type (human, ai, tool, unknown)
     #[arg(long)]
-    pub author_type: Option<String>,
+    pub issuer_type: Option<String>,
 
     /// Sub-artifact span (e.g., "42", "42:58", "42.5:58.80")
     #[arg(long)]
@@ -91,13 +91,14 @@ pub fn run(args: Args) -> crate::Result<()> {
         }
     };
 
-    let author = args
-        .author
-        .or_else(detect_author)
-        .unwrap_or_else(|| "unknown".into());
+    let issuer = normalize_issuer_uri(
+        args.issuer
+            .or_else(detect_issuer)
+            .unwrap_or_else(|| "mailto:unknown@localhost".into()),
+    );
 
-    let author_type = match &args.author_type {
-        Some(s) => Some(s.parse::<AuthorType>().map_err(crate::Error::Validation)?),
+    let issuer_type = match &args.issuer_type {
+        Some(s) => Some(s.parse::<IssuerType>().map_err(crate::Error::Validation)?),
         None => None,
     };
 
@@ -112,11 +113,11 @@ pub fn run(args: Args) -> crate::Result<()> {
         metabox: "1".into(),
         record_type: "attestation".into(),
         subject,
-        author,
+        issuer,
         created_at: Utc::now(),
         id: String::new(),
         body: AttestationBody {
-            author_type,
+            issuer_type,
             detail: args.detail,
             kind,
             r#ref: args.r#ref,
@@ -203,7 +204,7 @@ fn run_batch() -> crate::Result<()> {
     Ok(())
 }
 
-fn detect_author() -> Option<String> {
+fn detect_issuer() -> Option<String> {
     // Try git first
     std::process::Command::new("git")
         .args(["config", "user.email"])
@@ -212,6 +213,7 @@ fn detect_author() -> Option<String> {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty())
+        .map(|email| format!("mailto:{email}"))
         .or_else(|| {
             // Try hg
             std::process::Command::new("hg")
@@ -221,10 +223,21 @@ fn detect_author() -> Option<String> {
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .filter(|s| !s.is_empty())
+                .map(|email| format!("mailto:{email}"))
         })
         .or_else(|| {
             // Fallback: $USER@localhost
             let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
-            Some(format!("{user}@localhost"))
+            Some(format!("mailto:{user}@localhost"))
         })
+}
+
+/// Normalize an issuer value to a URI. Bare emails get `mailto:` prefix;
+/// values already containing `:` are assumed to be valid URIs.
+fn normalize_issuer_uri(issuer: String) -> String {
+    if issuer.contains(':') {
+        issuer
+    } else {
+        format!("mailto:{issuer}")
+    }
 }

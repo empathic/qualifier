@@ -14,8 +14,8 @@ Append-only JSONL. One record per line. VCS-native by design.
 A `.qual` file is a UTF-8 encoded file where each line is a complete JSON object representing one record. This is JSONL (JSON Lines).
 
 ```jsonl
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"author_type":"human","kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"author_type":"human","kind":"praise","score":40,"summary":"Excellent test coverage"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"issuer_type":"human","kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"issuer_type":"human","kind":"praise","score":40,"summary":"Excellent test coverage"}}
 ```
 
 ## Record types
@@ -39,7 +39,7 @@ All record types share a common **Metabox envelope** — a fixed set of fields t
 | `metabox`    | string  | yes      | Envelope version (always `"1"`)                  |
 | `type`       | string  | yes*     | Record type identifier. *Defaults to `"attestation"`. |
 | `subject`    | string  | yes      | Qualified name of the target artifact            |
-| `author`     | string  | yes      | Who or what created this record                  |
+| `issuer`     | string  | yes      | Who or what created this record (URI)            |
 | `created_at` | string  | yes      | RFC 3339 timestamp                               |
 | `id`         | string  | yes      | Content-addressed BLAKE3 hash                    |
 | `body`       | object  | yes      | Type-specific payload                            |
@@ -50,8 +50,8 @@ Attestations are the primary record type. Envelope fields plus body:
 
 | Field           | Type     | Required | Description                                      |
 | --------------- | -------- | -------- | ------------------------------------------------ |
-| `author_type`   | enum     | no       | Author classification: human, ai, tool, unknown  |
 | `detail`        | string   | no       | Extended description (markdown allowed)          |
+| `issuer_type`   | enum     | no       | Issuer classification: human, ai, tool, unknown  |
 | `kind`          | enum     | yes      | Type of attestation (see below)                  |
 | `ref`           | string   | no       | VCS ref pin (e.g. "git:3aba500"), opaque string  |
 | `score`         | integer  | yes      | Signed quality delta, -100..100                  |
@@ -83,16 +83,16 @@ An **epoch** is a compaction snapshot — a synthetic record that replaces a set
 
 | Field         | Type     | Required | Description                                       |
 | ------------- | -------- | -------- | ------------------------------------------------- |
-| `author_type` | enum     | no       | Always `"tool"` for epochs                        |
+| `issuer_type` | enum     | no       | Always `"tool"` for epochs                        |
 | `refs`        | string[] | yes      | IDs of the compacted records                      |
 | `score`       | integer  | yes      | Net score at compaction time                      |
 | `span`        | object   | no       | Sub-artifact range                                |
 | `summary`     | string   | yes      | `"Compacted from N records"`                      |
 
-Epoch `author` is always `"qualifier/compact"`.
+Epoch `issuer` is always `"urn:qualifier:compact"`.
 
 ```json
-{"metabox":"1","type":"epoch","subject":"src/parser.rs","author":"qualifier/compact","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6...","body":{"author_type":"tool","refs":["a1b2...","c3d4..."],"score":10,"summary":"Compacted from 12 records"}}
+{"metabox":"1","type":"epoch","subject":"src/parser.rs","issuer":"urn:qualifier:compact","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6...","body":{"issuer_type":"tool","refs":["a1b2...","c3d4..."],"score":10,"summary":"Compacted from 12 records"}}
 ```
 
 ## Dependency schema
@@ -104,7 +104,7 @@ A **dependency** record declares directed edges from one subject to others. Enve
 | `depends_on` | string[] | yes      | Subject names this subject depends on              |
 
 ```json
-{"metabox":"1","type":"dependency","subject":"bin/server","author":"build-system","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d...","body":{"depends_on":["lib/auth","lib/http"]}}
+{"metabox":"1","type":"dependency","subject":"bin/server","issuer":"https://build.example.com","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d...","body":{"depends_on":["lib/auth","lib/http"]}}
 ```
 
 Dependency records don't carry scores. They feed the propagation engine that computes effective scores.
@@ -118,10 +118,10 @@ Attestations are immutable. To "update" a signal, write a new attestation with `
 Record IDs are BLAKE3 hashes of the **Metabox Canonical Form (MCF)** — a deterministic JSON serialization with fixed envelope field order, alphabetical body field order, no whitespace, and `id` set to `""` during hashing.
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","author":"alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-30,"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-30,"summary":"Panics on malformed input"}}
 ```
 
-Optional fields (`span`, `detail`, `suggested_fix`, `tags`, `author_type`, `ref`, `supersedes`) are omitted from the canonical form when absent — the hash changes only when a field is actually present.
+Optional fields (`span`, `detail`, `suggested_fix`, `tags`, `issuer_type`, `ref`, `supersedes`) are omitted from the canonical form when absent — the hash changes only when a field is actually present.
 
 This ensures identical records always produce identical IDs, regardless of implementation language.
 
