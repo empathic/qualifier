@@ -561,17 +561,19 @@
   };
 
   TermShell.prototype.refreshLine = function () {
-    // Clear current line after prompt and rewrite
-    this.term.write("\r");
-    this.term.write(copperBold("qual") + " " + pencil("$") + " ");
-    this.term.write(this.buffer);
-    // Clear from cursor to end of line
-    this.term.write("\x1b[K");
-    // Move cursor to correct position
+    var out =
+      "\r" +
+      copperBold("qual") +
+      " " +
+      pencil("$") +
+      " " +
+      this.buffer +
+      "\x1b[K";
     var cursorOffset = this.buffer.length - this.cursor;
     if (cursorOffset > 0) {
-      this.term.write("\x1b[" + cursorOffset + "D");
+      out += "\x1b[" + cursorOffset + "D";
     }
+    this.term.write(out);
   };
 
   TermShell.prototype.insertChar = function (ch) {
