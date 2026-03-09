@@ -416,7 +416,8 @@
     this.savedLine = "";
     this.buffer = "";
     this.cursor = 0;
-    this.mode = "vi"; // default: vi
+    var isMobile = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+    this.mode = isMobile ? "emacs" : "vi";
     this.viMode = "insert"; // insert or command
     this.killRing = "";
     this.viOperator = null;
@@ -473,10 +474,18 @@
     };
     window.addEventListener("resize", this._resizeHandler);
 
+    // Mobile: tap terminal to open virtual keyboard
+    if (isMobile) {
+      container.addEventListener("touchstart", function () {
+        self.term.focus();
+      });
+    }
+
     // --- Mode toggle button ---
     this.modeBtn = document.createElement("button");
-    this.modeBtn.className = "playground-mode-toggle vi";
-    this.modeBtn.textContent = "VI";
+    this.modeBtn.className =
+      "playground-mode-toggle" + (this.mode === "vi" ? " vi" : "");
+    this.modeBtn.textContent = this.mode === "vi" ? "VI" : "EMACS";
     this.modeBtn.addEventListener("click", function () {
       self.setMode(self.mode === "vi" ? "emacs" : "vi");
     });
@@ -492,32 +501,10 @@
       '<span class="pinned-text"></span>';
     container.appendChild(this.pinnedEl);
 
-    // --- Key handler ---
-    this.term.onKey(function (e) {
-      if (self.busy) return;
-      self.handleKey(e.key, e.domEvent);
-    });
-
-    // --- Paste handler ---
+    // --- Input handler (onData handles all input: keyboard, mobile, paste) ---
     this.term.onData(function (data) {
       if (self.busy) return;
-      // onData fires for paste events (multi-char data) and
-      // other input sources. We handle paste only when length > 1
-      // to avoid double-handling single keypresses.
-      if (data.length > 1 && data.indexOf("\x1b") === -1) {
-        // Switch to insert mode if in vi command mode
-        if (self.mode === "vi" && self.viMode === "command") {
-          self.viEnterInsert();
-        }
-        for (var i = 0; i < data.length; i++) {
-          var ch = data[i];
-          if (ch === "\r" || ch === "\n") {
-            self.submit();
-            return;
-          }
-          self.insertChar(ch);
-        }
-      }
+      self.handleData(data);
     });
   }
 
@@ -574,17 +561,19 @@
   };
 
   TermShell.prototype.refreshLine = function () {
-    // Clear current line after prompt and rewrite
-    this.term.write("\r");
-    this.term.write(copperBold("qual") + " " + pencil("$") + " ");
-    this.term.write(this.buffer);
-    // Clear from cursor to end of line
-    this.term.write("\x1b[K");
-    // Move cursor to correct position
+    var out =
+      "\r" +
+      copperBold("qual") +
+      " " +
+      pencil("$") +
+      " " +
+      this.buffer +
+      "\x1b[K";
     var cursorOffset = this.buffer.length - this.cursor;
     if (cursorOffset > 0) {
-      this.term.write("\x1b[" + cursorOffset + "D");
+      out += "\x1b[" + cursorOffset + "D";
     }
+    this.term.write(out);
   };
 
   TermShell.prototype.insertChar = function (ch) {
@@ -706,368 +695,251 @@
     this.refreshLine();
   };
 
-  // --- Key dispatch ---
-  TermShell.prototype.handleKey = function (key, domEvent) {
+  // --- Data dispatch ---
+  // All input comes through onData as terminal byte sequences:
+  //   Ctrl+A = \x01 ... Ctrl+Z = \x1a
+  //   Enter = \r, Backspace = \x7f, Tab = \t, Escape = \x1b
+  //   Arrows = \x1b[A/B/C/D, Home = \x1b[H, End = \x1b[F, Delete = \x1b[3~
+  //   Alt+key = \x1b + char
+  //   Paste = multiple printable chars at once
+
+  TermShell.prototype.handleData = function (data) {
+    // Multi-char non-escape data = paste
+    if (data.length > 1 && data[0] !== "\x1b") {
+      if (this.mode === "vi" && this.viMode === "command") {
+        this.viEnterInsert();
+      }
+      for (var i = 0; i < data.length; i++) {
+        var ch = data[i];
+        if (ch === "\r" || ch === "\n") {
+          this.submit();
+          return;
+        }
+        this.insertChar(ch);
+      }
+      return;
+    }
+
     if (this.mode === "emacs") {
-      this.handleEmacs(key, domEvent, domEvent.code);
+      this.handleEmacs(data);
+    } else if (this.viMode === "insert") {
+      this.handleViInsert(data);
     } else {
-      this.handleVi(key, domEvent, domEvent.code);
+      this.handleViCommand(data);
     }
   };
 
   // --- Emacs bindings ---
-  TermShell.prototype.handleEmacs = function (key, domEvent, code) {
-    var ctrl = domEvent.ctrlKey;
-    var alt = domEvent.altKey || domEvent.metaKey;
-
-    // Enter
-    if (key === "\r") {
-      this.submit();
-      return;
-    }
-
-    // Ctrl+C
-    if (ctrl && (code === "KeyC" || key === "\x03")) {
-      this.term.write("^C\r\n");
-      this.prompt();
-      return;
-    }
-
-    // Ctrl+A — beginning of line
-    if (ctrl && code === "KeyA") {
-      this.cursor = 0;
-      this.refreshLine();
-      return;
-    }
-
-    // Ctrl+E — end of line
-    if (ctrl && code === "KeyE") {
-      this.cursor = this.buffer.length;
-      this.refreshLine();
-      return;
-    }
-
-    // Ctrl+B — back one char
-    if (ctrl && code === "KeyB") {
-      if (this.cursor > 0) {
-        this.cursor--;
+  TermShell.prototype.handleEmacs = function (data) {
+    switch (data) {
+      case "\r":
+        this.submit();
+        return;
+      case "\x03": // Ctrl+C
+        this.term.write("^C\r\n");
+        this.prompt();
+        return;
+      case "\x01": // Ctrl+A — beginning of line
+        this.cursor = 0;
         this.refreshLine();
-      }
-      return;
-    }
-
-    // Ctrl+F — forward one char
-    if (ctrl && code === "KeyF") {
-      if (this.cursor < this.buffer.length) {
-        this.cursor++;
+        return;
+      case "\x05": // Ctrl+E — end of line
+        this.cursor = this.buffer.length;
         this.refreshLine();
-      }
-      return;
-    }
-
-    // Ctrl+D — delete char under cursor (or EOF if empty)
-    if (ctrl && code === "KeyD") {
-      if (this.buffer.length === 0) return;
-      if (this.cursor < this.buffer.length) {
-        this.buffer =
-          this.buffer.substring(0, this.cursor) +
-          this.buffer.substring(this.cursor + 1);
-        this.refreshLine();
-      }
-      return;
-    }
-
-    // Ctrl+H — backspace
-    if (ctrl && code === "KeyH") {
-      if (this.cursor > 0) {
-        this.buffer =
-          this.buffer.substring(0, this.cursor - 1) +
-          this.buffer.substring(this.cursor);
-        this.cursor--;
-        this.refreshLine();
-      }
-      return;
-    }
-
-    // Ctrl+K — kill to end of line
-    if (ctrl && code === "KeyK") {
-      this.killRing = this.buffer.substring(this.cursor);
-      this.buffer = this.buffer.substring(0, this.cursor);
-      this.refreshLine();
-      return;
-    }
-
-    // Ctrl+U — kill to beginning of line
-    if (ctrl && code === "KeyU") {
-      this.killRing = this.buffer.substring(0, this.cursor);
-      this.buffer = this.buffer.substring(this.cursor);
-      this.cursor = 0;
-      this.refreshLine();
-      return;
-    }
-
-    // Ctrl+W — kill word backward
-    if (ctrl && code === "KeyW") {
-      var wbLeft = wordBoundaryLeft(this.buffer, this.cursor);
-      this.killRange(wbLeft, this.cursor);
-      return;
-    }
-
-    // Ctrl+Y — yank (paste from kill ring)
-    if (ctrl && code === "KeyY") {
-      if (this.killRing) {
-        this.buffer =
-          this.buffer.substring(0, this.cursor) +
-          this.killRing +
-          this.buffer.substring(this.cursor);
-        this.cursor += this.killRing.length;
-        this.refreshLine();
-      }
-      return;
-    }
-
-    // Ctrl+T — transpose characters
-    if (ctrl && code === "KeyT") {
-      if (this.cursor > 0 && this.buffer.length >= 2) {
-        var pos = this.cursor;
-        if (pos === this.buffer.length) pos--;
-        if (pos > 0) {
-          var chars = this.buffer.split("");
-          var tmp = chars[pos - 1];
-          chars[pos - 1] = chars[pos];
-          chars[pos] = tmp;
-          this.buffer = chars.join("");
-          this.cursor = pos + 1;
+        return;
+      case "\x02": // Ctrl+B — back one char
+      case "\x1b[D": // Left arrow
+        if (this.cursor > 0) {
+          this.cursor--;
           this.refreshLine();
         }
-      }
-      return;
-    }
-
-    // Ctrl+P — history prev
-    if (ctrl && code === "KeyP") {
-      this.historyPrev();
-      return;
-    }
-
-    // Ctrl+N — history next
-    if (ctrl && code === "KeyN") {
-      this.historyNext();
-      return;
-    }
-
-    // Alt+B — word backward
-    if (alt && code === "KeyB") {
-      this.cursor = wordBoundaryLeft(this.buffer, this.cursor);
-      this.refreshLine();
-      return;
-    }
-
-    // Alt+F — word forward
-    if (alt && code === "KeyF") {
-      this.cursor = wordBoundaryRight(this.buffer, this.cursor);
-      this.refreshLine();
-      return;
-    }
-
-    // Alt+D — kill word forward
-    if (alt && code === "KeyD") {
-      var wbRight = wordBoundaryRight(this.buffer, this.cursor);
-      this.killRange(this.cursor, wbRight);
-      return;
-    }
-
-    // Arrow keys
-    if (code === "ArrowLeft") {
-      if (this.cursor > 0) {
-        this.cursor--;
+        return;
+      case "\x06": // Ctrl+F — forward one char
+      case "\x1b[C": // Right arrow
+        if (this.cursor < this.buffer.length) {
+          this.cursor++;
+          this.refreshLine();
+        }
+        return;
+      case "\x04": // Ctrl+D — delete char under cursor
+        if (this.buffer.length === 0) return;
+        if (this.cursor < this.buffer.length) {
+          this.buffer =
+            this.buffer.substring(0, this.cursor) +
+            this.buffer.substring(this.cursor + 1);
+          this.refreshLine();
+        }
+        return;
+      case "\x08": // Ctrl+H — backspace
+      case "\x7f": // Backspace
+        if (this.cursor > 0) {
+          this.buffer =
+            this.buffer.substring(0, this.cursor - 1) +
+            this.buffer.substring(this.cursor);
+          this.cursor--;
+          this.refreshLine();
+        }
+        return;
+      case "\x0b": // Ctrl+K — kill to end of line
+        this.killRing = this.buffer.substring(this.cursor);
+        this.buffer = this.buffer.substring(0, this.cursor);
         this.refreshLine();
-      }
-      return;
-    }
-    if (code === "ArrowRight") {
-      if (this.cursor < this.buffer.length) {
-        this.cursor++;
+        return;
+      case "\x15": // Ctrl+U — kill to beginning of line
+        this.killRing = this.buffer.substring(0, this.cursor);
+        this.buffer = this.buffer.substring(this.cursor);
+        this.cursor = 0;
         this.refreshLine();
-      }
-      return;
-    }
-    if (code === "ArrowUp") {
-      this.historyPrev();
-      return;
-    }
-    if (code === "ArrowDown") {
-      this.historyNext();
-      return;
-    }
-
-    // Home / End
-    if (code === "Home") {
-      this.cursor = 0;
-      this.refreshLine();
-      return;
-    }
-    if (code === "End") {
-      this.cursor = this.buffer.length;
-      this.refreshLine();
-      return;
-    }
-
-    // Backspace
-    if (key === "\x7f" || code === "Backspace") {
-      if (this.cursor > 0) {
-        this.buffer =
-          this.buffer.substring(0, this.cursor - 1) +
-          this.buffer.substring(this.cursor);
-        this.cursor--;
+        return;
+      case "\x17": // Ctrl+W — kill word backward
+        this.killRange(wordBoundaryLeft(this.buffer, this.cursor), this.cursor);
+        return;
+      case "\x19": // Ctrl+Y — yank
+        if (this.killRing) {
+          this.buffer =
+            this.buffer.substring(0, this.cursor) +
+            this.killRing +
+            this.buffer.substring(this.cursor);
+          this.cursor += this.killRing.length;
+          this.refreshLine();
+        }
+        return;
+      case "\x14": // Ctrl+T — transpose characters
+        if (this.cursor > 0 && this.buffer.length >= 2) {
+          var pos = this.cursor;
+          if (pos === this.buffer.length) pos--;
+          if (pos > 0) {
+            var chars = this.buffer.split("");
+            var tmp = chars[pos - 1];
+            chars[pos - 1] = chars[pos];
+            chars[pos] = tmp;
+            this.buffer = chars.join("");
+            this.cursor = pos + 1;
+            this.refreshLine();
+          }
+        }
+        return;
+      case "\x10": // Ctrl+P — history prev
+      case "\x1b[A": // Up arrow
+        this.historyPrev();
+        return;
+      case "\x0e": // Ctrl+N — history next
+      case "\x1b[B": // Down arrow
+        this.historyNext();
+        return;
+      case "\x1bb": // Alt+B — word backward
+        this.cursor = wordBoundaryLeft(this.buffer, this.cursor);
         this.refreshLine();
-      }
-      return;
-    }
-
-    // Delete
-    if (code === "Delete") {
-      if (this.cursor < this.buffer.length) {
-        this.buffer =
-          this.buffer.substring(0, this.cursor) +
-          this.buffer.substring(this.cursor + 1);
+        return;
+      case "\x1bf": // Alt+F — word forward
+        this.cursor = wordBoundaryRight(this.buffer, this.cursor);
         this.refreshLine();
-      }
-      return;
+        return;
+      case "\x1bd": // Alt+D — kill word forward
+        this.killRange(
+          this.cursor,
+          wordBoundaryRight(this.buffer, this.cursor),
+        );
+        return;
+      case "\x1b[H": // Home
+      case "\x1bOH":
+        this.cursor = 0;
+        this.refreshLine();
+        return;
+      case "\x1b[F": // End
+      case "\x1bOF":
+        this.cursor = this.buffer.length;
+        this.refreshLine();
+        return;
+      case "\x1b[3~": // Delete
+        if (this.cursor < this.buffer.length) {
+          this.buffer =
+            this.buffer.substring(0, this.cursor) +
+            this.buffer.substring(this.cursor + 1);
+          this.refreshLine();
+        }
+        return;
+      case "\t": // Tab — ignore
+      case "\x1b": // Escape — ignore in emacs mode
+        return;
     }
-
-    // Tab — ignore
-    if (key === "\t") return;
-
-    // Escape — ignore in emacs mode
-    if (key === "\x1b") return;
 
     // Regular printable characters
-    if (key.length === 1 && !ctrl && !alt && key >= " ") {
-      this.insertChar(key);
-    }
-  };
-
-  // --- Vi dispatch ---
-  TermShell.prototype.handleVi = function (key, domEvent, code) {
-    if (this.viMode === "insert") {
-      this.handleViInsert(key, domEvent, code);
-    } else {
-      this.handleViCommand(key, domEvent, code);
+    if (data.length === 1 && data >= " ") {
+      this.insertChar(data);
     }
   };
 
   // --- Vi insert mode ---
-  TermShell.prototype.handleViInsert = function (key, domEvent, code) {
-    var ctrl = domEvent.ctrlKey;
-
-    // Enter
-    if (key === "\r") {
-      this.submit();
-      return;
-    }
-
-    // Escape — enter command mode
-    if (key === "\x1b" || code === "Escape") {
-      this.viEnterCommand();
-      return;
-    }
-
-    // Ctrl+C
-    if (ctrl && (code === "KeyC" || key === "\x03")) {
-      this.term.write("^C\r\n");
-      this.prompt();
-      return;
-    }
-
-    // Ctrl+U — kill line
-    if (ctrl && code === "KeyU") {
-      this.killRing = this.buffer.substring(0, this.cursor);
-      this.buffer = this.buffer.substring(this.cursor);
-      this.cursor = 0;
-      this.refreshLine();
-      return;
-    }
-
-    // Ctrl+W — kill word backward
-    if (ctrl && code === "KeyW") {
-      var wb = wordBoundaryLeft(this.buffer, this.cursor);
-      this.killRange(wb, this.cursor);
-      return;
-    }
-
-    // Ctrl+H — backspace
-    if (ctrl && code === "KeyH") {
-      if (this.cursor > 0) {
-        this.buffer =
-          this.buffer.substring(0, this.cursor - 1) +
-          this.buffer.substring(this.cursor);
-        this.cursor--;
+  TermShell.prototype.handleViInsert = function (data) {
+    switch (data) {
+      case "\r":
+        this.submit();
+        return;
+      case "\x1b": // Escape — enter command mode
+        this.viEnterCommand();
+        return;
+      case "\x03": // Ctrl+C
+        this.term.write("^C\r\n");
+        this.prompt();
+        return;
+      case "\x15": // Ctrl+U — kill to beginning of line
+        this.killRing = this.buffer.substring(0, this.cursor);
+        this.buffer = this.buffer.substring(this.cursor);
+        this.cursor = 0;
         this.refreshLine();
-      }
-      return;
+        return;
+      case "\x17": // Ctrl+W — kill word backward
+        this.killRange(wordBoundaryLeft(this.buffer, this.cursor), this.cursor);
+        return;
+      case "\x08": // Ctrl+H — backspace
+      case "\x7f": // Backspace
+        if (this.cursor > 0) {
+          this.buffer =
+            this.buffer.substring(0, this.cursor - 1) +
+            this.buffer.substring(this.cursor);
+          this.cursor--;
+          this.refreshLine();
+        }
+        return;
+      case "\x1b[D": // Left arrow
+        if (this.cursor > 0) {
+          this.cursor--;
+          this.refreshLine();
+        }
+        return;
+      case "\x1b[C": // Right arrow
+        if (this.cursor < this.buffer.length) {
+          this.cursor++;
+          this.refreshLine();
+        }
+        return;
+      case "\x1b[A": // Up arrow
+        this.historyPrev();
+        return;
+      case "\x1b[B": // Down arrow
+        this.historyNext();
+        return;
+      case "\x1b[3~": // Delete
+        if (this.cursor < this.buffer.length) {
+          this.buffer =
+            this.buffer.substring(0, this.cursor) +
+            this.buffer.substring(this.cursor + 1);
+          this.refreshLine();
+        }
+        return;
+      case "\t": // Tab — ignore
+        return;
     }
-
-    // Arrow keys
-    if (code === "ArrowLeft") {
-      if (this.cursor > 0) {
-        this.cursor--;
-        this.refreshLine();
-      }
-      return;
-    }
-    if (code === "ArrowRight") {
-      if (this.cursor < this.buffer.length) {
-        this.cursor++;
-        this.refreshLine();
-      }
-      return;
-    }
-    if (code === "ArrowUp") {
-      this.historyPrev();
-      return;
-    }
-    if (code === "ArrowDown") {
-      this.historyNext();
-      return;
-    }
-
-    // Backspace
-    if (key === "\x7f" || code === "Backspace") {
-      if (this.cursor > 0) {
-        this.buffer =
-          this.buffer.substring(0, this.cursor - 1) +
-          this.buffer.substring(this.cursor);
-        this.cursor--;
-        this.refreshLine();
-      }
-      return;
-    }
-
-    // Delete
-    if (code === "Delete") {
-      if (this.cursor < this.buffer.length) {
-        this.buffer =
-          this.buffer.substring(0, this.cursor) +
-          this.buffer.substring(this.cursor + 1);
-        this.refreshLine();
-      }
-      return;
-    }
-
-    // Tab — ignore
-    if (key === "\t") return;
 
     // Regular printable chars
-    if (key.length === 1 && !ctrl && key >= " ") {
-      this.insertChar(key);
+    if (data.length === 1 && data >= " ") {
+      this.insertChar(data);
     }
   };
 
   // --- Vi command mode ---
-  TermShell.prototype.handleViCommand = function (key, domEvent, code) {
-    var ctrl = domEvent.ctrlKey;
-
+  TermShell.prototype.handleViCommand = function (data) {
     // If there's a pending operator (d or c), handle the motion
     if (this.viOperator) {
       var op = this.viOperator;
@@ -1075,7 +947,7 @@
       var from = this.cursor;
       var to = from;
 
-      switch (key) {
+      switch (data) {
         case "w":
           to = wordBoundaryRight(this.buffer, from);
           break;
@@ -1084,7 +956,7 @@
           break;
         case "e":
           to = wordEndRight(this.buffer, from);
-          if (op === "d" || op === "c") to++; // delete through end
+          if (op === "d" || op === "c") to++;
           break;
         case "W":
           to = WORDBoundaryRight(this.buffer, from);
@@ -1113,7 +985,6 @@
           to = Math.min(this.buffer.length, from + 1);
           break;
         case "d":
-          // dd — kill whole line
           if (op === "d") {
             this.killRing = this.buffer;
             this.buffer = "";
@@ -1123,7 +994,6 @@
           }
           break;
         case "c":
-          // cc — change whole line
           if (op === "c") {
             this.killRing = this.buffer;
             this.buffer = "";
@@ -1134,7 +1004,6 @@
           }
           break;
         default:
-          // Unknown motion — cancel
           return;
       }
 
@@ -1145,82 +1014,64 @@
       return;
     }
 
-    // Ctrl+C
-    if (ctrl && (code === "KeyC" || key === "\x03")) {
-      this.term.write("^C\r\n");
-      this.prompt();
-      return;
-    }
-
-    // Motions
-    switch (key) {
-      // h — left
+    switch (data) {
+      case "\x03": // Ctrl+C
+        this.term.write("^C\r\n");
+        this.prompt();
+        return;
+      case "\r": // Enter
+        this.submit();
+        return;
       case "h":
+      case "\x1b[D": // Left arrow
         if (this.cursor > 0) {
           this.cursor--;
           this.refreshLine();
         }
         return;
-
-      // l — right
       case "l":
+      case "\x1b[C": // Right arrow
         if (this.cursor < this.buffer.length - 1) {
           this.cursor++;
           this.refreshLine();
         }
         return;
-
-      // w — word forward
       case "w":
         this.cursor = wordBoundaryRight(this.buffer, this.cursor);
         if (this.cursor > this.buffer.length - 1 && this.buffer.length > 0)
           this.cursor = this.buffer.length - 1;
         this.refreshLine();
         return;
-
-      // b — word backward
       case "b":
         this.cursor = wordBoundaryLeft(this.buffer, this.cursor);
         this.refreshLine();
         return;
-
-      // e — word end
       case "e":
         this.cursor = wordEndRight(this.buffer, this.cursor);
         if (this.cursor > this.buffer.length - 1 && this.buffer.length > 0)
           this.cursor = this.buffer.length - 1;
         this.refreshLine();
         return;
-
-      // W — WORD forward
       case "W":
         this.cursor = WORDBoundaryRight(this.buffer, this.cursor);
         if (this.cursor > this.buffer.length - 1 && this.buffer.length > 0)
           this.cursor = this.buffer.length - 1;
         this.refreshLine();
         return;
-
-      // B — WORD backward
       case "B":
         this.cursor = WORDBoundaryLeft(this.buffer, this.cursor);
         this.refreshLine();
         return;
-
-      // E — WORD end
       case "E":
         this.cursor = WORDEndRight(this.buffer, this.cursor);
         if (this.cursor > this.buffer.length - 1 && this.buffer.length > 0)
           this.cursor = this.buffer.length - 1;
         this.refreshLine();
         return;
-
-      // 0 — beginning of line
       case "0":
         this.cursor = 0;
         this.refreshLine();
         return;
-
-      // ^ — first non-space
       case "^":
         this.cursor = 0;
         while (
@@ -1230,40 +1081,28 @@
           this.cursor++;
         this.refreshLine();
         return;
-
-      // $ — end of line
       case "$":
         this.cursor = Math.max(0, this.buffer.length - 1);
         this.refreshLine();
         return;
-
-      // i — insert at cursor
       case "i":
         this.viEnterInsert();
         return;
-
-      // a — insert after cursor
       case "a":
         if (this.cursor < this.buffer.length) this.cursor++;
         this.viEnterInsert();
         this.refreshLine();
         return;
-
-      // I — insert at beginning
       case "I":
         this.cursor = 0;
         this.viEnterInsert();
         this.refreshLine();
         return;
-
-      // A — insert at end
       case "A":
         this.cursor = this.buffer.length;
         this.viEnterInsert();
         this.refreshLine();
         return;
-
-      // s — substitute character
       case "s":
         if (this.cursor < this.buffer.length) {
           this.killRing = this.buffer[this.cursor];
@@ -1274,8 +1113,6 @@
         }
         this.viEnterInsert();
         return;
-
-      // S — substitute whole line
       case "S":
         this.killRing = this.buffer;
         this.buffer = "";
@@ -1283,8 +1120,6 @@
         this.refreshLine();
         this.viEnterInsert();
         return;
-
-      // x — delete char under cursor
       case "x":
         if (this.cursor < this.buffer.length) {
           this.killRing = this.buffer[this.cursor];
@@ -1296,8 +1131,6 @@
           this.refreshLine();
         }
         return;
-
-      // X — delete char before cursor
       case "X":
         if (this.cursor > 0) {
           this.killRing = this.buffer[this.cursor - 1];
@@ -1308,8 +1141,6 @@
           this.refreshLine();
         }
         return;
-
-      // D — delete to end of line
       case "D":
         this.killRing = this.buffer.substring(this.cursor);
         this.buffer = this.buffer.substring(0, this.cursor);
@@ -1317,26 +1148,18 @@
           this.cursor = this.buffer.length - 1;
         this.refreshLine();
         return;
-
-      // C — change to end of line
       case "C":
         this.killRing = this.buffer.substring(this.cursor);
         this.buffer = this.buffer.substring(0, this.cursor);
         this.refreshLine();
         this.viEnterInsert();
         return;
-
-      // d — delete operator (waits for motion)
       case "d":
         this.viOperator = "d";
         return;
-
-      // c — change operator (waits for motion)
       case "c":
         this.viOperator = "c";
         return;
-
-      // p — paste after cursor
       case "p":
         if (this.killRing) {
           var pos = Math.min(this.cursor + 1, this.buffer.length);
@@ -1348,8 +1171,6 @@
           this.refreshLine();
         }
         return;
-
-      // P — paste before cursor
       case "P":
         if (this.killRing) {
           this.buffer =
@@ -1360,45 +1181,14 @@
           this.refreshLine();
         }
         return;
-
-      // k — history prev
       case "k":
+      case "\x1b[A": // Up arrow
         this.historyPrev();
         return;
-
-      // j — history next
       case "j":
+      case "\x1b[B": // Down arrow
         this.historyNext();
         return;
-
-      // Enter — submit
-      case "\r":
-        this.submit();
-        return;
-    }
-
-    // Arrow keys in command mode
-    if (code === "ArrowLeft") {
-      if (this.cursor > 0) {
-        this.cursor--;
-        this.refreshLine();
-      }
-      return;
-    }
-    if (code === "ArrowRight") {
-      if (this.cursor < this.buffer.length - 1) {
-        this.cursor++;
-        this.refreshLine();
-      }
-      return;
-    }
-    if (code === "ArrowUp") {
-      this.historyPrev();
-      return;
-    }
-    if (code === "ArrowDown") {
-      this.historyNext();
-      return;
     }
   };
 
