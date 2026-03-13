@@ -934,7 +934,7 @@ pub fn finalize_record(record: Record) -> Record;
 pub struct QualFile { pub path: PathBuf, pub subject: String, pub records: Vec<Record> }
 pub fn parse(path: &Path) -> Result<QualFile>;
 pub fn append(path: &Path, record: &Record) -> Result<()>;
-pub fn discover(root: &Path) -> Result<Vec<QualFile>>;
+pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>;
 
 // qualifier::scoring
 pub struct ScoreReport { pub raw: i32, pub effective: i32, pub limiting_path: Option<Vec<String>> }
@@ -1006,6 +1006,42 @@ and multiple record types.
 The project root is determined by searching upward for VCS markers (`.git`,
 `.hg`, `.jj`, `.pijul`, `_FOSSIL_`, `.svn`) or a `qualifier.graph.jsonl`
 file, whichever is found first.
+
+### 10.1 Ignore Rules
+
+By default, qualifier respects ignore rules from two sources during file
+discovery:
+
+1. **`.gitignore`** — Standard Git ignore files, including:
+   - `.gitignore` files at any level of the tree
+   - `.git/info/exclude` (per-repo excludes)
+   - The global gitignore file (e.g., `~/.config/git/ignore`)
+   - `.gitignore` files in parent directories above the project root
+     (matching Git's own behavior in monorepos)
+
+2. **`.qualignore`** — A qualifier-specific ignore file using the same
+   syntax as `.gitignore`. Place a `.qualignore` file anywhere in the tree
+   to exclude paths from qualifier's discovery walk. Useful for ignoring
+   vendored code, generated files, or example directories that have `.qual`
+   files you want qualifier to skip without affecting Git.
+
+Paths matched by either source are excluded from all discovery commands:
+`score`, `show`, `check`, `ls`, `compact`, and `praise`/`blame`.
+
+### 10.2 `--no-ignore`
+
+Pass `--no-ignore` to any discovery command to bypass all ignore rules.
+This forces qualifier to walk every non-hidden directory and discover all
+`.qual` files regardless of `.gitignore` or `.qualignore` entries.
+
+### 10.3 Hidden Directories
+
+Hidden directories (names starting with `.`) are always skipped during
+discovery, regardless of ignore settings. This prevents qualifier from
+descending into `.git`, `.vscode`, `.idea`, and similar tool directories.
+
+Hidden *files* (like `.qual`) are not skipped — the per-directory `.qual`
+layout depends on this.
 
 ## 11. Crate Structure
 

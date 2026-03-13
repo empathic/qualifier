@@ -17,13 +17,17 @@ pub struct Args {
     /// Path to the dependency graph file
     #[arg(long)]
     pub graph: Option<String>,
+
+    /// Disable .gitignore and .qualignore filtering
+    #[arg(long)]
+    pub no_ignore: bool,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
     let root = find_project_root(Path::new("."));
     let graph = crate::cli::config::load_graph(args.graph.as_deref(), root.as_deref());
     let discover_root = root.as_deref().unwrap_or(Path::new("."));
-    let all_qual_files = qual_file::discover(discover_root)?;
+    let all_qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
 
     let records = qual_file::find_records_for(&args.artifact, &all_qual_files);
 

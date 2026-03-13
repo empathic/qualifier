@@ -56,6 +56,8 @@ qualifier check --min-score 0
 
 **.qual files** are JSONL files containing records. The recommended layout is one `.qual` file per directory. See [SPEC.md](SPEC.md) for layout options and trade-offs.
 
+**File discovery** respects `.gitignore` and `.qualignore` (gitignore-compatible syntax) by default, so vendored or generated `.qual` files can be excluded from scoring. Pass `--no-ignore` to bypass all ignore rules. See [SPEC.md §10](SPEC.md#10-file-discovery) for details.
+
 ## CLI Commands
 
 | Command | Description |

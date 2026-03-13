@@ -311,7 +311,7 @@ fn test_discovery_walks_tree() {
     std::fs::create_dir_all(hidden.parent().unwrap()).unwrap();
     std::fs::write(&hidden, "").unwrap();
 
-    let found = qual_file::discover(dir.path()).unwrap();
+    let found = qual_file::discover(dir.path(), true).unwrap();
     assert_eq!(found.len(), 3);
 
     let subjects: Vec<&str> = found.iter().map(|qf| qf.subject.as_str()).collect();

@@ -176,40 +176,52 @@ pub fn find_qual_file_for(subject: &str) -> Option<PathBuf> {
 /// Discover all `.qual` files under a root directory.
 ///
 /// Walks the directory tree recursively, collecting every file whose name
-/// ends with `.qual`. Returns them sorted by path for determinism.
-pub fn discover(root: &Path) -> crate::Result<Vec<QualFile>> {
-    let mut qual_files = Vec::new();
-    walk_dir(root, &mut qual_files)?;
-    qual_files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(qual_files)
-}
+/// ends with `.qual`. Respects `.gitignore` and `.qualignore` by default.
+/// Pass `respect_ignore: false` to bypass all ignore rules.
+///
+/// Returns them sorted by path for determinism.
+pub fn discover(root: &Path, respect_ignore: bool) -> crate::Result<Vec<QualFile>> {
+    use ignore::WalkBuilder;
 
-fn walk_dir(dir: &Path, out: &mut Vec<QualFile>) -> crate::Result<()> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return Ok(()),
-        Err(e) => return Err(e.into()),
-    };
+    let mut builder = WalkBuilder::new(root);
+    builder.hidden(false); // allow hidden files like .qual
 
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Skip hidden directories (like .git)
-        if path.is_dir() {
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with('.') {
-                continue;
-            }
-            walk_dir(&path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("qual")
-            || entry.file_name() == ".qual"
-        {
-            out.push(parse(&path)?);
-        }
+    if respect_ignore {
+        builder
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .add_custom_ignore_filename(".qualignore");
+    } else {
+        builder
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .ignore(false);
     }
 
-    Ok(())
+    // Skip hidden directories (like .git, .vscode, etc.) but allow hidden
+    // files (like .qual) — matches the old walk_dir behavior.
+    builder.filter_entry(|entry| {
+        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+            return !entry.file_name().to_string_lossy().starts_with('.');
+        }
+        true
+    });
+
+    let mut qual_files = Vec::new();
+    for entry in builder.build() {
+        let entry = entry.map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+        let path = entry.path();
+        if path.is_file()
+            && (path.extension().and_then(|e| e.to_str()) == Some("qual")
+                || path.file_name().and_then(|f| f.to_str()) == Some(".qual"))
+        {
+            qual_files.push(parse(path)?);
+        }
+    }
+    qual_files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(qual_files)
 }
 
 /// Derive the subject name from a `.qual` file path.
@@ -392,7 +404,7 @@ mod tests {
         // Also create a non-qual file that should be ignored
         fs::write(src.join("a.rs"), "fn main() {}").unwrap();
 
-        let found = discover(dir.path()).unwrap();
+        let found = discover(dir.path(), true).unwrap();
         assert_eq!(found.len(), 2);
     }
 
@@ -405,8 +417,38 @@ mod tests {
         let r = make_record("x", Kind::Pass, 10, "ok");
         append(&hidden.join("x.qual"), &r).unwrap();
 
-        let found = discover(dir.path()).unwrap();
+        let found = discover(dir.path(), true).unwrap();
         assert_eq!(found.len(), 0);
+    }
+
+    #[test]
+    fn test_discover_respects_qualignore() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let examples = dir.path().join("examples");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&examples).unwrap();
+
+        let r1 = make_record("src/a.rs", Kind::Pass, 10, "ok");
+        let r2 = make_record("examples/demo.rs", Kind::Pass, 10, "ok");
+
+        append(&src.join("a.rs.qual"), &r1).unwrap();
+        append(&examples.join("demo.rs.qual"), &r2).unwrap();
+
+        // Without .qualignore: both found
+        let found = discover(dir.path(), true).unwrap();
+        assert_eq!(found.len(), 2);
+
+        // Add .qualignore excluding examples/
+        fs::write(dir.path().join(".qualignore"), "examples/\n").unwrap();
+
+        let found = discover(dir.path(), true).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].path.to_string_lossy().contains("src"));
+
+        // With --no-ignore: both found again
+        let found = discover(dir.path(), false).unwrap();
+        assert_eq!(found.len(), 2);
     }
 
     #[test]
