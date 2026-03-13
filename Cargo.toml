@@ -16,6 +16,7 @@ cli = ["dep:clap", "dep:comfy-table", "dep:figment", "dep:rand"]
 [dependencies]
 blake3 = "1"
 chrono = { version = "0.4", features = ["serde"] }
+ignore = "0.4"
 petgraph = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

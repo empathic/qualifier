@@ -18,6 +18,10 @@ pub struct Args {
     #[cfg(not(target_os = "emscripten"))]
     #[arg(long)]
     pub vcs: bool,
+
+    /// Disable .gitignore and .qualignore filtering
+    #[arg(long)]
+    pub no_ignore: bool,
 }
 
 /// Record-based praise output — works everywhere including emscripten.
@@ -33,7 +37,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 fn run_records(args: Args) -> crate::Result<()> {
     let root = find_project_root(Path::new("."));
     let discover_root = root.as_deref().unwrap_or(Path::new("."));
-    let all_qual_files = qual_file::discover(discover_root)?;
+    let all_qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
 
     let records: Vec<&crate::attestation::Record> =
         qual_file::find_records_for(&args.artifact, &all_qual_files);

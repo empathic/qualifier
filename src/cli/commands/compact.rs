@@ -21,6 +21,10 @@ pub struct Args {
     /// Preview without writing
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Disable .gitignore and .qualignore filtering
+    #[arg(long)]
+    pub no_ignore: bool,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
@@ -48,7 +52,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 fn run_all(args: &Args) -> crate::Result<()> {
     let root = find_project_root(Path::new("."));
     let discover_root = root.as_deref().unwrap_or(Path::new("."));
-    let qual_files = qual_file::discover(discover_root)?;
+    let qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
 
     if qual_files.is_empty() {
         println!("No .qual files found.");

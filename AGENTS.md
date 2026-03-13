@@ -33,6 +33,15 @@
 - Include results for `cargo fmt`, `cargo clippy --all-targets --all-features`, and `cargo test --all-features`; attach CLI examples when changing text output.
 - For release work, note whether `./scripts/release.sh --execute` should be run.
 
+## Keeping Things in Sync
+When making changes, verify that all affected surfaces stay consistent:
+- **SPEC.md** — Section 7 (Library API) must match public function signatures. Section 10 (File Discovery) must match discovery behavior. Update the spec version when semantics change.
+- **README.md** — Core Concepts and CLI Commands table should reflect current behavior.
+- **site/** — `site/js/playground.js` contains a JavaScript scoring engine for the web playground. If scoring logic, record format, or field names change, update it to match.
+- **Cargo.toml** — Bump the crate version for any user-visible change (new feature, behavior change, bug fix). Coordinate with `SPEC.md` version when the spec itself changes.
+- **Tests** — Many test files have local `make_att()`/`make_record()` helpers that construct records by hand. When adding or renaming fields on `Attestation`, `Epoch`, or `DependencyRecord`, update all helpers (~6 locations across `src/` and `tests/`). Run `cargo test --all-features` to catch any you miss.
+- **Golden IDs** — `tests/integration.rs` pins BLAKE3 IDs for attestation, epoch, and dependency records. Any change to canonical form (field order, new envelope fields, MCF rules) will break these. Update the expected hashes after confirming the new values are correct.
+
 ## Slash Command Discovery
 - Unrecognized slash commands should be looked up as files under `.claude/commands/` (e.g., `/foo` looks for `.claude/commands/foo.md`).
 - If a matching file exists, treat its contents as the command definition; otherwise continue without adding anything to context.
