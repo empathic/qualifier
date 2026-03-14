@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 pub mod commands;
 pub mod config;
 pub mod output;
+pub mod span_context;
 
 #[derive(Parser)]
 #[command(
@@ -38,6 +39,20 @@ pub enum Commands {
     /// Show who attested an artifact and why
     #[command(alias = "blame")]
     Praise(commands::praise::Args),
+    /// Add a comment to an artifact (no score by default)
+    Comment(commands::comment::Args),
+    /// Suggest a change to an artifact
+    Suggest(commands::suggest::Args),
+    /// Flag a concern on an artifact
+    Flag(commands::flag::Args),
+    /// Approve an artifact (pass)
+    Approve(commands::approve::Args),
+    /// Reject an artifact (fail)
+    Reject(commands::reject::Args),
+    /// Reply to an existing attestation
+    Reply(commands::reply::Args),
+    /// Resolve (close) an existing attestation
+    Resolve(commands::resolve::Args),
 }
 
 pub fn run() {
@@ -66,6 +81,13 @@ pub fn run() {
         }
         Commands::Init => commands::init::run(),
         Commands::Praise(args) => commands::praise::run(args),
+        Commands::Comment(args) => commands::comment::run(args),
+        Commands::Suggest(args) => commands::suggest::run(args),
+        Commands::Flag(args) => commands::flag::run(args),
+        Commands::Approve(args) => commands::approve::run(args),
+        Commands::Reject(args) => commands::reject::run(args),
+        Commands::Reply(args) => commands::reply::run(args),
+        Commands::Resolve(args) => commands::resolve::run(args),
     };
 
     if let Err(e) = result {

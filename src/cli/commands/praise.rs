@@ -128,7 +128,7 @@ fn run_records(args: Args) -> crate::Result<()> {
             };
             println!(
                 "    {} {:<10} {:?}",
-                output::format_score(epoch.body.score),
+                output::format_score(Some(epoch.body.score)),
                 "epoch",
                 epoch.body.summary,
             );

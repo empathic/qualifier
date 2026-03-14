@@ -216,6 +216,7 @@ Metabox envelope fields (section 2.2) plus body fields:
 | `detail`        | string   | no       | Extended description, markdown allowed |
 | `kind`          | string   | yes      | The type of attestation (see 2.7) |
 | `ref`           | string   | no       | VCS reference pin (e.g., `"git:3aba500"`). Opaque to qualifier. |
+| `references`    | string   | no       | ID of a related record (see 2.11). No scoring impact. |
 | `score`         | integer  | yes      | Signed quality delta, -100..100 |
 | `span`          | object   | no       | Sub-artifact range (see 2.4) |
 | `suggested_fix` | string   | no       | Actionable suggestion for improvement |
@@ -405,6 +406,37 @@ All layouts are backwards-compatible and can coexist in the same project.
 ```jsonl
 {"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","ref":"git:3aba500","score":-30,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Replace .unwrap() with proper error propagation","summary":"Panics on malformed UTF-8 input","tags":["robustness","error-handling"]}}
 {"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","issuer_type":"human","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent property-based test coverage","tags":["testing"]}}
+```
+
+### 2.11 References
+
+The `references` body field provides a lightweight "re:" pointer from one
+attestation to another. Unlike `supersedes` (which removes the referenced
+record from scoring), `references` is purely informational — both the
+original and the referencing record contribute independently to scores.
+
+**Semantics:**
+
+- A `references` value is a single record ID string.
+- The referenced record is NOT filtered from scoring. Both records remain
+  active and contribute their scores independently.
+- Cross-subject references are allowed. An attestation on `src/lexer.rs`
+  MAY reference a record on `src/parser.rs` ("see also").
+- Dangling references are allowed (same policy as `supersedes`). The
+  referenced record may live in a different file or not be loaded.
+- Self-references are forbidden. An attestation MUST NOT reference its own
+  ID. Implementations MUST reject this at write time.
+
+**Use cases:**
+
+- Reply threads: an AI follow-up to a human observation.
+- Resolution chains: "this addresses the concern raised in <id>".
+- Cross-file commentary: "see also the related concern on lexer.rs".
+
+**Example:**
+
+```json
+{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-03-01T10:00:00Z","id":"b2c3d4e5...","body":{"kind":"comment","references":"a1b2c3d4...","score":0,"summary":"This was addressed in the latest refactor"}}
 ```
 
 ## 3. Record Type Specifications
@@ -845,6 +877,7 @@ impl Record {
     pub fn id(&self) -> &str;
     pub fn score(&self) -> Option<i32>;         // Attestation | Epoch
     pub fn supersedes(&self) -> Option<&str>;   // Attestation only
+    pub fn references(&self) -> Option<&str>;   // Attestation only
     pub fn kind(&self) -> Option<&Kind>;        // Attestation only
     pub fn issuer_type(&self) -> Option<&IssuerType>;
     pub fn as_attestation(&self) -> Option<&Attestation>;
@@ -867,6 +900,7 @@ pub struct AttestationBody {
     pub detail: Option<String>,
     pub kind: Kind,
     pub r#ref: Option<String>,
+    pub references: Option<String>,
     pub score: i32,
     pub span: Option<Span>,
     pub suggested_fix: Option<String>,

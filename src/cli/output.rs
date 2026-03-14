@@ -3,14 +3,13 @@ use comfy_table::{Cell, CellAlignment, Color, Table};
 use crate::attestation::Record;
 use crate::scoring::{self, ScoreReport};
 
-/// Format a score for human display: `[+40]` or `[-30]` or `[  0]`.
-pub fn format_score(score: i32) -> String {
-    if score > 0 {
-        format!("[+{}]", score)
-    } else if score < 0 {
-        format!("[{}]", score)
-    } else {
-        "[  0]".into()
+/// Format a score for human display: `[+40]` or `[-30]` or `[  0]` or `[---]`.
+pub fn format_score(score: Option<i32>) -> String {
+    match score {
+        Some(s) if s > 0 => format!("[+{}]", s),
+        Some(s) if s < 0 => format!("[{}]", s),
+        Some(_) => "[  0]".into(),
+        None => "[---]".into(),
     }
 }
 

@@ -55,6 +55,10 @@ pub struct Args {
     #[arg(long)]
     pub supersedes: Option<String>,
 
+    /// ID of a related attestation (conversational reference, no scoring impact)
+    #[arg(long)]
+    pub references: Option<String>,
+
     /// Explicit .qual file to write to (overrides layout resolution)
     #[arg(long)]
     pub file: Option<String>,
@@ -80,7 +84,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     let kind: Kind = args.kind.as_deref().unwrap_or("concern").parse().unwrap();
 
-    let score = args.score.unwrap_or_else(|| kind.default_score());
+    let score = Some(args.score.unwrap_or_else(|| kind.default_score()));
 
     let summary = match args.summary {
         Some(s) => s,
@@ -121,6 +125,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             detail: args.detail,
             kind,
             r#ref: args.r#ref,
+            references: args.references,
             score,
             span,
             suggested_fix: args.suggested_fix,
@@ -152,8 +157,10 @@ pub fn run(args: Args) -> crate::Result<()> {
         &Record::Attestation(Box::new(att.clone())),
     )?;
     println!(
-        "Attested {} [{}] {}",
-        att.subject, att.body.score, att.body.kind
+        "Attested {} {} {}",
+        att.subject,
+        crate::cli::output::format_score(att.body.score),
+        att.body.kind
     );
     println!("  id: {}", att.id);
 
@@ -204,7 +211,7 @@ fn run_batch() -> crate::Result<()> {
     Ok(())
 }
 
-fn detect_issuer() -> Option<String> {
+pub fn detect_issuer() -> Option<String> {
     // Try git first
     std::process::Command::new("git")
         .args(["config", "user.email"])
@@ -234,7 +241,7 @@ fn detect_issuer() -> Option<String> {
 
 /// Normalize an issuer value to a URI. Bare emails get `mailto:` prefix;
 /// values already containing `:` are assumed to be valid URIs.
-fn normalize_issuer_uri(issuer: String) -> String {
+pub fn normalize_issuer_uri(issuer: String) -> String {
     if issuer.contains(':') {
         issuer
     } else {

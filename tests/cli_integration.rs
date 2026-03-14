@@ -1219,3 +1219,744 @@ fn test_attest_with_span_and_columns() {
         "span should contain end col: {content}"
     );
 }
+
+// --- show --pretty tests ---
+
+#[test]
+fn test_show_pretty_shows_source() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create a source file with known content
+    let src = dir.path().join("example.rs");
+    std::fs::write(
+        &src,
+        "fn main() {\n    let x = 1;\n    let y = 2;\n    let z = 3;\n    println!(\"{}\", x + y + z);\n}\n",
+    )
+    .unwrap();
+
+    // Attest with a span
+    run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "example.rs:3",
+            "needs a better name",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", "example.rs", "--pretty"]);
+
+    assert_eq!(code, 0, "show --pretty should succeed: {stdout}");
+    assert!(
+        stdout.contains("let y = 2"),
+        "pretty output should show source line: {stdout}"
+    );
+    assert!(
+        stdout.contains(">"),
+        "pretty output should have > marker: {stdout}"
+    );
+    assert!(
+        stdout.contains("example.rs"),
+        "pretty output should show file path: {stdout}"
+    );
+}
+
+#[test]
+fn test_show_pretty_json() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let src = dir.path().join("example.rs");
+    std::fs::write(
+        &src,
+        "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n",
+    )
+    .unwrap();
+
+    // Attest with a span
+    run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "example.rs:3",
+            "check this",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    let (stdout, _, code) =
+        run_qualifier(dir.path(), &["show", "example.rs", "--format", "json", "--pretty"]);
+
+    assert_eq!(code, 0, "show --pretty --format json should succeed");
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("should produce valid JSON: {e}\ngot: {stdout}")
+    });
+
+    let records = parsed["records"].as_array().expect("should have records array");
+    assert!(!records.is_empty(), "should have at least one record");
+
+    let rec = &records[0];
+    assert!(
+        rec.get("context").is_some(),
+        "record should have context field: {stdout}"
+    );
+    let context = &rec["context"];
+    assert!(
+        context["lines"].is_array(),
+        "context should have lines array: {stdout}"
+    );
+
+    let lines = context["lines"].as_array().unwrap();
+    let span_line = lines.iter().find(|l| l["in_span"] == true);
+    assert!(span_line.is_some(), "should have an in_span line: {stdout}");
+    assert_eq!(span_line.unwrap()["line"], 3);
+}
+
+#[test]
+fn test_show_pretty_file_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Attest to a nonexistent file with a span
+    run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "nonexistent.rs:5",
+            "some comment",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", "nonexistent.rs", "--pretty"]);
+
+    assert_eq!(
+        code, 0,
+        "show --pretty should succeed even without source file"
+    );
+    assert!(
+        stdout.contains("note:"),
+        "should show a note about missing file: {stdout}"
+    );
+}
+
+#[test]
+fn test_show_pretty_no_span() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let src = dir.path().join("example.rs");
+    std::fs::write(&src, "fn main() {}\n").unwrap();
+
+    // Attest without span
+    run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "example.rs",
+            "--kind",
+            "pass",
+            "--summary",
+            "general comment",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", "example.rs", "--pretty"]);
+
+    assert_eq!(code, 0, "show --pretty without span should succeed");
+    // Should not show source context markers
+    assert!(
+        !stdout.contains("> "),
+        "no span means no source context markers: {stdout}"
+    );
+}
+
+// --- references tests ---
+
+#[test]
+fn test_attest_with_references() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create an initial attestation to reference
+    let (stdout1, _, code1) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "lib.rs",
+            "--kind",
+            "concern",
+            "--score=-10",
+            "--summary",
+            "Needs improvement",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code1, 0, "first attest should succeed: {stdout1}");
+
+    // Extract the ID from the output (line: "  id: <hash>")
+    let id = stdout1
+        .lines()
+        .find(|l| l.contains("id:"))
+        .and_then(|l| l.split("id:").nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("should find id in output");
+
+    // Create a referencing attestation
+    let (_, _, code2) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "lib.rs",
+            "--kind",
+            "comment",
+            "--summary",
+            "Addressed in latest refactor",
+            "--issuer",
+            "mailto:test@test.com",
+            "--references",
+            &id,
+        ],
+    );
+    assert_eq!(code2, 0, "attest with --references should succeed");
+
+    // Verify the .qual file contains the references field
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains(&format!("\"references\":\"{id}\"")),
+        "attestation should contain references field: {content}"
+    );
+}
+
+#[test]
+fn test_show_displays_references() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create an initial attestation
+    let (stdout1, _, _) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "lib.rs",
+            "--kind",
+            "concern",
+            "--score=-10",
+            "--summary",
+            "Needs work",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    let id = stdout1
+        .lines()
+        .find(|l| l.contains("id:"))
+        .and_then(|l| l.split("id:").nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("should find id in output");
+
+    // Create a referencing attestation
+    run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "lib.rs",
+            "This was fixed",
+            "--issuer",
+            "mailto:test@test.com",
+            "--references",
+            &id,
+        ],
+    );
+
+    // Show should thread the referencing record under its parent
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", "lib.rs"]);
+    assert_eq!(code, 0, "show should succeed");
+    assert!(
+        stdout.contains("This was fixed"),
+        "show output should contain referencing record: {stdout}"
+    );
+    // The referencing record should appear after and indented under the parent
+    let lines: Vec<&str> = stdout.lines().collect();
+    let parent_line = lines.iter().position(|l| l.contains("Needs work"));
+    let ref_line = lines.iter().position(|l| l.contains("This was fixed"));
+    assert!(
+        parent_line.is_some() && ref_line.is_some(),
+        "should find both parent and referencing record: {stdout}"
+    );
+    assert!(
+        ref_line.unwrap() > parent_line.unwrap(),
+        "referencing record should appear after parent: {stdout}"
+    );
+}
+
+// --- reply command tests ---
+
+#[test]
+fn test_reply_basic() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create an initial attestation to reply to
+    let (stdout1, _, code1) = run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "lib.rs",
+            "needs improvement",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code1, 0, "initial comment should succeed: {stdout1}");
+
+    let id = stdout1
+        .lines()
+        .find(|l| l.contains("id:"))
+        .and_then(|l| l.split("id:").nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("should find id in output");
+
+    // Reply using short prefix (first 8 chars)
+    let prefix = &id[..8];
+    let (stdout2, _, code2) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            prefix,
+            "fixed this",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code2, 0, "reply should succeed: {stdout2}");
+    assert!(
+        stdout2.contains("re:"),
+        "reply output should show re: line: {stdout2}"
+    );
+    assert!(
+        stdout2.contains(prefix),
+        "reply output should show referenced prefix: {stdout2}"
+    );
+
+    // Verify the .qual file contains the references field
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains(&format!("\"references\":\"{id}\"")),
+        "reply should set references to full target ID: {content}"
+    );
+
+    // Show should thread the reply under the parent (indented)
+    let (show_stdout, _, show_code) = run_qualifier(dir.path(), &["show", "lib.rs"]);
+    assert_eq!(show_code, 0);
+    assert!(
+        show_stdout.contains("fixed this"),
+        "show output should contain reply text: {show_stdout}"
+    );
+    // Reply should appear indented under its parent
+    let lines: Vec<&str> = show_stdout.lines().collect();
+    let parent_line = lines.iter().position(|l| l.contains("needs improvement"));
+    let reply_line = lines.iter().position(|l| l.contains("fixed this"));
+    assert!(
+        parent_line.is_some() && reply_line.is_some(),
+        "should find both parent and reply in output: {show_stdout}"
+    );
+    assert!(
+        reply_line.unwrap() > parent_line.unwrap(),
+        "reply should appear after parent: {show_stdout}"
+    );
+}
+
+#[test]
+fn test_reply_inherits_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+    // Create an attestation on src/parser.rs
+    let (stdout1, _, code1) = run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "src/parser.rs",
+            "needs refactoring",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code1, 0);
+
+    let id = stdout1
+        .lines()
+        .find(|l| l.contains("id:"))
+        .and_then(|l| l.split("id:").nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("should find id in output");
+
+    // Reply — should inherit src/parser.rs as subject
+    let (stdout2, _, code2) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            &id[..8],
+            "refactored",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code2, 0, "reply should succeed: {stdout2}");
+    assert!(
+        stdout2.contains("src/parser.rs"),
+        "reply should inherit subject from target: {stdout2}"
+    );
+
+    // Show src/parser.rs should find both records
+    let (show_stdout, _, show_code) =
+        run_qualifier(dir.path(), &["show", "src/parser.rs", "--format", "json"]);
+    assert_eq!(show_code, 0);
+
+    let parsed: serde_json::Value = serde_json::from_str(&show_stdout).unwrap();
+    let records = parsed["records"].as_array().unwrap();
+    assert_eq!(
+        records.len(),
+        2,
+        "should have 2 records for src/parser.rs: {show_stdout}"
+    );
+}
+
+#[test]
+fn test_reply_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            "deadbeef",
+            "hello",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0, "reply to nonexistent ID should fail");
+    assert!(
+        stderr.contains("no record found"),
+        "error should mention no record found: {stderr}"
+    );
+}
+
+#[test]
+fn test_reply_with_kind_override() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create initial attestation
+    let (stdout1, _, _) = run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "lib.rs",
+            "issue here",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    let id = stdout1
+        .lines()
+        .find(|l| l.contains("id:"))
+        .and_then(|l| l.split("id:").nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("should find id in output");
+
+    // Reply with kind override
+    let (stdout2, _, code2) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            &id[..8],
+            "approved the fix",
+            "--kind",
+            "pass",
+            "--score",
+            "20",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code2, 0, "reply with --kind override should succeed: {stdout2}");
+    assert!(
+        stdout2.contains("pass"),
+        "reply should use overridden kind: {stdout2}"
+    );
+    assert!(
+        stdout2.contains("[+20]") || stdout2.contains("[20]"),
+        "reply should use overridden score: {stdout2}"
+    );
+}
+
+// --- show threading tests ---
+
+#[test]
+fn test_show_threads_replies_under_parent() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create two independent comments
+    let (stdout1, _, _) = run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "lib.rs",
+            "first issue",
+            "--issuer",
+            "mailto:alice@test.com",
+        ],
+    );
+    let id1 = stdout1
+        .lines()
+        .find(|l| l.contains("id:"))
+        .and_then(|l| l.split("id:").nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("should find id");
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "lib.rs",
+            "second issue",
+            "--issuer",
+            "mailto:bob@test.com",
+        ],
+    );
+
+    // Reply to the first comment
+    run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            &id1[..8],
+            "fixed first issue",
+            "--issuer",
+            "mailto:bob@test.com",
+        ],
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", "lib.rs"]);
+    assert_eq!(code, 0);
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    let first_pos = lines.iter().position(|l| l.contains("first issue") && !l.contains("fixed"));
+    let reply_pos = lines.iter().position(|l| l.contains("fixed first issue"));
+    let second_pos = lines.iter().position(|l| l.contains("second issue"));
+
+    assert!(first_pos.is_some(), "should find first issue: {stdout}");
+    assert!(reply_pos.is_some(), "should find reply: {stdout}");
+    assert!(second_pos.is_some(), "should find second issue: {stdout}");
+
+    // Reply should appear between the first and second issues (threaded under first)
+    let first = first_pos.unwrap();
+    let reply = reply_pos.unwrap();
+    let second = second_pos.unwrap();
+    assert!(
+        reply > first && reply < second,
+        "reply should be threaded between first ({first}) and second ({second}), got reply at {reply}: {stdout}"
+    );
+
+    // Reply line should have a tree-drawing character
+    let reply_line_text = lines[reply];
+    assert!(
+        reply_line_text.contains('\u{2514}') || reply_line_text.contains('\u{251c}'),
+        "reply should have tree branch character: {reply_line_text}"
+    );
+}
+
+// --- resolve command tests ---
+
+#[test]
+fn test_resolve_basic() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create an initial attestation to resolve
+    let (stdout1, _, code1) = run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "lib.rs",
+            "needs improvement",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code1, 0, "initial comment should succeed: {stdout1}");
+
+    let id = stdout1
+        .lines()
+        .find(|l| l.contains("id:"))
+        .and_then(|l| l.split("id:").nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("should find id in output");
+
+    // Resolve using short prefix
+    let prefix = &id[..8];
+    let (stdout2, _, code2) = run_qualifier(
+        dir.path(),
+        &[
+            "resolve",
+            prefix,
+            "fixed in PR #42",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code2, 0, "resolve should succeed: {stdout2}");
+    assert!(
+        stdout2.contains("resolve"),
+        "output should show resolve kind: {stdout2}"
+    );
+    assert!(
+        stdout2.contains("supersedes:"),
+        "output should show supersedes line: {stdout2}"
+    );
+
+    // Show should hide both the original (superseded) and the tombstone by default
+    let (show_stdout, _, show_code) = run_qualifier(dir.path(), &["show", "lib.rs"]);
+    assert_eq!(show_code, 0);
+    assert!(
+        !show_stdout.contains("needs improvement"),
+        "superseded record should be hidden from show: {show_stdout}"
+    );
+    assert!(
+        !show_stdout.contains("fixed in PR #42"),
+        "resolve tombstone should be hidden by default: {show_stdout}"
+    );
+    assert!(
+        show_stdout.contains("Records (0)"),
+        "no active records should remain: {show_stdout}"
+    );
+
+    // Show --all should display the tombstone
+    let (show_all_stdout, _, show_all_code) = run_qualifier(dir.path(), &["show", "lib.rs", "--all"]);
+    assert_eq!(show_all_code, 0);
+    assert!(
+        show_all_stdout.contains("resolve"),
+        "tombstone should appear with --all: {show_all_stdout}"
+    );
+    assert!(
+        show_all_stdout.contains("needs improvement"),
+        "superseded record should appear with --all: {show_all_stdout}"
+    );
+}
+
+#[test]
+fn test_resolve_default_message() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (stdout1, _, _) = run_qualifier(
+        dir.path(),
+        &[
+            "comment",
+            "lib.rs",
+            "some issue",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    let id = stdout1
+        .lines()
+        .find(|l| l.contains("id:"))
+        .and_then(|l| l.split("id:").nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("should find id in output");
+
+    // Resolve without message — should default to "Resolved"
+    let (stdout2, _, code2) = run_qualifier(
+        dir.path(),
+        &[
+            "resolve",
+            &id[..8],
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code2, 0, "resolve without message should succeed: {stdout2}");
+    assert!(
+        stdout2.contains("Resolved"),
+        "default message should be 'Resolved': {stdout2}"
+    );
+}
+
+#[test]
+fn test_resolve_removes_from_scoring() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create a concern with score -10
+    let (stdout1, _, _) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "lib.rs",
+            "--kind",
+            "concern",
+            "--score=-10",
+            "--summary",
+            "needs work",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    let id = stdout1
+        .lines()
+        .find(|l| l.contains("id:"))
+        .and_then(|l| l.split("id:").nth(1))
+        .map(|s| s.trim().to_string())
+        .expect("should find id in output");
+
+    // Verify score is -10 before resolving
+    let (score_before, _, _) = run_qualifier(dir.path(), &["score", "--format", "json"]);
+    let parsed_before: serde_json::Value = serde_json::from_str(&score_before).unwrap();
+    let entry_before = parsed_before.as_array().unwrap().iter().find(|e| e["subject"] == "lib.rs").unwrap();
+    assert_eq!(entry_before["raw_score"], -10, "score should be -10 before resolve");
+
+    // Resolve it
+    run_qualifier(
+        dir.path(),
+        &[
+            "resolve",
+            &id[..8],
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    // Score should now be 0 (original superseded, tombstone has score 0)
+    let (score_after, _, _) = run_qualifier(dir.path(), &["score", "--format", "json"]);
+    let parsed_after: serde_json::Value = serde_json::from_str(&score_after).unwrap();
+    let entry_after = parsed_after.as_array().unwrap().iter().find(|e| e["subject"] == "lib.rs").unwrap();
+    assert_eq!(entry_after["raw_score"], 0, "score should be 0 after resolve (original superseded)");
+}
+
+#[test]
+fn test_resolve_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "resolve",
+            "deadbeef",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0, "resolve with nonexistent ID should fail");
+    assert!(
+        stderr.contains("no record found"),
+        "error should mention no record found: {stderr}"
+    );
+}

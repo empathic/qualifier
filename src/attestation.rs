@@ -90,6 +90,55 @@ fn parse_position(s: &str) -> Result<Position, String> {
     }
 }
 
+/// Parse a location string into a subject and optional span.
+///
+/// - `"src/parser.rs"` → `("src/parser.rs", None)`
+/// - `"src/parser.rs:42"` → `("src/parser.rs", Some(Span{start: line 42}))`
+/// - `"src/parser.rs:15:28"` → `("src/parser.rs", Some(Span{start: line 15, end: line 28}))`
+pub fn parse_location(s: &str) -> (String, Option<Span>) {
+    let parts: Vec<&str> = s.rsplitn(3, ':').collect();
+    match parts.len() {
+        3 => {
+            if let (Ok(start), Ok(end)) = (parts[1].parse::<u32>(), parts[0].parse::<u32>()) {
+                let subject = parts[2].to_string();
+                return (
+                    subject,
+                    Some(Span {
+                        start: Position {
+                            line: start,
+                            col: None,
+                        },
+                        end: Some(Position {
+                            line: end,
+                            col: None,
+                        }),
+                    }),
+                );
+            }
+            // Not valid numbers — treat whole thing as subject
+            (s.to_string(), None)
+        }
+        2 => {
+            if let Ok(line) = parts[0].parse::<u32>() {
+                let subject = parts[1].to_string();
+                return (
+                    subject,
+                    Some(Span {
+                        start: Position {
+                            line,
+                            col: None,
+                        },
+                        end: None,
+                    }),
+                );
+            }
+            // Not a valid number — treat whole thing as subject
+            (s.to_string(), None)
+        }
+        _ => (s.to_string(), None),
+    }
+}
+
 // ─── Kind enum ──────────────────────────────────────────────────────────────
 
 /// The type of an attestation.
@@ -100,6 +149,8 @@ pub enum Kind {
     Fail,
     Blocker,
     Concern,
+    Comment,
+    Resolve,
     Praise,
     Suggestion,
     Waiver,
@@ -114,6 +165,8 @@ impl fmt::Display for Kind {
             Kind::Fail => write!(f, "fail"),
             Kind::Blocker => write!(f, "blocker"),
             Kind::Concern => write!(f, "concern"),
+            Kind::Comment => write!(f, "comment"),
+            Kind::Resolve => write!(f, "resolve"),
             Kind::Praise => write!(f, "praise"),
             Kind::Suggestion => write!(f, "suggestion"),
             Kind::Waiver => write!(f, "waiver"),
@@ -131,6 +184,8 @@ impl std::str::FromStr for Kind {
             "fail" => Kind::Fail,
             "blocker" => Kind::Blocker,
             "concern" => Kind::Concern,
+            "comment" => Kind::Comment,
+            "resolve" => Kind::Resolve,
             "praise" => Kind::Praise,
             "suggestion" => Kind::Suggestion,
             "waiver" => Kind::Waiver,
@@ -147,6 +202,8 @@ impl Kind {
             Kind::Fail => -20,
             Kind::Blocker => -50,
             Kind::Concern => -10,
+            Kind::Comment => 0,
+            Kind::Resolve => 0,
             Kind::Praise => 30,
             Kind::Suggestion => -5,
             Kind::Waiver => 10,
@@ -202,7 +259,10 @@ pub struct AttestationBody {
     pub kind: Kind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#ref: Option<String>,
-    pub score: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub references: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<Span>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -383,10 +443,10 @@ impl Record {
         }
     }
 
-    /// Get the score (if this is a scored record type).
+    /// Get the score (if this is a scored record type and has a score).
     pub fn score(&self) -> Option<i32> {
         match self {
-            Record::Attestation(a) => Some(a.body.score),
+            Record::Attestation(a) => a.body.score,
             Record::Epoch(e) => Some(e.body.score),
             _ => None,
         }
@@ -396,6 +456,14 @@ impl Record {
     pub fn supersedes(&self) -> Option<&str> {
         match self {
             Record::Attestation(a) => a.body.supersedes.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Get the references ID (attestations only).
+    pub fn references(&self) -> Option<&str> {
+        match self {
+            Record::Attestation(a) => a.body.references.as_deref(),
             _ => None,
         }
     }
@@ -569,11 +637,10 @@ pub fn validate(attestation: &Attestation) -> Vec<String> {
     } else if !attestation.issuer.contains(':') {
         errors.push("issuer must be a URI (e.g. mailto:user@example.com)".into());
     }
-    if attestation.body.score < -100 || attestation.body.score > 100 {
-        errors.push(format!(
-            "score {} is out of range [-100, 100]",
-            attestation.body.score
-        ));
+    if let Some(score) = attestation.body.score {
+        if score < -100 || score > 100 {
+            errors.push(format!("score {score} is out of range [-100, 100]"));
+        }
     }
     if attestation.id.is_empty() {
         errors.push("id must not be empty".into());
@@ -602,6 +669,7 @@ pub fn validate(attestation: &Attestation) -> Vec<String> {
             "fail",
             "blocker",
             "concern",
+            "comment",
             "praise",
             "suggestion",
             "waiver",
@@ -612,6 +680,14 @@ pub fn validate(attestation: &Attestation) -> Vec<String> {
                 break;
             }
         }
+    }
+
+    // Self-reference check
+    if let Some(ref references) = attestation.body.references
+        && !attestation.id.is_empty()
+        && references == &attestation.id
+    {
+        errors.push("references must not point to the record itself".into());
     }
 
     // Validate span
@@ -741,7 +817,7 @@ pub fn clamp_score(score: i32) -> i32 {
 /// Build an attestation with a generated ID. The `id` field on the input is
 /// ignored and replaced with the content-addressed hash.
 pub fn finalize(mut attestation: Attestation) -> Attestation {
-    attestation.body.score = clamp_score(attestation.body.score);
+    attestation.body.score = attestation.body.score.map(clamp_score);
     attestation.metabox = "1".into();
     attestation.record_type = "attestation".to_string();
     // Normalize span
@@ -804,7 +880,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
-                score: -30,
+                references: None,
+                score: Some(-30),
                 span: None,
                 suggested_fix: None,
                 summary: "Panics on malformed input".into(),
@@ -830,7 +907,7 @@ mod tests {
     fn test_generate_id_changes_with_content() {
         let att1 = sample_attestation();
         let mut att2 = att1.clone();
-        att2.body.score = -20;
+        att2.body.score = Some(-20);
         att2.id = generate_id(&att2);
         assert_ne!(att1.id, att2.id);
     }
@@ -856,7 +933,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 0,
+                references: None,
+                score: Some(0),
                 span: None,
                 suggested_fix: None,
                 summary: String::new(),
@@ -874,7 +952,7 @@ mod tests {
     #[test]
     fn test_validate_score_out_of_range() {
         let mut att = sample_attestation();
-        att.body.score = 200;
+        att.body.score = Some(200);
         att.id = generate_id(&att);
         let errors = validate(&att);
         assert!(errors.iter().any(|e| e.contains("out of range")));
@@ -911,7 +989,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 200, // over max
+                references: None,
+                score: Some(200), // over max
                 span: None,
                 suggested_fix: None,
                 summary: "good".into(),
@@ -920,7 +999,7 @@ mod tests {
             },
         };
         let finalized = finalize(att);
-        assert_eq!(finalized.body.score, 100); // clamped
+        assert_eq!(finalized.body.score, Some(100)); // clamped
         assert_eq!(finalized.metabox, "1");
         assert_eq!(finalized.id, generate_id(&finalized)); // valid ID
     }
@@ -939,7 +1018,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
-                score: -10,
+                references: None,
+                score: Some(-10),
                 span: Some(Span {
                     start: Position {
                         line: 42,
@@ -982,7 +1062,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
-                score: -10,
+                references: None,
+                score: Some(-10),
                 span: None,
                 suggested_fix: None,
                 summary: "issue".into(),
@@ -1003,7 +1084,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
-                score: -10,
+                references: None,
+                score: Some(-10),
                 span: Some(Span {
                     start: Position {
                         line: 42,
@@ -1036,7 +1118,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 10,
+                references: None,
+                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "a".into(),
@@ -1056,7 +1139,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 10,
+                references: None,
+                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "b".into(),
@@ -1075,6 +1159,7 @@ mod tests {
             Kind::Fail,
             Kind::Blocker,
             Kind::Concern,
+            Kind::Comment,
             Kind::Praise,
             Kind::Suggestion,
             Kind::Waiver,
@@ -1107,6 +1192,7 @@ mod tests {
         assert_eq!(Kind::Fail.default_score(), -20);
         assert_eq!(Kind::Blocker.default_score(), -50);
         assert_eq!(Kind::Concern.default_score(), -10);
+        assert_eq!(Kind::Comment.default_score(), 0);
         assert_eq!(Kind::Praise.default_score(), 30);
         assert_eq!(Kind::Suggestion.default_score(), -5);
         assert_eq!(Kind::Waiver.default_score(), 10);
@@ -1153,7 +1239,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 10,
+                references: None,
+                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1174,7 +1261,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 20,
+                references: None,
+                score: Some(20),
                 span: None,
                 suggested_fix: None,
                 summary: "updated".into(),
@@ -1201,7 +1289,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
-                score: -10,
+                references: None,
+                score: Some(-10),
                 span: None,
                 suggested_fix: None,
                 summary: "bad".into(),
@@ -1222,7 +1311,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 20,
+                references: None,
+                score: Some(20),
                 span: None,
                 suggested_fix: None,
                 summary: "fixed".into(),
@@ -1257,7 +1347,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 10,
+                references: None,
+                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1287,7 +1378,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 10,
+                references: None,
+                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1308,7 +1400,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 10,
+                references: None,
+                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1329,7 +1422,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: Some("git:abc123".into()),
-                score: 10,
+                references: None,
+                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1358,7 +1452,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 10,
+                references: None,
+                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1393,7 +1488,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Praise,
                 r#ref: Some("git:3aba500".into()),
-                score: 30,
+                references: None,
+                score: Some(30),
                 span: None,
                 suggested_fix: None,
                 summary: "great".into(),
@@ -1429,7 +1525,8 @@ mod tests {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
-                score: 10,
+                references: None,
+                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1557,5 +1654,137 @@ mod tests {
             let parsed: IssuerType = s.parse().unwrap();
             assert_eq!(&parsed, at);
         }
+    }
+
+    #[test]
+    fn test_parse_location_no_span() {
+        let (subject, span) = parse_location("src/parser.rs");
+        assert_eq!(subject, "src/parser.rs");
+        assert!(span.is_none());
+    }
+
+    #[test]
+    fn test_parse_location_single_line() {
+        let (subject, span) = parse_location("src/parser.rs:42");
+        assert_eq!(subject, "src/parser.rs");
+        let span = span.unwrap();
+        assert_eq!(span.start.line, 42);
+        assert!(span.end.is_none());
+    }
+
+    #[test]
+    fn test_parse_location_range() {
+        let (subject, span) = parse_location("src/parser.rs:15:28");
+        assert_eq!(subject, "src/parser.rs");
+        let span = span.unwrap();
+        assert_eq!(span.start.line, 15);
+        assert_eq!(span.end.unwrap().line, 28);
+    }
+
+    #[test]
+    fn test_parse_location_not_a_number() {
+        let (subject, span) = parse_location("src/parser.rs:abc");
+        assert_eq!(subject, "src/parser.rs:abc");
+        assert!(span.is_none());
+    }
+
+    #[test]
+    fn test_references_in_canonical_form() {
+        let now = DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let without_ref = finalize(Attestation {
+            metabox: "1".into(),
+            record_type: "attestation".into(),
+            subject: "x.rs".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
+            created_at: now,
+            id: String::new(),
+            body: AttestationBody {
+                detail: None,
+                kind: Kind::Comment,
+                r#ref: None,
+                references: None,
+                score: Some(0),
+                span: None,
+                suggested_fix: None,
+                summary: "note".into(),
+                supersedes: None,
+                tags: vec![],
+            },
+        });
+
+        let with_ref = finalize(Attestation {
+            metabox: "1".into(),
+            record_type: "attestation".into(),
+            subject: "x.rs".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
+            created_at: now,
+            id: String::new(),
+            body: AttestationBody {
+                detail: None,
+                kind: Kind::Comment,
+                r#ref: None,
+                references: Some("deadbeef".into()),
+                score: Some(0),
+                span: None,
+                suggested_fix: None,
+                summary: "note".into(),
+                supersedes: None,
+                tags: vec![],
+            },
+        });
+
+        assert_ne!(
+            without_ref.id, with_ref.id,
+            "references should affect ID"
+        );
+    }
+
+    #[test]
+    fn test_self_reference_rejected() {
+        let mut att = Attestation {
+            metabox: "1".into(),
+            record_type: "attestation".into(),
+            subject: "x.rs".into(),
+            issuer: "mailto:test@test.com".into(),
+            issuer_type: None,
+            created_at: Utc::now(),
+            id: String::new(),
+            body: AttestationBody {
+                detail: None,
+                kind: Kind::Comment,
+                r#ref: None,
+                references: None,
+                score: Some(0),
+                span: None,
+                suggested_fix: None,
+                summary: "self-ref".into(),
+                supersedes: None,
+                tags: vec![],
+            },
+        };
+        att.id = generate_id(&att);
+        // Set references to own ID
+        att.body.references = Some(att.id.clone());
+        // Regenerate ID (references changed the content)
+        att.id = generate_id(&att);
+        att.body.references = Some(att.id.clone());
+        // Now ID and references match
+        att.id = generate_id(&att);
+        // This is tricky: changing references changes the id, so we need to
+        // manually set references == id for the test. Let's use a fixed ID.
+        att.id = "abcdef1234567890".into();
+        att.body.references = Some("abcdef1234567890".into());
+
+        let errors = validate(&att);
+        assert!(
+            errors.iter().any(|e| e.contains("references must not point to the record itself")),
+            "self-reference should be rejected, got: {:?}",
+            errors
+        );
     }
 }
