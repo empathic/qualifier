@@ -136,7 +136,7 @@ fn test_attest_requires_summary() {
 fn test_score_json_output_structure() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create an attestation first
+    // Create an annotation first
     run_qualifier(
         dir.path(),
         &[
@@ -201,7 +201,7 @@ fn test_score_empty_project() {
 fn test_check_passes_with_good_scores() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create a positive attestation
+    // Create a positive annotation
     run_qualifier(
         dir.path(),
         &[
@@ -226,7 +226,7 @@ fn test_check_passes_with_good_scores() {
 fn test_check_fails_with_bad_scores() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create a negative attestation
+    // Create a negative annotation
     run_qualifier(
         dir.path(),
         &[
@@ -390,13 +390,13 @@ fn test_show_nonexistent_artifact() {
     );
 }
 
-// --- multiple attestations on same artifact ---
+// --- multiple annotations on same artifact ---
 
 #[test]
-fn test_multiple_attestations_accumulate() {
+fn test_multiple_annotations_accumulate() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Add two attestations to the same artifact
+    // Add two annotations to the same artifact
     run_qualifier(
         dir.path(),
         &[
@@ -540,7 +540,7 @@ fn test_attest_file_flag_override() {
 }
 
 #[test]
-fn test_show_finds_attestation_in_directory_qual() {
+fn test_show_finds_annotation_in_directory_qual() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
 
@@ -564,7 +564,7 @@ fn test_show_finds_attestation_in_directory_qual() {
     // Show should find it via discovery
     let (stdout, _, code) = run_qualifier(dir.path(), &["show", "src/bar.rs"]);
 
-    assert_eq!(code, 0, "show should find attestation in directory .qual");
+    assert_eq!(code, 0, "show should find annotation in directory .qual");
     assert!(stdout.contains("src/bar.rs"));
     assert!(stdout.contains("30"));
 }
@@ -574,7 +574,7 @@ fn test_score_accumulates_across_layouts() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
 
-    // First attestation → goes to src/.qual
+    // First annotation → goes to src/.qual
     run_qualifier(
         dir.path(),
         &[
@@ -591,7 +591,7 @@ fn test_score_accumulates_across_layouts() {
         ],
     );
 
-    // Pre-create a 1:1 file and write a second attestation via --file
+    // Pre-create a 1:1 file and write a second annotation via --file
     run_qualifier(
         dir.path(),
         &[
@@ -945,7 +945,7 @@ fn test_graph_missing_file() {
 fn test_score_overflow_clamped() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create 5 attestations each with score +100
+    // Create 5 annotations each with score +100
     for i in 0..5 {
         run_qualifier(
             dir.path(),
@@ -1012,7 +1012,7 @@ fn test_attest_batch_validates() {
 
     assert!(
         !output.status.success(),
-        "batch mode should reject invalid attestation (empty summary)"
+        "batch mode should reject invalid annotation (empty summary)"
     );
 }
 
@@ -1047,7 +1047,7 @@ fn test_attest_with_issuer_type() {
     let content = std::fs::read_to_string(&qual_path).unwrap();
     assert!(
         content.contains("\"issuer_type\":\"human\""),
-        "attestation should contain issuer_type: {content}"
+        "annotation should contain issuer_type: {content}"
     );
 }
 
@@ -1079,12 +1079,12 @@ fn test_attest_with_ref() {
     let content = std::fs::read_to_string(&qual_path).unwrap();
     assert!(
         content.contains("\"ref\":\"git:3aba500\""),
-        "attestation should contain ref: {content}"
+        "annotation should contain ref: {content}"
     );
 }
 
 #[test]
-fn test_new_attestations_are_metabox() {
+fn test_new_annotations_are_metabox() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, _, code) = run_qualifier(
@@ -1109,11 +1109,11 @@ fn test_new_attestations_are_metabox() {
     let content = std::fs::read_to_string(&qual_path).unwrap();
     assert!(
         content.contains("\"metabox\":\"1\""),
-        "new attestations should be metabox format: {content}"
+        "new annotations should be metabox format: {content}"
     );
     assert!(
-        content.contains("\"type\":\"attestation\""),
-        "new attestations should have type field: {content}"
+        content.contains("\"type\":\"annotation\""),
+        "new annotations should have type field: {content}"
     );
 }
 
@@ -1173,7 +1173,7 @@ fn test_attest_with_span() {
     let content = std::fs::read_to_string(&qual_path).unwrap();
     assert!(
         content.contains("\"span\""),
-        "attestation should contain span: {content}"
+        "annotation should contain span: {content}"
     );
     assert!(
         content.contains("\"line\":42"),
@@ -1381,7 +1381,7 @@ fn test_show_pretty_no_span() {
 fn test_attest_with_references() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create an initial attestation to reference
+    // Create an initial annotation to reference
     let (stdout1, _, code1) = run_qualifier(
         dir.path(),
         &[
@@ -1406,7 +1406,7 @@ fn test_attest_with_references() {
         .map(|s| s.trim().to_string())
         .expect("should find id in output");
 
-    // Create a referencing attestation
+    // Create a referencing annotation
     let (_, _, code2) = run_qualifier(
         dir.path(),
         &[
@@ -1429,7 +1429,7 @@ fn test_attest_with_references() {
     let content = std::fs::read_to_string(&qual_path).unwrap();
     assert!(
         content.contains(&format!("\"references\":\"{id}\"")),
-        "attestation should contain references field: {content}"
+        "annotation should contain references field: {content}"
     );
 }
 
@@ -1437,7 +1437,7 @@ fn test_attest_with_references() {
 fn test_show_displays_references() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create an initial attestation
+    // Create an initial annotation
     let (stdout1, _, _) = run_qualifier(
         dir.path(),
         &[
@@ -1460,7 +1460,7 @@ fn test_show_displays_references() {
         .map(|s| s.trim().to_string())
         .expect("should find id in output");
 
-    // Create a referencing attestation
+    // Create a referencing annotation
     run_qualifier(
         dir.path(),
         &[
@@ -1501,7 +1501,7 @@ fn test_show_displays_references() {
 fn test_reply_basic() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create an initial attestation to reply to
+    // Create an initial annotation to reply to
     let (stdout1, _, code1) = run_qualifier(
         dir.path(),
         &[
@@ -1577,7 +1577,7 @@ fn test_reply_inherits_subject() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
 
-    // Create an attestation on src/parser.rs
+    // Create an annotation on src/parser.rs
     let (stdout1, _, code1) = run_qualifier(
         dir.path(),
         &[
@@ -1653,7 +1653,7 @@ fn test_reply_not_found() {
 fn test_reply_with_kind_override() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create initial attestation
+    // Create initial annotation
     let (stdout1, _, _) = run_qualifier(
         dir.path(),
         &[
@@ -1780,7 +1780,7 @@ fn test_show_threads_replies_under_parent() {
 fn test_resolve_basic() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Create an initial attestation to resolve
+    // Create an initial annotation to resolve
     let (stdout1, _, code1) = run_qualifier(
         dir.path(),
         &[

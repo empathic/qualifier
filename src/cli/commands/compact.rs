@@ -14,7 +14,7 @@ pub struct Args {
     #[arg(long)]
     pub all: bool,
 
-    /// Collapse to a single epoch attestation
+    /// Collapse to a single epoch annotation
     #[arg(long)]
     pub snapshot: bool,
 
@@ -39,7 +39,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     let qual_path = qual_file::find_qual_file_for(artifact).ok_or_else(|| {
         crate::Error::Validation(format!(
-            "No .qual file found containing attestations for '{artifact}'"
+            "No .qual file found containing annotations for '{artifact}'"
         ))
     })?;
 

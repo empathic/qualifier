@@ -17,7 +17,7 @@ pub struct Config {
     #[serde(default = "default_graph_path")]
     pub graph: PathBuf,
 
-    /// Default issuer for attestations.
+    /// Default issuer for annotations.
     #[serde(default)]
     pub issuer: Option<String>,
 

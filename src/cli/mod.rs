@@ -9,7 +9,7 @@ pub mod span_context;
 #[command(
     name = "qualifier",
     version,
-    about = "Deterministic quality attestations for software artifacts"
+    about = "Deterministic quality annotations for software artifacts"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -18,9 +18,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Add an attestation to an artifact
+    /// Add an annotation to an artifact
     Attest(Box<commands::attest::Args>),
-    /// Show attestations and scores for an artifact
+    /// Show annotations and scores for an artifact
     Show(commands::show::Args),
     /// Compute and display scores
     Score(commands::score::Args),
@@ -49,9 +49,9 @@ pub enum Commands {
     Approve(commands::approve::Args),
     /// Reject an artifact (fail)
     Reject(commands::reject::Args),
-    /// Reply to an existing attestation
+    /// Reply to an existing annotation
     Reply(commands::reply::Args),
-    /// Resolve (close) an existing attestation
+    /// Resolve (close) an existing annotation
     Resolve(commands::resolve::Args),
 }
 

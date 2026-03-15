@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 
-use crate::attestation::{self, Epoch, EpochBody, IssuerType, Record};
+use crate::annotation::{self, Epoch, EpochBody, IssuerType, Record};
 use crate::qual_file::QualFile;
 use crate::scoring;
 
@@ -20,7 +20,7 @@ pub struct CompactResult {
 /// Prune superseded records, keeping only chain tips.
 ///
 /// The raw score of the artifact is preserved as an invariant.
-/// Non-attestation records (epochs, dependencies, unknowns) are always kept.
+/// Non-annotation records (epochs, dependencies, unknowns) are always kept.
 pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult) {
     let before = qual_file.records.len();
     let active = scoring::filter_superseded(&qual_file.records);
@@ -79,7 +79,7 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
         let refs: Vec<String> = records.iter().map(|r| r.id().to_string()).collect();
         let count = records.len();
 
-        let epoch = attestation::finalize_epoch(Epoch {
+        let epoch = annotation::finalize_epoch(Epoch {
             metabox: "1".into(),
             record_type: "epoch".into(),
             subject: subject.to_string(),
@@ -122,14 +122,14 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attestation::{self, Attestation, AttestationBody, Kind};
+    use crate::annotation::{self, Annotation, AnnotationBody, Kind};
     use chrono::Utc;
     use std::path::PathBuf;
 
-    fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
-        attestation::finalize(Attestation {
+    fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Annotation {
+        annotation::finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: subject.into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
@@ -137,7 +137,7 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind,
                 r#ref: None,
@@ -153,13 +153,13 @@ mod tests {
     }
 
     fn make_record(subject: &str, kind: Kind, score: i32, summary: &str) -> Record {
-        Record::Attestation(Box::new(make_att(subject, kind, score, summary)))
+        Record::Annotation(Box::new(make_att(subject, kind, score, summary)))
     }
 
     fn make_superseding(subject: &str, score: i32, supersedes_id: &str) -> Record {
-        Record::Attestation(Box::new(attestation::finalize(Attestation {
+        Record::Annotation(Box::new(annotation::finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: subject.into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
@@ -167,7 +167,7 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -304,8 +304,8 @@ mod tests {
         let a = make_record("test.rs", Kind::Praise, 20, "good");
         let mut b_att = make_att("test.rs", Kind::Pass, 10, "fixed");
         b_att.body.supersedes = Some("nonexistent_id_12345".into());
-        b_att = attestation::finalize(b_att);
-        let b = Record::Attestation(Box::new(b_att));
+        b_att = annotation::finalize(b_att);
+        let b = Record::Annotation(Box::new(b_att));
 
         let qf = make_qual_file(vec![a, b]);
         let (pruned, result) = prune(&qf);

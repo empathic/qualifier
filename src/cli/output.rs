@@ -1,6 +1,6 @@
 use comfy_table::{Cell, CellAlignment, Color, Table};
 
-use crate::attestation::Record;
+use crate::annotation::Record;
 use crate::scoring::{self, ScoreReport};
 
 /// Format a score for human display: `[+40]` or `[-30]` or `[  0]` or `[---]`.

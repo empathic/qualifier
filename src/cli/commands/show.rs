@@ -1,7 +1,7 @@
 use clap::Args as ClapArgs;
 use std::path::Path;
 
-use crate::attestation::Kind;
+use crate::annotation::Kind;
 use crate::cli::output;
 use crate::cli::span_context;
 use crate::qual_file::{self, find_project_root};
@@ -49,7 +49,7 @@ pub fn run(args: Args) -> crate::Result<()> {
     }
 
     let scores = scoring::effective_scores(&graph, &all_qual_files);
-    let owned_records: Vec<crate::attestation::Record> =
+    let owned_records: Vec<crate::annotation::Record> =
         records.iter().map(|r| (*r).clone()).collect();
     let report = scores
         .get(&args.artifact)
@@ -61,7 +61,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         });
 
     // Filter records for display: remove superseded, and unless --all, remove resolve tombstones
-    let display_records: Vec<crate::attestation::Record> = if args.all {
+    let display_records: Vec<crate::annotation::Record> = if args.all {
         owned_records.clone()
     } else {
         let active = scoring::filter_superseded(&owned_records);
@@ -83,7 +83,7 @@ pub fn run(args: Args) -> crate::Result<()> {
                         && let Some(record) = display_records.iter().find(|r| {
                             rec_val.get("id").and_then(|v| v.as_str()) == Some(r.id())
                         })
-                        && let Some(att) = record.as_attestation()
+                        && let Some(att) = record.as_annotation()
                         && let Some(ref span) = att.body.span
                     {
                         let ctx = span_context::read_span_context(
@@ -124,13 +124,13 @@ pub fn run(args: Args) -> crate::Result<()> {
         display_records.iter().map(|r| r.id()).collect();
 
     // Map from parent ID -> child records (replies)
-    let mut children: std::collections::HashMap<&str, Vec<&crate::attestation::Record>> =
+    let mut children: std::collections::HashMap<&str, Vec<&crate::annotation::Record>> =
         std::collections::HashMap::new();
-    let mut roots: Vec<&crate::attestation::Record> = Vec::new();
+    let mut roots: Vec<&crate::annotation::Record> = Vec::new();
 
     for record in &display_records {
         let parent_id = record
-            .as_attestation()
+            .as_annotation()
             .and_then(|a| a.body.references.as_deref());
         if let Some(pid) = parent_id
             && display_ids.contains(pid)
@@ -159,13 +159,13 @@ pub fn run(args: Args) -> crate::Result<()> {
 /// `line_prefix` is printed before this record's line (includes tree chars).
 /// `cont_prefix` is printed before continuation lines (pretty context, child tree).
 fn print_record(
-    record: &crate::attestation::Record,
+    record: &crate::annotation::Record,
     line_prefix: &str,
     cont_prefix: &str,
     args: &Args,
-    children: &std::collections::HashMap<&str, Vec<&crate::attestation::Record>>,
+    children: &std::collections::HashMap<&str, Vec<&crate::annotation::Record>>,
 ) {
-    if let Some(att) = record.as_attestation() {
+    if let Some(att) = record.as_annotation() {
         let date = att.created_at.format("%Y-%m-%d");
         let issuer_short = att
             .issuer

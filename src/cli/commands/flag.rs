@@ -1,6 +1,6 @@
 use clap::Args as ClapArgs;
 
-use crate::attestation::Kind;
+use crate::annotation::Kind;
 use super::review::{self, ReviewArgs};
 
 #[derive(ClapArgs)]

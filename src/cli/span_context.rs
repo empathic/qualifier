@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::attestation::Span;
+use crate::annotation::Span;
 
 /// Number of context lines to show before/after the span.
 pub const DEFAULT_CONTEXT_LINES: u32 = 3;
@@ -144,7 +144,7 @@ pub fn to_json(ctx: &SpanContext) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attestation::{Position, Span};
+    use crate::annotation::{Position, Span};
     use std::io::Write;
     use tempfile::NamedTempFile;
 

@@ -141,7 +141,7 @@ pub fn parse_location(s: &str) -> (String, Option<Span>) {
 
 // ─── Kind enum ──────────────────────────────────────────────────────────────
 
-/// The type of an attestation.
+/// The type of an annotation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -195,7 +195,7 @@ impl std::str::FromStr for Kind {
 }
 
 impl Kind {
-    /// Recommended default score for each attestation kind.
+    /// Recommended default score for each annotation kind.
     pub fn default_score(&self) -> i32 {
         match self {
             Kind::Pass => 20,
@@ -214,7 +214,7 @@ impl Kind {
 
 // ─── IssuerType enum ────────────────────────────────────────────────────────
 
-/// Issuer classification for attestations.
+/// Issuer classification for annotations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IssuerType {
@@ -251,9 +251,9 @@ impl std::str::FromStr for IssuerType {
 
 // ─── Body structs (fields alphabetical for MCF) ─────────────────────────────
 
-/// Attestation body fields. Field order is alphabetical (MCF canonical form).
+/// Annotation body fields. Field order is alphabetical (MCF canonical form).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AttestationBody {
+pub struct AnnotationBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     pub kind: Kind,
@@ -290,48 +290,48 @@ pub struct DependencyBody {
     pub depends_on: Vec<String>,
 }
 
-// ─── Attestation struct ─────────────────────────────────────────────────────
+// ─── Annotation struct ──────────────────────────────────────────────────────
 
-fn default_attestation_type() -> String {
-    "attestation".to_string()
+fn default_annotation_type() -> String {
+    "annotation".to_string()
 }
 
 fn default_metabox() -> String {
     "1".to_string()
 }
 
-/// A quality attestation against a software artifact (Metabox envelope).
+/// A quality annotation against a software artifact (Metabox envelope).
 ///
 /// **IMPORTANT:** Envelope field order is fixed: metabox, type, subject,
 /// issuer, issuer_type, created_at, id, body. Body fields are alphabetical (MCF).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Attestation {
+pub struct Annotation {
     /// Metabox envelope version. Always "1".
     #[serde(default = "default_metabox")]
     pub metabox: String,
 
-    /// Record type. Always "attestation".
-    #[serde(rename = "type", default = "default_attestation_type")]
+    /// Record type. Always "annotation".
+    #[serde(rename = "type", default = "default_annotation_type")]
     pub record_type: String,
 
     /// Qualified name of the subject (artifact).
     pub subject: String,
 
-    /// Who or what created this attestation (URI).
+    /// Who or what created this annotation (URI).
     pub issuer: String,
 
     /// Issuer classification (human, ai, tool, unknown).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer_type: Option<IssuerType>,
 
-    /// When this attestation was created (RFC 3339).
+    /// When this annotation was created (RFC 3339).
     pub created_at: DateTime<Utc>,
 
     /// Content-addressed record ID (BLAKE3).
     pub id: String,
 
     /// Type-specific payload.
-    pub body: AttestationBody,
+    pub body: AnnotationBody,
 }
 
 // ─── Epoch struct ───────────────────────────────────────────────────────────
@@ -376,7 +376,7 @@ pub struct DependencyRecord {
 /// A typed qualifier record. Dispatches on the `type` field in JSON.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Record {
-    Attestation(Box<Attestation>),
+    Annotation(Box<Annotation>),
     Epoch(Epoch),
     Dependency(DependencyRecord),
     Unknown(serde_json::Value),
@@ -385,7 +385,7 @@ pub enum Record {
 impl Serialize for Record {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            Record::Attestation(a) => a.serialize(serializer),
+            Record::Annotation(a) => a.serialize(serializer),
             Record::Epoch(e) => e.serialize(serializer),
             Record::Dependency(d) => d.serialize(serializer),
             Record::Unknown(v) => v.serialize(serializer),
@@ -399,13 +399,13 @@ impl<'de> Deserialize<'de> for Record {
         let record_type = value
             .get("type")
             .and_then(|v| v.as_str())
-            .unwrap_or("attestation");
+            .unwrap_or("annotation");
 
         match record_type {
-            "attestation" => {
-                let att: Attestation =
+            "annotation" => {
+                let att: Annotation =
                     serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-                Ok(Record::Attestation(Box::new(att)))
+                Ok(Record::Annotation(Box::new(att)))
             }
             "epoch" => {
                 let epoch: Epoch =
@@ -426,7 +426,7 @@ impl Record {
     /// Get the subject name (formerly artifact).
     pub fn subject(&self) -> &str {
         match self {
-            Record::Attestation(a) => &a.subject,
+            Record::Annotation(a) => &a.subject,
             Record::Epoch(e) => &e.subject,
             Record::Dependency(d) => &d.subject,
             Record::Unknown(v) => v.get("subject").and_then(|v| v.as_str()).unwrap_or(""),
@@ -436,7 +436,7 @@ impl Record {
     /// Get the record ID.
     pub fn id(&self) -> &str {
         match self {
-            Record::Attestation(a) => &a.id,
+            Record::Annotation(a) => &a.id,
             Record::Epoch(e) => &e.id,
             Record::Dependency(d) => &d.id,
             Record::Unknown(v) => v.get("id").and_then(|v| v.as_str()).unwrap_or(""),
@@ -446,40 +446,40 @@ impl Record {
     /// Get the score (if this is a scored record type and has a score).
     pub fn score(&self) -> Option<i32> {
         match self {
-            Record::Attestation(a) => a.body.score,
+            Record::Annotation(a) => a.body.score,
             Record::Epoch(e) => Some(e.body.score),
             _ => None,
         }
     }
 
-    /// Get the supersedes ID (attestations only).
+    /// Get the supersedes ID (annotations only).
     pub fn supersedes(&self) -> Option<&str> {
         match self {
-            Record::Attestation(a) => a.body.supersedes.as_deref(),
+            Record::Annotation(a) => a.body.supersedes.as_deref(),
             _ => None,
         }
     }
 
-    /// Get the references ID (attestations only).
+    /// Get the references ID (annotations only).
     pub fn references(&self) -> Option<&str> {
         match self {
-            Record::Attestation(a) => a.body.references.as_deref(),
+            Record::Annotation(a) => a.body.references.as_deref(),
             _ => None,
         }
     }
 
-    /// Get the kind (attestations only).
+    /// Get the kind (annotations only).
     pub fn kind(&self) -> Option<&Kind> {
         match self {
-            Record::Attestation(a) => Some(&a.body.kind),
+            Record::Annotation(a) => Some(&a.body.kind),
             _ => None,
         }
     }
 
-    /// Try to get this as an attestation.
-    pub fn as_attestation(&self) -> Option<&Attestation> {
+    /// Try to get this as an annotation.
+    pub fn as_annotation(&self) -> Option<&Annotation> {
         match self {
-            Record::Attestation(a) => Some(a),
+            Record::Annotation(a) => Some(a),
             _ => None,
         }
     }
@@ -495,25 +495,25 @@ impl Record {
     /// Get the issuer type classification.
     pub fn issuer_type(&self) -> Option<&IssuerType> {
         match self {
-            Record::Attestation(a) => a.issuer_type.as_ref(),
+            Record::Annotation(a) => a.issuer_type.as_ref(),
             Record::Epoch(e) => e.issuer_type.as_ref(),
             Record::Dependency(d) => d.issuer_type.as_ref(),
             Record::Unknown(_) => None,
         }
     }
 
-    /// Returns true if this is a scored record type (attestation or epoch).
+    /// Returns true if this is a scored record type (annotation or epoch).
     pub fn is_scored(&self) -> bool {
-        matches!(self, Record::Attestation(_) | Record::Epoch(_))
+        matches!(self, Record::Annotation(_) | Record::Epoch(_))
     }
 }
 
 // ─── Canonical views (for ID generation — MCF) ──────────────────────────────
 
-/// Zero-copy canonical view for attestation records (MCF).
+/// Zero-copy canonical view for annotation records (MCF).
 /// Envelope fields in fixed order, body handles its own alphabetical ordering.
 #[derive(Serialize)]
-struct AttestationCanonicalView<'a> {
+struct AnnotationCanonicalView<'a> {
     metabox: &'a str,
     r#type: &'a str,
     subject: &'a str,
@@ -522,7 +522,7 @@ struct AttestationCanonicalView<'a> {
     issuer_type: Option<&'a IssuerType>,
     created_at: &'a DateTime<Utc>,
     id: &'a str,
-    body: &'a AttestationBody,
+    body: &'a AnnotationBody,
 }
 
 /// Zero-copy canonical view for epoch records (MCF).
@@ -555,20 +555,20 @@ struct DependencyCanonicalView<'a> {
 
 // ─── ID generation ──────────────────────────────────────────────────────────
 
-/// Generate a deterministic attestation ID by BLAKE3-hashing the canonical
+/// Generate a deterministic annotation ID by BLAKE3-hashing the canonical
 /// serialization with the `id` field set to the empty string.
-pub fn generate_id(attestation: &Attestation) -> String {
-    let view = AttestationCanonicalView {
-        metabox: &attestation.metabox,
-        r#type: "attestation",
-        subject: &attestation.subject,
-        issuer: &attestation.issuer,
-        issuer_type: attestation.issuer_type.as_ref(),
-        created_at: &attestation.created_at,
+pub fn generate_id(annotation: &Annotation) -> String {
+    let view = AnnotationCanonicalView {
+        metabox: &annotation.metabox,
+        r#type: "annotation",
+        subject: &annotation.subject,
+        issuer: &annotation.issuer,
+        issuer_type: annotation.issuer_type.as_ref(),
+        created_at: &annotation.created_at,
         id: "",
-        body: &attestation.body,
+        body: &annotation.body,
     };
-    let canonical = serde_json::to_string(&view).expect("attestation must serialize");
+    let canonical = serde_json::to_string(&view).expect("annotation must serialize");
     blake3::hash(canonical.as_bytes()).to_hex().to_string()
 }
 
@@ -607,7 +607,7 @@ pub fn generate_dependency_id(dep: &DependencyRecord) -> String {
 /// Generate a deterministic ID for any record type.
 pub fn generate_record_id(record: &Record) -> String {
     match record {
-        Record::Attestation(a) => generate_id(a),
+        Record::Annotation(a) => generate_id(a),
         Record::Epoch(e) => generate_epoch_id(e),
         Record::Dependency(d) => generate_dependency_id(d),
         Record::Unknown(_) => String::new(),
@@ -616,49 +616,49 @@ pub fn generate_record_id(record: &Record) -> String {
 
 // ─── Validation ─────────────────────────────────────────────────────────────
 
-/// Validate an attestation, returning all validation errors found.
-pub fn validate(attestation: &Attestation) -> Vec<String> {
+/// Validate an annotation, returning all validation errors found.
+pub fn validate(annotation: &Annotation) -> Vec<String> {
     let mut errors = Vec::new();
 
-    if attestation.metabox != "1" {
+    if annotation.metabox != "1" {
         errors.push(format!(
             "unsupported metabox version: {:?}",
-            attestation.metabox
+            annotation.metabox
         ));
     }
-    if attestation.subject.is_empty() {
+    if annotation.subject.is_empty() {
         errors.push("subject must not be empty".into());
     }
-    if attestation.body.summary.is_empty() {
+    if annotation.body.summary.is_empty() {
         errors.push("summary must not be empty".into());
     }
-    if attestation.issuer.is_empty() {
+    if annotation.issuer.is_empty() {
         errors.push("issuer must not be empty".into());
-    } else if !attestation.issuer.contains(':') {
+    } else if !annotation.issuer.contains(':') {
         errors.push("issuer must be a URI (e.g. mailto:user@example.com)".into());
     }
-    if let Some(score) = attestation.body.score {
+    if let Some(score) = annotation.body.score {
         if score < -100 || score > 100 {
             errors.push(format!("score {score} is out of range [-100, 100]"));
         }
     }
-    if attestation.id.is_empty() {
+    if annotation.id.is_empty() {
         errors.push("id must not be empty".into());
     }
 
     // Verify content-addressed ID matches
-    if !attestation.id.is_empty() {
-        let expected = generate_id(attestation);
-        if attestation.id != expected {
+    if !annotation.id.is_empty() {
+        let expected = generate_id(annotation);
+        if annotation.id != expected {
             errors.push(format!(
                 "id mismatch: expected {}, got {}",
-                expected, attestation.id
+                expected, annotation.id
             ));
         }
     }
 
     // Warn about 'epoch' used as a kind (it's now a record type)
-    if let Kind::Custom(ref custom) = attestation.body.kind {
+    if let Kind::Custom(ref custom) = annotation.body.kind {
         if custom == "epoch" {
             errors.push("'epoch' is a record type, not a kind; use type: \"epoch\" instead".into());
         }
@@ -683,15 +683,15 @@ pub fn validate(attestation: &Attestation) -> Vec<String> {
     }
 
     // Self-reference check
-    if let Some(ref references) = attestation.body.references
-        && !attestation.id.is_empty()
-        && references == &attestation.id
+    if let Some(ref references) = annotation.body.references
+        && !annotation.id.is_empty()
+        && references == &annotation.id
     {
         errors.push("references must not point to the record itself".into());
     }
 
     // Validate span
-    if let Some(ref span) = attestation.body.span {
+    if let Some(ref span) = annotation.body.span {
         if span.start.line == 0 {
             errors.push("span.start.line must be >= 1 (1-indexed)".into());
         }
@@ -814,19 +814,19 @@ pub fn clamp_score(score: i32) -> i32 {
     score.clamp(-100, 100)
 }
 
-/// Build an attestation with a generated ID. The `id` field on the input is
+/// Build an annotation with a generated ID. The `id` field on the input is
 /// ignored and replaced with the content-addressed hash.
-pub fn finalize(mut attestation: Attestation) -> Attestation {
-    attestation.body.score = attestation.body.score.map(clamp_score);
-    attestation.metabox = "1".into();
-    attestation.record_type = "attestation".to_string();
+pub fn finalize(mut annotation: Annotation) -> Annotation {
+    annotation.body.score = annotation.body.score.map(clamp_score);
+    annotation.metabox = "1".into();
+    annotation.record_type = "annotation".to_string();
     // Normalize span
-    if let Some(ref mut span) = attestation.body.span {
+    if let Some(ref mut span) = annotation.body.span {
         span.normalize();
     }
-    attestation.id = String::new(); // clear for hashing
-    attestation.id = generate_id(&attestation);
-    attestation
+    annotation.id = String::new(); // clear for hashing
+    annotation.id = generate_id(&annotation);
+    annotation
 }
 
 /// Build an epoch with a generated ID.
@@ -845,7 +845,7 @@ pub fn finalize_epoch(mut epoch: Epoch) -> Epoch {
 /// Build a record with a generated ID (dispatches by type).
 pub fn finalize_record(record: Record) -> Record {
     match record {
-        Record::Attestation(a) => Record::Attestation(Box::new(finalize(*a))),
+        Record::Annotation(a) => Record::Annotation(Box::new(finalize(*a))),
         Record::Epoch(e) => Record::Epoch(finalize_epoch(e)),
         Record::Dependency(mut d) => {
             d.metabox = "1".into();
@@ -865,10 +865,10 @@ mod tests {
     use super::*;
     use chrono::Utc;
 
-    fn sample_attestation() -> Attestation {
-        let mut att = Attestation {
+    fn sample_annotation() -> Annotation {
+        let mut att = Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "src/parser.rs".into(),
             issuer: "mailto:alice@example.com".into(),
             issuer_type: None,
@@ -876,7 +876,7 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
@@ -895,7 +895,7 @@ mod tests {
 
     #[test]
     fn test_generate_id_deterministic() {
-        let att = sample_attestation();
+        let att = sample_annotation();
         let id1 = generate_id(&att);
         let id2 = generate_id(&att);
         assert_eq!(id1, id2);
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn test_generate_id_changes_with_content() {
-        let att1 = sample_attestation();
+        let att1 = sample_annotation();
         let mut att2 = att1.clone();
         att2.body.score = Some(-20);
         att2.id = generate_id(&att2);
@@ -914,22 +914,22 @@ mod tests {
 
     #[test]
     fn test_validate_valid() {
-        let att = sample_attestation();
+        let att = sample_annotation();
         let errors = validate(&att);
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
 
     #[test]
     fn test_validate_empty_fields() {
-        let att = Attestation {
+        let att = Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: String::new(),
             issuer: String::new(),
             issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -951,7 +951,7 @@ mod tests {
 
     #[test]
     fn test_validate_score_out_of_range() {
-        let mut att = sample_attestation();
+        let mut att = sample_annotation();
         att.body.score = Some(200);
         att.id = generate_id(&att);
         let errors = validate(&att);
@@ -960,7 +960,7 @@ mod tests {
 
     #[test]
     fn test_validate_id_mismatch() {
-        let mut att = sample_attestation();
+        let mut att = sample_annotation();
         att.id = "deadbeef".repeat(8);
         let errors = validate(&att);
         assert!(errors.iter().any(|e| e.contains("id mismatch")));
@@ -977,15 +977,15 @@ mod tests {
 
     #[test]
     fn test_finalize() {
-        let att = Attestation {
+        let att = Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "test".into(),
             issuer: "mailto:bot@localhost".into(),
             issuer_type: None,
             created_at: Utc::now(),
             id: "will be replaced".into(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1006,15 +1006,15 @@ mod tests {
 
     #[test]
     fn test_finalize_normalizes_span() {
-        let att = Attestation {
+        let att = Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "test.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
@@ -1050,15 +1050,15 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        let without_span = finalize(Attestation {
+        let without_span = finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: now,
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
@@ -1072,15 +1072,15 @@ mod tests {
             },
         });
 
-        let with_span = finalize(Attestation {
+        let with_span = finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: now,
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
@@ -1106,15 +1106,15 @@ mod tests {
     #[test]
     fn test_supersession_cycle_detection() {
         let now = Utc::now();
-        let a = Record::Attestation(Box::new(Attestation {
+        let a = Record::Annotation(Box::new(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: now,
             id: "aaa".into(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1127,15 +1127,15 @@ mod tests {
                 tags: vec![],
             },
         }));
-        let b = Record::Attestation(Box::new(Attestation {
+        let b = Record::Annotation(Box::new(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: now,
             id: "bbb".into(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1173,9 +1173,9 @@ mod tests {
 
     #[test]
     fn test_kind_serde_roundtrip() {
-        let att = sample_attestation();
+        let att = sample_annotation();
         let json = serde_json::to_string(&att).unwrap();
-        let parsed: Attestation = serde_json::from_str(&json).unwrap();
+        let parsed: Annotation = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.body.kind, att.body.kind);
     }
 
@@ -1201,7 +1201,7 @@ mod tests {
 
     #[test]
     fn test_typo_detection_in_validate() {
-        let mut att = sample_attestation();
+        let mut att = sample_annotation();
         att.body.kind = Kind::Custom("pss".into());
         att.id = generate_id(&att);
         let errors = validate(&att);
@@ -1214,7 +1214,7 @@ mod tests {
 
     #[test]
     fn test_no_typo_for_distant_custom_kind() {
-        let mut att = sample_attestation();
+        let mut att = sample_annotation();
         att.body.kind = Kind::Custom("my_custom_lint".into());
         att.id = generate_id(&att);
         let errors = validate(&att);
@@ -1227,15 +1227,15 @@ mod tests {
 
     #[test]
     fn test_cross_subject_supersession_detected() {
-        let a = Record::Attestation(Box::new(finalize(Attestation {
+        let a = Record::Annotation(Box::new(finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "foo.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1249,15 +1249,15 @@ mod tests {
             },
         })));
         let a_id = a.id().to_string();
-        let b = Record::Attestation(Box::new(finalize(Attestation {
+        let b = Record::Annotation(Box::new(finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "bar.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1277,15 +1277,15 @@ mod tests {
 
     #[test]
     fn test_same_subject_supersession_ok() {
-        let a = Record::Attestation(Box::new(finalize(Attestation {
+        let a = Record::Annotation(Box::new(finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "foo.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Concern,
                 r#ref: None,
@@ -1299,15 +1299,15 @@ mod tests {
             },
         })));
         let a_id = a.id().to_string();
-        let b = Record::Attestation(Box::new(finalize(Attestation {
+        let b = Record::Annotation(Box::new(finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "foo.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1335,15 +1335,15 @@ mod tests {
 
     #[test]
     fn test_metabox_finalize_sets_version() {
-        let att = finalize(Attestation {
+        let att = finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "test.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1366,15 +1366,15 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        let base = finalize(Attestation {
+        let base = finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: now,
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1388,15 +1388,15 @@ mod tests {
             },
         });
 
-        let with_issuer_type = finalize(Attestation {
+        let with_issuer_type = finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: Some(IssuerType::Human),
             created_at: now,
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1410,15 +1410,15 @@ mod tests {
             },
         });
 
-        let with_ref = finalize(Attestation {
+        let with_ref = finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: now,
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: Some("git:abc123".into()),
@@ -1440,15 +1440,15 @@ mod tests {
 
     #[test]
     fn test_validate_unknown_metabox_version() {
-        let mut att = Attestation {
+        let mut att = Annotation {
             metabox: "99".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1474,9 +1474,9 @@ mod tests {
 
     #[test]
     fn test_metabox_serde_roundtrip() {
-        let att = finalize(Attestation {
+        let att = finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:alice@example.com".into(),
             issuer_type: Some(IssuerType::Human),
@@ -1484,7 +1484,7 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Praise,
                 r#ref: Some("git:3aba500".into()),
@@ -1500,20 +1500,20 @@ mod tests {
 
         let json = serde_json::to_string(&att).unwrap();
         assert!(json.contains("\"metabox\":\"1\""));
-        assert!(json.contains("\"type\":\"attestation\""));
+        assert!(json.contains("\"type\":\"annotation\""));
         assert!(json.contains("\"body\""));
         assert!(json.contains("\"issuer_type\":\"human\""));
         assert!(json.contains("\"ref\":\"git:3aba500\""));
 
-        let parsed: Attestation = serde_json::from_str(&json).unwrap();
+        let parsed: Annotation = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, att);
     }
 
     #[test]
     fn test_record_serde_roundtrip() {
-        let att = finalize(Attestation {
+        let att = finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
@@ -1521,7 +1521,7 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,
@@ -1534,19 +1534,19 @@ mod tests {
                 tags: vec![],
             },
         });
-        let record = Record::Attestation(Box::new(att.clone()));
+        let record = Record::Annotation(Box::new(att.clone()));
         let json = serde_json::to_string(&record).unwrap();
         let parsed: Record = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id(), att.id);
-        assert!(parsed.as_attestation().is_some());
+        assert!(parsed.as_annotation().is_some());
     }
 
     #[test]
-    fn test_record_type_defaults_to_attestation() {
-        // JSON without "type" field should parse as attestation
+    fn test_record_type_defaults_to_annotation() {
+        // JSON without "type" field should parse as annotation
         let json = r#"{"metabox":"1","subject":"x.rs","issuer":"mailto:test@test.com","created_at":"2026-02-24T10:00:00Z","id":"abc","body":{"kind":"pass","score":10,"summary":"ok"}}"#;
         let record: Record = serde_json::from_str(json).unwrap();
-        assert!(record.as_attestation().is_some());
+        assert!(record.as_annotation().is_some());
     }
 
     #[test]
@@ -1694,15 +1694,15 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
 
-        let without_ref = finalize(Attestation {
+        let without_ref = finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: now,
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Comment,
                 r#ref: None,
@@ -1716,15 +1716,15 @@ mod tests {
             },
         });
 
-        let with_ref = finalize(Attestation {
+        let with_ref = finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: now,
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Comment,
                 r#ref: None,
@@ -1746,15 +1746,15 @@ mod tests {
 
     #[test]
     fn test_self_reference_rejected() {
-        let mut att = Attestation {
+        let mut att = Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
             created_at: Utc::now(),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Comment,
                 r#ref: None,

@@ -3,7 +3,7 @@ use clap::Args as ClapArgs;
 use std::io::{self, BufRead};
 use std::path::Path;
 
-use crate::attestation::{self, Attestation, AttestationBody, IssuerType, Kind, Record};
+use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
 use crate::qual_file;
 
 #[derive(ClapArgs)]
@@ -11,7 +11,7 @@ pub struct Args {
     /// The artifact to attest (required unless --stdin)
     pub artifact: Option<String>,
 
-    /// Attestation kind (pass, fail, blocker, concern, praise, suggestion, waiver)
+    /// Annotation kind (pass, fail, blocker, concern, praise, suggestion, waiver)
     #[arg(long)]
     pub kind: Option<String>,
 
@@ -51,11 +51,11 @@ pub struct Args {
     #[arg(long, name = "ref")]
     pub r#ref: Option<String>,
 
-    /// ID of a prior attestation this replaces
+    /// ID of a prior annotation this replaces
     #[arg(long)]
     pub supersedes: Option<String>,
 
-    /// ID of a related attestation (conversational reference, no scoring impact)
+    /// ID of a related annotation (conversational reference, no scoring impact)
     #[arg(long)]
     pub references: Option<String>,
 
@@ -63,7 +63,7 @@ pub struct Args {
     #[arg(long)]
     pub file: Option<String>,
 
-    /// Read JSONL attestations from stdin (batch mode)
+    /// Read JSONL annotations from stdin (batch mode)
     #[arg(long)]
     pub stdin: bool,
 }
@@ -107,21 +107,21 @@ pub fn run(args: Args) -> crate::Result<()> {
     };
 
     let span = match &args.span {
-        Some(s) => Some(attestation::parse_span(s).map_err(crate::Error::Validation)?),
+        Some(s) => Some(annotation::parse_span(s).map_err(crate::Error::Validation)?),
         None => None,
     };
 
     let qual_path = qual_file::resolve_qual_path(&subject, args.file.as_deref().map(Path::new))?;
 
-    let att = attestation::finalize(Attestation {
+    let att = annotation::finalize(Annotation {
         metabox: "1".into(),
-        record_type: "attestation".into(),
+        record_type: "annotation".into(),
         subject,
         issuer,
         issuer_type,
         created_at: Utc::now(),
         id: String::new(),
-        body: AttestationBody {
+        body: AnnotationBody {
             detail: args.detail,
             kind,
             r#ref: args.r#ref,
@@ -135,7 +135,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         },
     });
 
-    let errors = attestation::validate(&att);
+    let errors = annotation::validate(&att);
     if !errors.is_empty() {
         return Err(crate::Error::Validation(errors.join("; ")));
     }
@@ -147,14 +147,14 @@ pub fn run(args: Args) -> crate::Result<()> {
             Vec::new()
         };
         let mut all = existing;
-        all.push(Record::Attestation(Box::new(att.clone())));
-        attestation::check_supersession_cycles(&all)?;
-        attestation::validate_supersession_targets(&all)?;
+        all.push(Record::Annotation(Box::new(att.clone())));
+        annotation::check_supersession_cycles(&all)?;
+        annotation::validate_supersession_targets(&all)?;
     }
 
     qual_file::append(
         qual_path.as_ref(),
-        &Record::Attestation(Box::new(att.clone())),
+        &Record::Annotation(Box::new(att.clone())),
     )?;
     println!(
         "Attested {} {} {}",
@@ -179,11 +179,11 @@ fn run_batch() -> crate::Result<()> {
         }
 
         let record: Record = serde_json::from_str(trimmed)?;
-        let record = attestation::finalize_record(record);
+        let record = annotation::finalize_record(record);
 
-        // Validate attestation records
-        if let Some(att) = record.as_attestation() {
-            let errors = attestation::validate(att);
+        // Validate annotation records
+        if let Some(att) = record.as_annotation() {
+            let errors = annotation::validate(att);
             if !errors.is_empty() {
                 return Err(crate::Error::Validation(errors.join("; ")));
             }
@@ -199,8 +199,8 @@ fn run_batch() -> crate::Result<()> {
             };
             let mut all = existing;
             all.push(record.clone());
-            attestation::check_supersession_cycles(&all)?;
-            attestation::validate_supersession_targets(&all)?;
+            annotation::check_supersession_cycles(&all)?;
+            annotation::validate_supersession_targets(&all)?;
         }
 
         qual_file::append(&qual_path, &record)?;

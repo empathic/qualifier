@@ -2,7 +2,7 @@ use chrono::Utc;
 use clap::Args as ClapArgs;
 use std::path::Path;
 
-use crate::attestation::{self, Attestation, AttestationBody, IssuerType, Kind, Record};
+use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
 use crate::cli::commands::attest;
 use crate::cli::commands::reply;
 use crate::cli::output;
@@ -65,15 +65,15 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     let qual_path = qual_file::resolve_qual_path(&subject, args.file.as_deref().map(Path::new))?;
 
-    let att = attestation::finalize(Attestation {
+    let att = annotation::finalize(Annotation {
         metabox: "1".into(),
-        record_type: "attestation".into(),
+        record_type: "annotation".into(),
         subject,
         issuer,
         issuer_type,
         created_at: Utc::now(),
         id: String::new(),
-        body: AttestationBody {
+        body: AnnotationBody {
             detail: None,
             kind: Kind::Resolve,
             r#ref: args.r#ref,
@@ -87,7 +87,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         },
     });
 
-    let errors = attestation::validate(&att);
+    let errors = annotation::validate(&att);
     if !errors.is_empty() {
         return Err(crate::Error::Validation(errors.join("; ")));
     }
@@ -99,11 +99,11 @@ pub fn run(args: Args) -> crate::Result<()> {
         Vec::new()
     };
     let mut all = existing;
-    all.push(Record::Attestation(Box::new(att.clone())));
-    attestation::check_supersession_cycles(&all)?;
-    attestation::validate_supersession_targets(&all)?;
+    all.push(Record::Annotation(Box::new(att.clone())));
+    annotation::check_supersession_cycles(&all)?;
+    annotation::validate_supersession_targets(&all)?;
 
-    let record = Record::Attestation(Box::new(att.clone()));
+    let record = Record::Annotation(Box::new(att.clone()));
 
     qual_file::append(qual_path.as_ref(), &record)?;
 

@@ -12,11 +12,11 @@ pub struct Args {
     #[arg(long)]
     pub below: Option<i32>,
 
-    /// Filter by attestation kind
+    /// Filter by annotation kind
     #[arg(long)]
     pub kind: Option<String>,
 
-    /// Show only unqualified artifacts (no attestations)
+    /// Show only unqualified artifacts (no annotations)
     #[arg(long)]
     pub unqualified: bool,
 

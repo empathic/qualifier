@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::attestation::{Record, clamp_score};
+use crate::annotation::{Record, clamp_score};
 use crate::graph::DependencyGraph;
 use crate::qual_file::QualFile;
 
@@ -18,7 +18,7 @@ pub struct ScoreReport {
 /// Compute the raw score for a set of records (single artifact).
 ///
 /// Filters out superseded records, sums scores of scored types
-/// (attestations and epochs), and clamps to [-100, 100].
+/// (annotations and epochs), and clamps to [-100, 100].
 pub fn raw_score(records: &[Record]) -> i32 {
     let active = filter_superseded(records);
     let sum = active
@@ -31,8 +31,8 @@ pub fn raw_score(records: &[Record]) -> i32 {
 /// Filter out superseded records, returning only the active ones.
 ///
 /// A record is superseded if any other record's `supersedes` field
-/// points to its ID. Only attestations can supersede or be superseded.
-/// Non-attestation records always pass through.
+/// points to its ID. Only annotations can supersede or be superseded.
+/// Non-annotation records always pass through.
 pub fn filter_superseded(records: &[Record]) -> Vec<&Record> {
     // Collect all IDs that are superseded by something
     let superseded_ids: HashSet<&str> = records.iter().filter_map(|r| r.supersedes()).collect();
@@ -232,15 +232,15 @@ pub fn score_bar(score: i32, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attestation::{self, Attestation, AttestationBody, Kind};
+    use crate::annotation::{self, Annotation, AnnotationBody, Kind};
     use crate::graph;
     use chrono::Utc;
     use std::path::PathBuf;
 
-    fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
-        attestation::finalize(Attestation {
+    fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Annotation {
+        annotation::finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: subject.into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
@@ -248,7 +248,7 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind,
                 r#ref: None,
@@ -264,13 +264,13 @@ mod tests {
     }
 
     fn make_record(subject: &str, kind: Kind, score: i32, summary: &str) -> Record {
-        Record::Attestation(Box::new(make_att(subject, kind, score, summary)))
+        Record::Annotation(Box::new(make_att(subject, kind, score, summary)))
     }
 
     fn make_superseding(subject: &str, score: i32, supersedes_id: &str) -> Record {
-        Record::Attestation(Box::new(attestation::finalize(Attestation {
+        Record::Annotation(Box::new(annotation::finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: subject.into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
@@ -278,7 +278,7 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind: Kind::Pass,
                 r#ref: None,

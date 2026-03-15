@@ -1,4 +1,4 @@
-pub mod attestation;
+pub mod annotation;
 pub mod compact;
 pub mod graph;
 pub mod qual_file;

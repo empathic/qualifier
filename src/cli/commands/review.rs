@@ -2,7 +2,7 @@ use chrono::Utc;
 use clap::Args as ClapArgs;
 use std::path::Path;
 
-use crate::attestation::{self, Attestation, AttestationBody, IssuerType, Kind, Record};
+use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
 use crate::cli::commands::attest;
 use crate::cli::output;
 use crate::qual_file;
@@ -39,11 +39,11 @@ pub struct ReviewArgs {
     #[arg(long, name = "ref")]
     pub r#ref: Option<String>,
 
-    /// ID of a prior attestation this replaces
+    /// ID of a prior annotation this replaces
     #[arg(long)]
     pub supersedes: Option<String>,
 
-    /// ID of a related attestation (conversational reference, no scoring impact)
+    /// ID of a related annotation (conversational reference, no scoring impact)
     #[arg(long)]
     pub references: Option<String>,
 
@@ -61,7 +61,7 @@ pub struct ReviewArgs {
 }
 
 pub fn run_review(args: ReviewArgs, kind: Kind) -> crate::Result<()> {
-    let (subject, span) = attestation::parse_location(&args.location);
+    let (subject, span) = annotation::parse_location(&args.location);
 
     let issuer = attest::normalize_issuer_uri(
         args.issuer
@@ -78,15 +78,15 @@ pub fn run_review(args: ReviewArgs, kind: Kind) -> crate::Result<()> {
 
     let qual_path = qual_file::resolve_qual_path(&subject, args.file.as_deref().map(Path::new))?;
 
-    let att = attestation::finalize(Attestation {
+    let att = annotation::finalize(Annotation {
         metabox: "1".into(),
-        record_type: "attestation".into(),
+        record_type: "annotation".into(),
         subject,
         issuer,
         issuer_type,
         created_at: Utc::now(),
         id: String::new(),
-        body: AttestationBody {
+        body: AnnotationBody {
             detail: args.detail,
             kind,
             r#ref: args.r#ref,
@@ -100,7 +100,7 @@ pub fn run_review(args: ReviewArgs, kind: Kind) -> crate::Result<()> {
         },
     });
 
-    let errors = attestation::validate(&att);
+    let errors = annotation::validate(&att);
     if !errors.is_empty() {
         return Err(crate::Error::Validation(errors.join("; ")));
     }
@@ -112,12 +112,12 @@ pub fn run_review(args: ReviewArgs, kind: Kind) -> crate::Result<()> {
             Vec::new()
         };
         let mut all = existing;
-        all.push(Record::Attestation(Box::new(att.clone())));
-        attestation::check_supersession_cycles(&all)?;
-        attestation::validate_supersession_targets(&all)?;
+        all.push(Record::Annotation(Box::new(att.clone())));
+        annotation::check_supersession_cycles(&all)?;
+        annotation::validate_supersession_targets(&all)?;
     }
 
-    let record = Record::Attestation(Box::new(att.clone()));
+    let record = Record::Annotation(Box::new(att.clone()));
 
     qual_file::append(qual_path.as_ref(), &record)?;
 
