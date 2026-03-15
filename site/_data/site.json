@@ -1,5 +1,5 @@
 {
   "title": "Qualifier",
-  "description": "Deterministic quality attestations for software artifacts",
+  "description": "Deterministic quality annotations for software artifacts",
   "repo": "https://github.com/empathic/qualifier"
 }

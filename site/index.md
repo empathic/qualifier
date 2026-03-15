@@ -8,9 +8,9 @@ nav: home
   <div class="hero-content">
     <h1>Qualifier</h1>
     <p class="tagline">
-      <strong>Know your code.</strong> A deterministic system for recording quality attestations
-      and blockers against software artifacts. Quality scores that propagate through your
-      dependency graph &mdash; no server, no database, just files.
+      Stop <em>rubber stamping</em> new code, start <strong><em>continuously improving</em> all of your code.</strong> Record concerns,
+      suggestions, comments, and approvals the moment you see them &mdash; they'll be there
+      when you (or your bots) get to it. No server, no database, just files.
     </p>
     <div class="hero-install">
       <span class="prompt">$ </span>cargo install qualifier
@@ -64,35 +64,35 @@ Explore Qualifier in your browser. Real <code>qualifier</code> commands, real ou
 
 ## The problem
 
-Someone dropped 30,000 lines of slopcode in your lap and now you need to figure out if it does what it says on the tin. The test suite passes (mostly), the docs are "coming soon," and the last meaningful code review was three sprints ago. Where do you even start?
+Quality improvement gets batched behind gates. You see a problem now, but there's nowhere to put it until the next PR, the next sprint review, the next audit. Inline comments vanish into merged PRs. Three sprints later, nobody remembers what was flagged, what was fixed, and what was quietly ignored.
 
-Qualifier gives you a structured, VCS-friendly way to **record what you know about code quality** — and a scoring model that propagates those signals through your dependency graph so you always know where the bodies are buried.
+Qualifier lets you record quality signals **the moment you see them**. Every concern, suggestion, comment, and approval is a structured record in a `.qual` file next to your source — persistent, threaded, and VCS-native. Scored signals carry numeric deltas that propagate through your dependency graph. Unscored signals capture knowledge. Both are first-class.
 
 ## Three core concepts
 
 <div class="concepts">
   <div class="concept-card">
-    <h3>Attestation</h3>
-    <p>A single quality signal about an artifact. A blocker, a concern, a praise, a pass. Immutable once written, superseded by newer signals.</p>
+    <h3>Signals</h3>
+    <p>Flag, comment, suggest, approve, reject. Record quality observations the moment you see them. No process, no PR required. Immutable once written, resolved when fixed.</p>
   </div>
   <div class="concept-card">
-    <h3>Score</h3>
-    <p>Sum of attestations, clamped to [-100,&thinsp;100]. Raw score is local. Effective score propagates through the dependency graph — your worst dependency is your ceiling.</p>
+    <h3>Conversations</h3>
+    <p>Reply to any signal, build threaded discussions, resolve when done. Conversations that survive merges, rebases, and the passage of time.</p>
   </div>
   <div class="concept-card">
-    <h3>Graph</h3>
-    <p>A DAG of artifact dependencies. Quality flows downhill. A pristine binary that links a cursed library inherits the curse.</p>
+    <h3>Scores</h3>
+    <p>Scored signals carry quality deltas that sum, clamp to [-100,&thinsp;100], and propagate through your dependency graph. Unscored signals (comments, observations) capture knowledge without moving the needle. Both are first-class records.</p>
   </div>
 </div>
 
 ## How scores propagate
 
 <div class="propagation-figure">
-<svg class="propagation-svg" viewBox="0 0 700 150" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Attestations feed scores into a dependency graph, where the worst dependency limits effective scores">
+<svg class="propagation-svg" viewBox="0 0 700 150" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Annotations feed scores into a dependency graph, where the worst dependency limits effective scores">
   <!--
-    Every node has its own attestations shown beneath it.
+    Every node has its own annotations shown beneath it.
     Node box shows: name + raw score + effective score.
-    Attestations shown as small lines below each box.
+    Annotations shown as small lines below each box.
     3 layers, 6 nodes. Compact.
 
     Scores:
@@ -175,26 +175,27 @@ Qualifier gives you a structured, VCS-friendly way to **record what you know abo
 </svg>
 </div>
 
-`bin/server`'s own attestations give it a raw score of +50 — healthy. But it depends on `src/auth.rs` (eff: -20, limited by `lib/crypto`'s blocker), so its effective score drops to -20. Your effective score can never exceed your worst dependency.
+`bin/server`'s own annotations give it a raw score of +50 — healthy. But it depends on `src/auth.rs` (eff: -20, limited by `lib/crypto`'s blocker), so its effective score drops to -20. Your effective score can never exceed your worst dependency.
 
 ## What Qualifier adds
 
 | What              | Without Qualifier             | With Qualifier                                  |
 | ----------------- | ----------------------------- | ----------------------------------------------- |
+| Quality signals   | Batched behind PRs and gates  | Recorded when you see them, always available     |
 | Quality tracking  | Spreadsheets, tickets, memory | Structured `.qual` files in your repo           |
 | Score propagation | Manual dependency analysis    | Automatic through the dependency graph          |
 | CI gating         | Custom scripts                | `qualifier check --min-score 0`                 |
-| Agent integration | None                          | JSON output, batch attestation, suggested fixes |
+| Agent integration | None                          | JSON output, batch annotation, suggested fixes |
 | Merge conflicts   | Guaranteed with shared files  | Structurally impossible (append-only JSONL)     |
 | History           | Lost in ticket graveyards     | VCS-native — blame, diff, bisect all work       |
 
 ## Minimal example
 
-A `.qual` file is just JSONL — one attestation per line:
+A `.qual` file is just JSONL — one annotation per line:
 
 ```jsonl
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-30,"summary":"Panics on malformed UTF-8 input"}}
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent property-based test coverage"}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-30,"summary":"Panics on malformed UTF-8 input"}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent property-based test coverage"}}
 ```
 
 No parents, no headers, no schema declarations. Each line is self-contained.
@@ -208,21 +209,23 @@ cargo install qualifier
 # Initialize qualifier in your repo
 qualifier init
 
-# Attest a concern
-qualifier attest src/parser.rs --kind concern --score -30 \
-  --summary "Panics on malformed input"
+# Flag a concern at a specific line
+qualifier flag src/parser.rs:42 "Panics on malformed input"
 
-# See scores for everything
+# See the flag with threaded display
+qualifier show src/parser.rs
+
+# Reply to it (ID prefix, min 4 chars)
+qualifier reply a1b2 "Good catch, fixed in latest commit"
+
+# Close it
+qualifier resolve a1b2
+
+# See how scores look now
 qualifier score
 
 # CI gate — fail if anything is below zero
 qualifier check --min-score 0
-
-# Show details for one artifact
-qualifier show src/parser.rs
-
-# List the worst offenders
-qualifier ls --below 0
 ```
 
 <svg class="topo topo-wide" viewBox="0 0 900 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -246,8 +249,9 @@ Qualifier is a Rust crate with a library and a CLI:
 
 | Component         | What it does                                            |
 | ----------------- | ------------------------------------------------------- |
-| `.qual` files     | VCS-friendly JSONL attestations — the primary interface |
-| `qualifier` CLI   | Human-friendly commands for attesting, scoring, gating  |
+| `.qual` files     | VCS-friendly JSONL records — the primary interface      |
+| Signal commands   | `flag`, `comment`, `suggest`, `reply`, `resolve` — record signals instantly |
+| `qualifier` CLI   | Human-friendly commands for signals, scoring, and gating |
 | `qualifier` crate | Library API for tools, agents, and editor plugins       |
 | Dependency graph  | `qualifier.graph.jsonl` — feeds the propagation engine  |
 

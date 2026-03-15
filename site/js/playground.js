@@ -267,7 +267,7 @@
     lines.push(
       "  " +
         copperBold(pad("qualifier show <artifact>", 38, true)) +
-        "Show attestations for an artifact",
+        "Show annotations for an artifact",
     );
     lines.push(
       "  " +

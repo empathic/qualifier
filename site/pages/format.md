@@ -14,8 +14,8 @@ Append-only JSONL. One record per line. VCS-native by design.
 A `.qual` file is a UTF-8 encoded file where each line is a complete JSON object representing one record. This is JSONL (JSON Lines).
 
 ```jsonl
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","issuer_type":"human","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent test coverage"}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","issuer_type":"human","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent test coverage"}}
 ```
 
 ## Record types
@@ -24,11 +24,11 @@ Every record has a `type` field that identifies its schema. Qualifier defines th
 
 | Type          | Description                         |
 | ------------- | ----------------------------------- |
-| `attestation` | A quality signal (the primary type) |
+| `annotation` | A quality signal (the primary type) |
 | `epoch`       | A compaction snapshot               |
 | `dependency`  | A dependency edge between subjects  |
 
-When `type` is omitted, it defaults to `"attestation"`. Unknown types are preserved as opaque pass-through data.
+When `type` is omitted, it defaults to `"annotation"`. Unknown types are preserved as opaque pass-through data.
 
 ## Record envelope
 
@@ -37,7 +37,7 @@ All record types share a common **Metabox envelope** — a fixed set of fields t
 | Field         | Type   | Required | Description                                            |
 | ------------- | ------ | -------- | ------------------------------------------------------ |
 | `metabox`     | string | yes      | Envelope version (always `"1"`)                        |
-| `type`        | string | yes\*    | Record type identifier. \*Defaults to `"attestation"`. |
+| `type`        | string | yes\*    | Record type identifier. \*Defaults to `"annotation"`. |
 | `subject`     | string | yes      | Qualified name of the target artifact                  |
 | `issuer`      | string | yes      | Who or what created this record (URI)                  |
 | `issuer_type` | string | no       | Issuer classification: human, ai, tool, unknown        |
@@ -45,25 +45,26 @@ All record types share a common **Metabox envelope** — a fixed set of fields t
 | `id`          | string | yes      | Content-addressed BLAKE3 hash                          |
 | `body`        | object | yes      | Type-specific payload                                  |
 
-## Attestation schema
+## Annotation schema
 
-Attestations are the primary record type. Envelope fields plus body:
+Annotations are the primary record type. Envelope fields plus body:
 
 | Field           | Type     | Required | Description                                     |
 | --------------- | -------- | -------- | ----------------------------------------------- |
 | `detail`        | string   | no       | Extended description (markdown allowed)         |
-| `kind`          | enum     | yes      | Type of attestation (see below)                 |
+| `kind`          | enum     | yes      | Type of annotation (see below)                 |
 | `ref`           | string   | no       | VCS ref pin (e.g. "git:3aba500"), opaque string |
-| `score`         | integer  | yes      | Signed quality delta, -100..100                 |
+| `references`    | string   | no       | ID of a related record (for threading; no scoring impact) |
+| `score`         | integer  | no       | Signed quality delta, -100..100. Present on scored kinds; absent on unscored kinds (comment). |
 | `span`          | object   | no       | Sub-artifact range (line/col addressing)        |
 | `suggested_fix` | string   | no       | Actionable suggestion for improvement           |
 | `summary`       | string   | yes      | Human-readable one-liner                        |
-| `supersedes`    | string   | no       | ID of a prior attestation this replaces         |
+| `supersedes`    | string   | no       | ID of a prior annotation this replaces         |
 | `tags`          | string[] | no       | Freeform classification tags                    |
 
 Body fields are in alphabetical order (MCF canonical form).
 
-## Attestation kinds
+## Annotation kinds
 
 | Kind         | Default Score | Meaning                                         |
 | ------------ | ------------- | ----------------------------------------------- |
@@ -71,7 +72,9 @@ Body fields are in alphabetical order (MCF canonical form).
 | `fail`       | -20           | Does NOT meet a stated quality bar              |
 | `blocker`    | -50           | Blocking issue, must resolve before release     |
 | `concern`    | -10           | Non-blocking issue worth tracking               |
+| `comment`    | absent        | Observation or discussion point (no score)      |
 | `praise`     | +30           | Positive recognition of quality                 |
+| `resolve`    | 0             | Closes a prior record via supersession          |
 | `suggestion` | -5            | Proposed improvement (often with suggested_fix) |
 | `waiver`     | +10           | Acknowledged issue, explicitly accepted         |
 
@@ -79,7 +82,7 @@ When `--score` is omitted from `qualifier attest`, the CLI uses the default scor
 
 ## Epoch schema
 
-An **epoch** is a compaction snapshot — a synthetic record that replaces a set of attestations with a single scored record preserving the net score. Envelope fields plus body:
+An **epoch** is a compaction snapshot — a synthetic record that replaces a set of annotations with a single scored record preserving the net score. Envelope fields plus body:
 
 | Field     | Type     | Required | Description                  |
 | --------- | -------- | -------- | ---------------------------- |
@@ -131,7 +134,20 @@ Dependency records don't carry scores. They feed the propagation engine that com
 
 ## Supersession
 
-Attestations are immutable. To "update" a signal, write a new attestation with `body.supersedes` pointing to the prior ID. Only the latest in a chain contributes to scoring.
+Annotations are immutable. To "update" a signal, write a new annotation with `body.supersedes` pointing to the prior ID. Only the latest in a chain contributes to scoring.
+
+The **resolve pattern** uses a `resolve`-kind annotation to supersede a target, withdrawing its score. This is the canonical way to close review items.
+
+## References & threading
+
+The `references` body field creates a lightweight "re:" link between records. Unlike `supersedes`, both the original and referencing record remain active in scoring. Records referencing the same parent form a conversational thread.
+
+```jsonl
+{"metabox":"1","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-03-01T09:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-10,"span":{"start":{"line":42}},"summary":"Panics on malformed input"}}
+{"metabox":"1","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-03-01T10:00:00Z","id":"b2c3d4e5...","body":{"kind":"comment","references":"a1b2c3d4...","summary":"Good catch — fixed in latest commit"}}
+```
+
+Implementations SHOULD display threads with tree-drawing characters (`├──`, `└──`).
 
 ## Content-addressed IDs
 
@@ -140,7 +156,7 @@ Record IDs are BLAKE3 hashes of the **Metabox Canonical Form (MCF)** — a deter
 ```json
 {
   "metabox": "1",
-  "type": "attestation",
+  "type": "annotation",
   "subject": "src/parser.rs",
   "issuer": "mailto:alice@example.com",
   "created_at": "2026-02-24T10:00:00Z",
