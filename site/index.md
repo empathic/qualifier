@@ -8,9 +8,10 @@ nav: home
   <div class="hero-content">
     <h1>Qualifier</h1>
     <p class="tagline">
-      Stop <em>rubber stamping</em> new code, start <strong><em>continuously improving</em> all of your code.</strong> Record concerns,
-      suggestions, comments, and approvals the moment you see them &mdash; they'll be there
-      when you (or your bots) get to it. No server, no database, just files.
+      Continuous Annotation, stored as files. CI and CD aren't enough
+      anymore &mdash; CA records concerns, suggestions, and feedback the
+      moment you see them. Humans and bots write the same format.
+      No server, no database, just <code>.qual</code> files next to your source.
     </p>
     <div class="hero-install">
       <span class="prompt">$ </span>cargo install qualifier
@@ -18,8 +19,7 @@ nav: home
     </div>
   </div>
   <svg class="topo topo-hero" viewBox="0 0 340 320" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <!-- Blueprint grid — quality score coordinate system -->
-    <!-- Major grid -->
+    <!-- Blueprint grid -->
     <line x1="0" y1="0" x2="340" y2="0" stroke="#818cf8" stroke-width="0.5" opacity="0.15"/>
     <line x1="0" y1="64" x2="340" y2="64" stroke="#818cf8" stroke-width="0.5" opacity="0.15"/>
     <line x1="0" y1="128" x2="340" y2="128" stroke="#818cf8" stroke-width="0.5" opacity="0.15"/>
@@ -32,22 +32,13 @@ nav: home
     <line x1="204" y1="0" x2="204" y2="320" stroke="#818cf8" stroke-width="0.5" opacity="0.15"/>
     <line x1="272" y1="0" x2="272" y2="320" stroke="#818cf8" stroke-width="0.5" opacity="0.15"/>
     <line x1="340" y1="0" x2="340" y2="320" stroke="#818cf8" stroke-width="0.5" opacity="0.15"/>
-    <!-- Score curve — quality trend rising -->
+    <!-- Annotation activity rising over time -->
     <polyline points="20,260 68,240 110,220 150,180 190,120 230,90 270,60 310,45"
       stroke="#34d399" stroke-width="2" opacity="0.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    <!-- Threshold line -->
-    <line x1="0" y1="160" x2="340" y2="160" stroke="#fbbf24" stroke-width="1" opacity="0.3" stroke-dasharray="6 4"/>
-    <text x="6" y="154" font-family="JetBrains Mono, monospace" font-size="8" fill="#fbbf24" opacity="0.5">THRESHOLD</text>
-    <!-- Score data points -->
     <circle cx="68" cy="240" r="3" fill="#f87171" opacity="0.6"/>
     <circle cx="150" cy="180" r="3" fill="#fbbf24" opacity="0.6"/>
     <circle cx="230" cy="90" r="3" fill="#34d399" opacity="0.6"/>
     <circle cx="310" cy="45" r="3" fill="#34d399" opacity="0.6"/>
-    <!-- Axis labels -->
-    <text x="6" y="312" font-family="JetBrains Mono, monospace" font-size="7" fill="#6b7394" opacity="0.6">-100</text>
-    <text x="6" y="12" font-family="JetBrains Mono, monospace" font-size="7" fill="#6b7394" opacity="0.6">+100</text>
-    <!-- Blocker zone -->
-    <rect x="0" y="200" width="340" height="120" fill="#f87171" opacity="0.03"/>
   </svg>
 </div>
 <div class="divider"></div>
@@ -66,7 +57,7 @@ Explore Qualifier in your browser. Real <code>qualifier</code> commands, real ou
 
 Quality improvement gets batched behind gates. You see a problem now, but there's nowhere to put it until the next PR, the next sprint review, the next audit. Inline comments vanish into merged PRs. Three sprints later, nobody remembers what was flagged, what was fixed, and what was quietly ignored.
 
-Qualifier lets you record quality signals **the moment you see them**. Every concern, suggestion, comment, and approval is a structured record in a `.qual` file next to your source — persistent, threaded, and VCS-native. Scored signals carry numeric deltas that propagate through your dependency graph. Unscored signals capture knowledge. Both are first-class.
+Qualifier lets you record quality signals **the moment you see them**. Every concern, suggestion, comment, and approval is a structured record in a `.qual` file next to your source — persistent, threaded, and VCS-native.
 
 ## Three core concepts
 
@@ -80,153 +71,39 @@ Qualifier lets you record quality signals **the moment you see them**. Every con
     <p>Reply to any signal, build threaded discussions, resolve when done. Conversations that survive merges, rebases, and the passage of time.</p>
   </div>
   <div class="concept-card">
-    <h3>Scores</h3>
-    <p>Scored signals carry quality deltas that sum, clamp to [-100,&thinsp;100], and propagate through your dependency graph. Unscored signals (comments, observations) capture knowledge without moving the needle. Both are first-class records.</p>
+    <h3>Ambient Review</h3>
+    <p>Review isn't a gate you pass through &mdash; it's a practice that's always on. Flag any file, any time, whether it changed today or three years ago. Nothing slips through because there's no window to miss.</p>
   </div>
 </div>
 
-## How scores propagate
+## Ambient review
 
-<div class="propagation-figure">
-<svg class="propagation-svg" viewBox="0 0 700 150" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Annotations feed scores into a dependency graph, where the worst dependency limits effective scores">
-  <!--
-    Every node has its own annotations shown beneath it.
-    Node box shows: name + raw score + effective score.
-    Annotations shown as small lines below each box.
-    3 layers, 6 nodes. Compact.
+Traditional code review is a gate: you see the diff, approve or reject, move on. This has two problems. First, you can only flag what's in the current diff — concerns about existing code have nowhere to go. Second, feedback evaporates when PRs merge. Three months later, nobody remembers what was discussed, what was deferred, and what was quietly ignored.
 
-    Scores:
-      lib/crypto:  blocker -50, pass +30         → raw -20, eff -20
-      lib/http:    praise +30, pass +20           → raw +50, eff +50
-      lib/log:     pass +10                       → raw +10, eff +10
-      src/auth.rs: pass +20, concern -10          → raw +10, eff -20 (limited by crypto)
-      src/api.rs:  praise +30                     → raw +30, eff +10 (limited by log)
-      bin/server:  pass +20, praise +30           → raw +50, eff -20 (limited by auth)
+Ambient review removes the gate. Flag a concern about any file, any time — whether the code changed today or three years ago. Reply to existing signals. Resolve them when they're fixed. The record persists in `.qual` files that travel with your source through merges, rebases, and team turnover.
 
--->
+Annotations don't rot. Every signal is pinned to the exact code you were looking at. When that code changes, `qualifier review` tells you what's drifted and what's still fresh — no archaeology required. Concerns follow their code through rebases, squashes, and refactors. When you re-confirm a concern against changed code, that's a signal too.
 
-  <!-- ═══ L0: leaf libraries ═══ -->
+Because annotations are structured and machine-readable, bots and AI agents participate in the same review process as humans. A CI pipeline can flag a vulnerability. A code health agent can suggest a refactoring. A teammate can reply to either. All signals live in the same format, in the same files, in your repo.
 
-  <!-- lib/crypto -->
-  <rect x="0" y="0" width="120" height="36" fill="#f8717110" stroke="#f87171" stroke-width="1.5" rx="2"/>
-  <text x="60" y="13" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600" fill="#eef0f6">lib/crypto</text>
-  <text x="60" y="28" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#f87171">raw -20 · eff -20</text>
-  <text x="4" y="50" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#f87171">-50 blocker</text>
-  <text x="4" y="60" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#34d399">+30 pass</text>
+## A day with Qualifier
 
-  <!-- lib/http -->
-  <rect x="0" y="72" width="120" height="36" fill="#34d39910" stroke="#34d399" stroke-width="1.5" rx="2"/>
-  <text x="60" y="85" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600" fill="#eef0f6">lib/http</text>
-  <text x="60" y="100" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#34d399">raw +50 · eff +50</text>
-  <text x="4" y="122" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#34d399">+30 praise · +20 pass</text>
-
-  <!-- lib/log -->
-  <rect x="0" y="134" width="120" height="16" fill="#34d39910" stroke="#34d399" stroke-width="1" rx="2"/>
-  <text x="60" y="146" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" font-weight="600" fill="#eef0f6">lib/log <tspan fill="#34d399" font-size="7">+10 pass</tspan></text>
-
-  <!-- ═══ L1: mid-level ═══ -->
-
-  <!-- src/auth.rs -->
-  <rect x="230" y="14" width="130" height="36" fill="#f8717110" stroke="#f87171" stroke-width="1.5" rx="2"/>
-  <text x="295" y="27" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600" fill="#eef0f6">src/auth.rs</text>
-  <text x="295" y="42" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#f87171">raw +10 · eff -20</text>
-  <text x="234" y="63" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#34d399">+20 pass</text>
-  <text x="290" y="63" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#fbbf24">-10 concern</text>
-
-  <!-- src/api.rs -->
-  <rect x="230" y="80" width="130" height="36" fill="#34d39910" stroke="#34d399" stroke-width="1.5" rx="2"/>
-  <text x="295" y="93" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600" fill="#eef0f6">src/api.rs</text>
-  <text x="295" y="108" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#34d399">raw +30 · eff +10</text>
-  <text x="234" y="128" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#34d399">+30 praise</text>
-
-  <!-- ═══ L2: root ═══ -->
-
-  <rect x="480" y="40" width="218" height="42" fill="#f8717110" stroke="#f87171" stroke-width="2" rx="2"/>
-  <text x="589" y="56" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" font-weight="700" fill="#eef0f6">bin/server</text>
-  <text x="589" y="72" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="#f87171">raw +50 · eff -20</text>
-  <text x="484" y="96" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#34d399">+20 pass · +30 praise</text>
-  <text x="484" y="106" font-family="JetBrains Mono, monospace" font-size="6.5" fill="#6b7394">limited by lib/crypto via src/auth.rs</text>
-
-  <!-- ═══ Edges ═══ -->
-
-  <!-- lib/crypto → src/auth.rs  (limiting) -->
-  <line x1="120" y1="18" x2="227" y2="28" stroke="#f87171" stroke-width="1.5"/>
-  <polygon points="227,28 221,24 221,33" fill="#f87171"/>
-
-  <!-- lib/http → src/auth.rs -->
-  <line x1="120" y1="82" x2="227" y2="42" stroke="#3a4158" stroke-width="1"/>
-  <polygon points="227,42 221,38 221,47" fill="#3a4158"/>
-
-  <!-- lib/http → src/api.rs -->
-  <line x1="120" y1="96" x2="227" y2="94" stroke="#3a4158" stroke-width="1"/>
-  <polygon points="227,94 221,89 221,99" fill="#3a4158"/>
-
-  <!-- lib/log → src/api.rs -->
-  <path d="M 120,142 C 170,142 190,110 227,104" stroke="#3a4158" stroke-width="1" fill="none"/>
-  <polygon points="227,104 221,99 221,109" fill="#3a4158"/>
-
-  <!-- src/auth.rs → bin/server  (limiting) -->
-  <line x1="360" y1="36" x2="477" y2="54" stroke="#f87171" stroke-width="2"/>
-  <polygon points="477,54 470,50 471,59" fill="#f87171"/>
-
-  <!-- src/api.rs → bin/server -->
-  <line x1="360" y1="94" x2="477" y2="72" stroke="#3a4158" stroke-width="1"/>
-  <polygon points="477,72 470,68 471,77" fill="#3a4158"/>
-</svg>
-</div>
-
-`bin/server`'s own annotations give it a raw score of +50 — healthy. But it depends on `src/auth.rs` (eff: -20, limited by `lib/crypto`'s blocker), so its effective score drops to -20. Your effective score can never exceed your worst dependency.
-
-## What Qualifier adds
-
-| What              | Without Qualifier             | With Qualifier                                  |
-| ----------------- | ----------------------------- | ----------------------------------------------- |
-| Quality signals   | Batched behind PRs and gates  | Recorded when you see them, always available     |
-| Quality tracking  | Spreadsheets, tickets, memory | Structured `.qual` files in your repo           |
-| Score propagation | Manual dependency analysis    | Automatic through the dependency graph          |
-| CI gating         | Custom scripts                | `qualifier check --min-score 0`                 |
-| Agent integration | None                          | JSON output, batch annotation, suggested fixes |
-| Merge conflicts   | Guaranteed with shared files  | Structurally impossible (append-only JSONL)     |
-| History           | Lost in ticket graveyards     | VCS-native — blame, diff, bisect all work       |
-
-## Minimal example
-
-A `.qual` file is just JSONL — one annotation per line:
-
-```jsonl
-{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-30,"summary":"Panics on malformed UTF-8 input"}}
-{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent property-based test coverage"}}
-```
-
-No parents, no headers, no schema declarations. Each line is self-contained.
-
-## Quick start
+You're reading `src/auth.rs` and notice the login handler isn't sanitizing input. You could file a ticket — but it'll sit in a backlog nobody triages. You could fix it now — but you're in the middle of something else. You could mention it in Slack — but it'll scroll away by lunch.
 
 ```bash
-# Install
-cargo install qualifier
-
-# Initialize qualifier in your repo
-qualifier init
-
-# Flag a concern at a specific line
-qualifier flag src/parser.rs:42 "Panics on malformed input"
-
-# See the flag with threaded display
-qualifier show src/parser.rs
-
-# Reply to it (ID prefix, min 4 chars)
-qualifier reply a1b2 "Good catch, fixed in latest commit"
-
-# Close it
-qualifier resolve a1b2
-
-# See how scores look now
-qualifier score
-
-# CI gate — fail if anything is below zero
-qualifier check --min-score 0
+qualifier flag src/auth.rs:42 "SQL injection risk in login handler"
 ```
+
+Five seconds. A teammate replies Thursday, the fix lands Friday, you close it:
+
+```bash
+qualifier reply a1b2 "Parameterized queries added in 8f3c2a1"
+qualifier resolve a1b2
+```
+
+The concern was recorded when it was seen, discussed in context, and resolved when fixed. The entire history lives in your repo — `git blame`, `git log`, and `git diff` all work on it. No tickets, no ceremonies, no context switching.
+
+*"But don't I have to commit the `.qual` file?"* Yes — and you can push it straight to main. Annotations are append-only: adding your observation never modifies anyone else's, and **merge conflicts are structurally impossible** when adding annotations. Two people flagging concerns in the same file on different branches just works. That's not an accident — the format was designed for exactly this. (Compaction — periodic cleanup of resolved signals — is the one operation that rewrites the file and should be coordinated, like any maintenance task.)
 
 <svg class="topo topo-wide" viewBox="0 0 900 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <!-- Blueprint ruler marks -->
@@ -243,16 +120,13 @@ qualifier check --min-score 0
   <line x1="900" y1="0" x2="900" y2="60" stroke="#818cf8" stroke-width="0.5" opacity="0.08"/>
 </svg>
 
-## How it works
+## Get started
 
-Qualifier is a Rust crate with a library and a CLI:
+Try Qualifier in your browser above, or install locally:
 
-| Component         | What it does                                            |
-| ----------------- | ------------------------------------------------------- |
-| `.qual` files     | VCS-friendly JSONL records — the primary interface      |
-| Signal commands   | `flag`, `comment`, `suggest`, `reply`, `resolve` — record signals instantly |
-| `qualifier` CLI   | Human-friendly commands for signals, scoring, and gating |
-| `qualifier` crate | Library API for tools, agents, and editor plugins       |
-| Dependency graph  | `qualifier.graph.jsonl` — feeds the propagation engine  |
+```bash
+cargo install qualifier
+qualifier init
+```
 
-See [Format](/format/) for the file spec or [CLI](/cli/) for command reference.
+See [CLI](/cli/) for the full command reference or [Format](/format/) for the file spec.
