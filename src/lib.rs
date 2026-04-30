@@ -1,5 +1,6 @@
 pub mod annotation;
 pub mod compact;
+pub mod content_hash;
 pub mod graph;
 pub mod qual_file;
 pub mod scoring;

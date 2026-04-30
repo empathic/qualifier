@@ -1960,3 +1960,314 @@ fn test_resolve_not_found() {
         "error should mention no record found: {stderr}"
     );
 }
+
+// --- content_hash auto-population tests ---
+
+#[test]
+fn test_flag_auto_populates_content_hash() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create a source file
+    let src = dir.path().join("example.rs");
+    std::fs::write(
+        &src,
+        "fn main() {\n    let x = 1;\n    let y = 2;\n    println!(\"{}\", x + y);\n}\n",
+    )
+    .unwrap();
+
+    // Flag with a span
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "flag",
+            "example.rs:2",
+            "needs a better name",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "flag should succeed");
+
+    // Read the .qual file and verify content_hash is present
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"content_hash\":"),
+        "annotation should contain content_hash: {content}"
+    );
+}
+
+#[test]
+fn test_suggest_auto_populates_content_hash() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let src = dir.path().join("lib.rs");
+    std::fs::write(&src, "fn foo() {}\nfn bar() {}\nfn baz() {}\n").unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "suggest",
+            "lib.rs:1:2",
+            "Consider combining these",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "suggest should succeed");
+
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"content_hash\":"),
+        "annotation should contain content_hash: {content}"
+    );
+}
+
+#[test]
+fn test_attest_span_auto_populates_content_hash() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let src = dir.path().join("lib.rs");
+    std::fs::write(&src, "line 1\nline 2\nline 3\n").unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "lib.rs",
+            "--kind",
+            "concern",
+            "--score=-10",
+            "--summary",
+            "issue here",
+            "--issuer",
+            "mailto:test@test.com",
+            "--span",
+            "2",
+        ],
+    );
+    assert_eq!(code, 0, "attest with span should succeed");
+
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"content_hash\":"),
+        "annotation should contain content_hash: {content}"
+    );
+}
+
+#[test]
+fn test_no_content_hash_when_file_missing() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Flag a nonexistent file
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "flag",
+            "nonexistent.rs:5",
+            "some concern",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "flag should succeed even without file");
+
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        !content.contains("\"content_hash\":"),
+        "should not have content_hash when file doesn't exist: {content}"
+    );
+}
+
+// --- qualifier review (freshness) tests ---
+
+#[test]
+fn test_review_empty_project() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["review"]);
+    assert_eq!(code, 0, "review on empty project should succeed");
+    assert!(
+        stdout.contains("No .qual files") || stdout.contains("No annotations"),
+        "should indicate nothing to check: {stdout}"
+    );
+}
+
+#[test]
+fn test_review_fresh() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let src = dir.path().join("example.rs");
+    std::fs::write(&src, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "flag",
+            "example.rs:2",
+            "consider logging instead",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["review"]);
+    assert_eq!(code, 0, "review should succeed");
+    assert!(
+        stdout.contains("FRESH"),
+        "unchanged code should be FRESH: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 fresh"),
+        "summary should show 1 fresh: {stdout}"
+    );
+}
+
+#[test]
+fn test_review_drifted() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let src = dir.path().join("example.rs");
+    std::fs::write(&src, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "flag",
+            "example.rs:2",
+            "consider logging",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    // Modify the file
+    std::fs::write(
+        &src,
+        "fn main() {\n    eprintln!(\"changed\");\n}\n",
+    )
+    .unwrap();
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["review"]);
+    assert_eq!(code, 0, "review should succeed");
+    assert!(
+        stdout.contains("DRIFTED"),
+        "changed code should be DRIFTED: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 drifted"),
+        "summary should show 1 drifted: {stdout}"
+    );
+}
+
+#[test]
+fn test_review_missing() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let src = dir.path().join("example.rs");
+    std::fs::write(&src, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "flag",
+            "example.rs:2",
+            "consider logging",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    // Delete the file
+    std::fs::remove_file(&src).unwrap();
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["review"]);
+    assert_eq!(code, 0, "review should succeed");
+    assert!(
+        stdout.contains("MISSING"),
+        "deleted file should be MISSING: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 missing"),
+        "summary should show 1 missing: {stdout}"
+    );
+}
+
+#[test]
+fn test_review_json_output() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let src = dir.path().join("example.rs");
+    std::fs::write(&src, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "flag",
+            "example.rs:2",
+            "consider logging",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["review", "--format", "json"]);
+    assert_eq!(code, 0, "review --format json should succeed");
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("review --format json should produce valid JSON: {e}\ngot: {stdout}")
+    });
+
+    assert!(parsed.is_array(), "JSON output should be an array");
+    let arr = parsed.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "should have one result");
+
+    let entry = &arr[0];
+    assert_eq!(entry["status"], "fresh");
+    assert_eq!(entry["kind"], "concern");
+    assert!(entry["subject"].as_str().unwrap().contains("example.rs"));
+}
+
+#[test]
+fn test_review_subject_filter() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let src1 = dir.path().join("a.rs");
+    std::fs::write(&src1, "fn a() {}\n").unwrap();
+
+    let src2 = dir.path().join("b.rs");
+    std::fs::write(&src2, "fn b() {}\n").unwrap();
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "flag",
+            "a.rs:1",
+            "issue in a",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    run_qualifier(
+        dir.path(),
+        &[
+            "flag",
+            "b.rs:1",
+            "issue in b",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    // Review only a.rs
+    let (stdout, _, code) = run_qualifier(dir.path(), &["review", "a.rs"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("1 annotations checked"),
+        "should only check 1 annotation: {stdout}"
+    );
+}

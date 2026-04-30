@@ -4,6 +4,7 @@ pub mod check;
 pub mod comment;
 pub mod compact;
 pub mod flag;
+pub mod freshness;
 pub mod graph_cmd;
 pub mod haiku;
 pub mod init;

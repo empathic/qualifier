@@ -4,6 +4,7 @@ use std::io::{self, BufRead};
 use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
+use crate::content_hash;
 use crate::qual_file;
 
 #[derive(ClapArgs)]
@@ -106,10 +107,17 @@ pub fn run(args: Args) -> crate::Result<()> {
         None => None,
     };
 
-    let span = match &args.span {
+    let mut span = match &args.span {
         Some(s) => Some(annotation::parse_span(s).map_err(crate::Error::Validation)?),
         None => None,
     };
+
+    // Auto-compute content hash for spans
+    if let Some(ref mut s) = span
+        && let Some(hash) = content_hash::compute_span_hash(Path::new(&subject), s)
+    {
+        s.content_hash = Some(hash);
+    }
 
     let qual_path = qual_file::resolve_qual_path(&subject, args.file.as_deref().map(Path::new))?;
 

@@ -53,6 +53,8 @@ pub enum Commands {
     Reply(commands::reply::Args),
     /// Resolve (close) an existing annotation
     Resolve(commands::resolve::Args),
+    /// Check freshness of annotations against current code
+    Review(commands::freshness::Args),
 }
 
 pub fn run() {
@@ -88,6 +90,7 @@ pub fn run() {
         Commands::Reject(args) => commands::reject::run(args),
         Commands::Reply(args) => commands::reply::run(args),
         Commands::Resolve(args) => commands::resolve::run(args),
+        Commands::Review(args) => commands::freshness::run(args),
     };
 
     if let Err(e) = result {

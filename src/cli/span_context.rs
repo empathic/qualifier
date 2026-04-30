@@ -164,6 +164,7 @@ mod tests {
                 col: None,
             },
             end: end.map(|line| Position { line, col: None }),
+            content_hash: None,
         }
     }
 

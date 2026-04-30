@@ -25,6 +25,9 @@ pub struct Span {
     /// End of the range (inclusive). Defaults to `start` if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<Position>,
+    /// BLAKE3 hash of the spanned lines (full lines, `\n`-joined).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 impl Span {
@@ -47,7 +50,7 @@ pub fn parse_span(s: &str) -> Result<Span, String> {
     match parts.len() {
         1 => {
             let start = parse_position(parts[0])?;
-            Ok(Span { start, end: None })
+            Ok(Span { start, end: None, content_hash: None })
         }
         2 => {
             let start = parse_position(parts[0])?;
@@ -55,6 +58,7 @@ pub fn parse_span(s: &str) -> Result<Span, String> {
             Ok(Span {
                 start,
                 end: Some(end),
+                content_hash: None,
             })
         }
         _ => Err(format!(
@@ -112,6 +116,7 @@ pub fn parse_location(s: &str) -> (String, Option<Span>) {
                             line: end,
                             col: None,
                         }),
+                        content_hash: None,
                     }),
                 );
             }
@@ -129,6 +134,7 @@ pub fn parse_location(s: &str) -> (String, Option<Span>) {
                             col: None,
                         },
                         end: None,
+                        content_hash: None,
                     }),
                 );
             }
@@ -1026,6 +1032,7 @@ mod tests {
                         col: None,
                     },
                     end: None,
+                    content_hash: None,
                 }),
                 suggested_fix: None,
                 summary: "issue".into(),
@@ -1092,6 +1099,7 @@ mod tests {
                         col: None,
                     },
                     end: None,
+                    content_hash: None,
                 }),
                 suggested_fix: None,
                 summary: "issue".into(),

@@ -133,12 +133,13 @@ the record addresses a specific region rather than the whole artifact.
 }
 ```
 
-A span is an object with two position fields:
+A span is an object with these fields:
 
-| Field   | Type   | Required | Description |
-|---------|--------|----------|-------------|
-| `start` | object | yes      | Start of the range (inclusive) |
-| `end`   | object | no       | End of the range (inclusive). Defaults to `start`. |
+| Field          | Type   | Required | Description |
+|----------------|--------|----------|-------------|
+| `start`        | object | yes      | Start of the range (inclusive) |
+| `end`          | object | no       | End of the range (inclusive). Defaults to `start`. |
+| `content_hash` | string | no       | BLAKE3 hash of the spanned lines (see 2.4.4) |
 
 Each position has:
 
@@ -169,10 +170,48 @@ Before hashing (see 2.8), spans are normalized:
 
 - If `end` is absent, it is set equal to `start`.
 - If `col` is absent from a position, it remains absent (not defaulted).
+- `content_hash` is not modified during normalization. It passes through
+  unchanged and participates in the record ID computation when present.
 
 After normalization, `{"start":{"line":42}}` and
 `{"start":{"line":42},"end":{"line":42}}` produce identical canonical forms
 and therefore identical record IDs.
+
+#### 2.4.4 Content Hashing
+
+When `content_hash` is present, it records a BLAKE3 hash of the source lines
+covered by the span at the time the annotation was created. This enables
+**freshness checking** — detecting whether the annotated code has changed
+since the annotation was written.
+
+**Hash computation:**
+
+1. Read the file identified by the record's `subject`.
+2. Extract lines `start.line` through `end.line` (inclusive, 1-indexed).
+   Columns are ignored — full lines are always hashed.
+3. Join the extracted lines with `\n` (no trailing newline).
+4. Compute the BLAKE3 hash of the resulting byte string.
+5. Encode as lowercase hex.
+
+**When computed:** The CLI auto-computes `content_hash` when creating span-
+addressed annotations (via `flag`, `suggest`, `comment`, `approve`, `reject`,
+`attest --span`, etc.) if the subject file exists and the span is within
+bounds. If the file does not exist or the span extends beyond EOF, `content_hash`
+is omitted.
+
+**Relationship to `ref`:** The `ref` field pins an annotation to a VCS
+revision (e.g., `git:3aba500`). `content_hash` pins the annotation to
+specific file content. They are complementary: `ref` answers "which commit?"
+while `content_hash` answers "has the code changed?"
+
+**Freshness states:**
+
+| State     | Meaning |
+|-----------|---------|
+| Fresh     | `content_hash` matches current file content |
+| Drifted   | `content_hash` differs from current file content |
+| Missing   | File not found or span beyond EOF |
+| No hash   | Annotation has no `content_hash` (older or whole-file annotations) |
 
 #### 2.4.3 Span Scoring
 
@@ -757,6 +796,7 @@ qualifier show <artifact>                 Show annotations and scores
 qualifier score [artifact...]             Compute and display scores
 qualifier ls [--below <n>] [--kind <k>]   List subjects by score/kind
 qualifier check [--min-score <n>]          CI gate: exit non-zero if below threshold
+qualifier review [subject]                Check freshness of annotations
 ```
 
 **Management commands:**
@@ -931,7 +971,34 @@ qualifier compact --all                      # compact every .qual file
 qualifier compact --all --dry-run            # preview repo-wide compaction
 ```
 
-### 6.9 `qualifier init`
+### 6.9 `qualifier review`
+
+Check the freshness of span-addressed annotations against current file content.
+
+```
+qualifier review                          # check all annotations
+qualifier review src/parser.rs            # check annotations for one subject
+qualifier review --format json            # machine-readable output
+qualifier review --no-ignore              # bypass ignore rules
+```
+
+**Human output:**
+
+```
+  FRESH    src/parser.rs:42    concern  "Panics on malformed input"
+  DRIFTED  src/auth.rs:10:25   suggestion  "Consider using Result"
+  MISSING  src/old.rs:1:20     blocker  "Memory leak"
+
+3 annotations checked: 1 fresh, 1 drifted, 1 missing
+```
+
+Only active (non-superseded) annotations with spans that have a `content_hash`
+are checked. Annotations without spans or without `content_hash` are skipped.
+
+**JSON output** includes `status` (`fresh`, `drifted`, `missing`) and `detail`
+with expected/actual hashes for drifted annotations or a reason for missing ones.
+
+### 6.10 `qualifier init`
 
 ```
 qualifier init
@@ -940,7 +1007,7 @@ qualifier init
   Added *.qual merge=union to .gitattributes
 ```
 
-### 6.10 Configuration
+### 6.11 Configuration
 
 Qualifier uses layered configuration. Precedence (highest wins):
 
@@ -961,7 +1028,7 @@ Qualifier uses layered configuration. Precedence (highest wins):
 | `format`    | `--format`     | `QUALIFIER_FORMAT`   | `human` |
 | `min_score` | `--min-score`  | `QUALIFIER_MIN_SCORE`| `0` |
 
-### 6.11 `qualifier blame`
+### 6.12 `qualifier blame`
 
 Delegates to the underlying VCS blame command for the subject's `.qual` file.
 
@@ -1058,7 +1125,8 @@ pub struct DependencyBody {
 
 pub struct Span {
     pub start: Position,
-    pub end: Option<Position>,   // normalized to Some(start) before hashing
+    pub end: Option<Position>,          // normalized to Some(start) before hashing
+    pub content_hash: Option<String>,   // BLAKE3 of spanned lines
 }
 
 pub struct Position {
@@ -1088,6 +1156,11 @@ pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>;
 pub struct ScoreReport { pub raw: i32, pub effective: i32, pub limiting_path: Option<Vec<String>> }
 pub fn raw_score(records: &[Record]) -> i32;
 pub fn effective_scores(graph: &DependencyGraph, qual_files: &[QualFile]) -> HashMap<String, ScoreReport>;
+
+// qualifier::content_hash — span freshness checking
+pub fn compute_span_hash(file_path: &Path, span: &Span) -> Option<String>;
+pub enum FreshnessStatus { Fresh, Drifted { expected, actual }, Missing { reason }, NoHash }
+pub fn check_freshness(file_path: &Path, span: &Span) -> FreshnessStatus;
 
 // qualifier::compact
 pub struct CompactResult { pub before: usize, pub after: usize, pub pruned: usize }
@@ -1209,6 +1282,7 @@ qualifier/
 └── src/
     ├── lib.rs                 # Public library API
     ├── annotation.rs         # Record types, body structs, Kind, IssuerType, validation
+    ├── content_hash.rs        # Span content hashing and freshness checking
     ├── qual_file.rs           # .qual file parsing, appending, discovery
     ├── graph.rs               # Dependency graph loading, cycle detection
     ├── scoring.rs             # Raw + effective score computation
@@ -1230,6 +1304,7 @@ qualifier/
             ├── reject.rs         # qualifier reject
             ├── reply.rs          # qualifier reply
             ├── resolve.rs        # qualifier resolve
+            ├── freshness.rs      # qualifier review (freshness checking)
             ├── show.rs
             ├── score.rs
             ├── ls.rs

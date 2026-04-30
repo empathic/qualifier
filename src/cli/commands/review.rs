@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
 use crate::cli::commands::attest;
 use crate::cli::output;
+use crate::content_hash;
 use crate::qual_file;
 
 #[derive(ClapArgs)]
@@ -61,7 +62,14 @@ pub struct ReviewArgs {
 }
 
 pub fn run_review(args: ReviewArgs, kind: Kind) -> crate::Result<()> {
-    let (subject, span) = annotation::parse_location(&args.location);
+    let (subject, mut span) = annotation::parse_location(&args.location);
+
+    // Auto-compute content hash for spans
+    if let Some(ref mut s) = span
+        && let Some(hash) = content_hash::compute_span_hash(Path::new(&subject), s)
+    {
+        s.content_hash = Some(hash);
+    }
 
     let issuer = attest::normalize_issuer_uri(
         args.issuer
