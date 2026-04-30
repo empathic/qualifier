@@ -9,7 +9,7 @@ nav: home
     <h1>Qualifier</h1>
     <p class="tagline">
       Continuous Annotation, stored as files. CI and CD aren't enough
-      anymore &mdash; CA records concerns, suggestions, and feedback the
+      anymore, CA records concerns, suggestions, and feedback the
       moment you see them. Humans and bots write the same format.
       No server, no database, just <code>.qual</code> files next to your source.
     </p>
@@ -55,55 +55,75 @@ Explore Qualifier in your browser. Real <code>qualifier</code> commands, real ou
 
 ## The problem
 
-Quality improvement gets batched behind gates. You see a problem now, but there's nowhere to put it until the next PR, the next sprint review, the next audit. Inline comments vanish into merged PRs. Three sprints later, nobody remembers what was flagged, what was fixed, and what was quietly ignored.
+Someone dropped 30,000 lines of slopcode in your lap and now you need to figure
+out if it does what it says on the tin. The test suite passes (mostly), the docs
+are "coming soon," and the last meaningful code review was three sprints ago.
+Where do you even start?
 
-Qualifier lets you record quality signals **the moment you see them**. Every concern, suggestion, comment, and approval is a structured record in a `.qual` file next to your source — persistent, threaded, and VCS-native.
+The problems you spot aren't associated with a current PR, so there's nowhere to
+put them. Qualifier gives you somewhere: a structured, VCS-native record pinned
+to the exact lines you read. Don't wait for review to annotate.  Don't forget if
+a given PR doesn't include it. Let people and agents get to the work when it
+makes sense.
 
 ## Three core concepts
 
 <div class="concepts">
   <div class="concept-card">
     <h3>Signals</h3>
-    <p>Flag, comment, suggest, approve, reject. Record quality observations the moment you see them. No process, no PR required. Immutable once written, resolved when fixed.</p>
+    <p>Flag, comment, suggest, approve, reject. Record quality observations the
+    moment you see them. No process, no PR required. Immutable once written,
+    resolved when fixed.</p>
   </div>
   <div class="concept-card">
     <h3>Conversations</h3>
-    <p>Reply to any signal, build threaded discussions, resolve when done. Conversations that survive merges, rebases, and the passage of time.</p>
+    <p>Reply to any signal, build threaded discussions, resolve when done.
+    Conversations that survive merges, rebases, and the passage of time.</p>
   </div>
   <div class="concept-card">
     <h3>Ambient Review</h3>
-    <p>Review isn't a gate you pass through &mdash; it's a practice that's always on. Flag any file, any time, whether it changed today or three years ago. Nothing slips through because there's no window to miss.</p>
+    <p>Review isn't a gate you pass through, it's a practice that's
+    always on. Flag any file, any time, whether it changed today or three years
+    ago. Nothing slips through because there's no window to miss.</p>
   </div>
 </div>
 
 ## Ambient review
 
-Traditional code review is a gate: you see the diff, approve or reject, move on. This has two problems. First, you can only flag what's in the current diff — concerns about existing code have nowhere to go. Second, feedback evaporates when PRs merge. Three months later, nobody remembers what was discussed, what was deferred, and what was quietly ignored.
+Code review today only catches what's in the current diff. Qualifier removes that constraint. Flag any file, any time. Annotations are pinned to the exact code you were looking at. When that code changes, `qualifier review` surfaces what's drifted.
 
-Ambient review removes the gate. Flag a concern about any file, any time — whether the code changed today or three years ago. Reply to existing signals. Resolve them when they're fixed. The record persists in `.qual` files that travel with your source through merges, rebases, and team turnover.
-
-Annotations don't rot. Every signal is pinned to the exact code you were looking at. When that code changes, `qualifier review` tells you what's drifted and what's still fresh — no archaeology required. Concerns follow their code through rebases, squashes, and refactors. When you re-confirm a concern against changed code, that's a signal too.
-
-Because annotations are structured and machine-readable, bots and AI agents participate in the same review process as humans. A CI pipeline can flag a vulnerability. A code health agent can suggest a refactoring. A teammate can reply to either. All signals live in the same format, in the same files, in your repo.
+Bots and humans write the same format. A CI pipeline flags a vulnerability. A code health agent suggests a refactoring. A teammate replies to either. Same files, same repo.
 
 ## A day with Qualifier
 
-You're reading `src/auth.rs` and notice the login handler isn't sanitizing input. You could file a ticket — but it'll sit in a backlog nobody triages. You could fix it now — but you're in the middle of something else. You could mention it in Slack — but it'll scroll away by lunch.
+You're reading `src/auth.rs` and notice the login handler isn't sanitizing
+input. You could file a ticket, fix it yourself, or mention it in Slack. Instead:
 
 ```bash
 qualifier flag src/auth.rs:42 "SQL injection risk in login handler"
 ```
 
-Five seconds. A teammate replies Thursday, the fix lands Friday, you close it:
+Five seconds. The concern is recorded against the file and line, pinned to the
+exact code you're looking at. You go back to what you were doing.
+
+Thursday, a teammate sees it and replies:
 
 ```bash
 qualifier reply a1b2 "Parameterized queries added in 8f3c2a1"
+```
+
+Friday, you verify the fix and close it:
+
+```bash
 qualifier resolve a1b2
 ```
 
-The concern was recorded when it was seen, discussed in context, and resolved when fixed. The entire history lives in your repo — `git blame`, `git log`, and `git diff` all work on it. No tickets, no ceremonies, no context switching.
+The whole conversation lives in your repo. `git blame`, `git log`, `git diff`
+all work on `.qual` files. Two months later, the code under your flag changes
+again. `qualifier review` surfaces the drift automatically.
 
-*"But don't I have to commit the `.qual` file?"* Yes — and you can push it straight to main. Annotations are append-only: adding your observation never modifies anyone else's, and **merge conflicts are structurally impossible** when adding annotations. Two people flagging concerns in the same file on different branches just works. That's not an accident — the format was designed for exactly this. (Compaction — periodic cleanup of resolved signals — is the one operation that rewrites the file and should be coordinated, like any maintenance task.)
+Annotations are append-only, so **merge conflicts are structurally impossible**.
+Push straight to main. No branch, no PR, no ceremony.
 
 <svg class="topo topo-wide" viewBox="0 0 900 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <!-- Blueprint ruler marks -->
