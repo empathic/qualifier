@@ -2,6 +2,7 @@
 layout: base.njk
 title: CLI
 nav: cli
+prose: true
 permalink: /cli/
 ---
 
@@ -99,13 +100,13 @@ Replies and resolves are threaded under their parent with tree-drawing character
 
 ### Signal commands at a glance
 
-| Command | Kind | Default Score | Use for |
-| ------- | ---- | ------------- | ------- |
-| `comment` | comment | absent | Observations, questions, discussion |
-| `flag` | concern | -10 | Non-blocking issues |
-| `suggest` | suggestion | -5 | Proposed improvements |
-| `approve` | pass | +20 | Passes a quality bar |
-| `reject` | fail | -20 | Fails a quality bar |
+| Command   | Kind       | Default Score | Use for                             |
+| --------- | ---------- | ------------- | ----------------------------------- |
+| `comment` | comment    | absent        | Observations, questions, discussion |
+| `flag`    | concern    | -10           | Non-blocking issues                 |
+| `suggest` | suggestion | -5            | Proposed improvements               |
+| `approve` | pass       | +20           | Passes a quality bar                |
+| `reject`  | fail       | -20           | Fails a quality bar                 |
 
 ### Show details for one artifact
 

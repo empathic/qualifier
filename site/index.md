@@ -62,7 +62,7 @@ Where do you even start?
 
 The problems you spot aren't associated with a current PR, so there's nowhere to
 put them. Qualifier gives you somewhere: a structured, VCS-native record pinned
-to the exact lines you read. Don't wait for review to annotate.  Don't forget if
+to the exact lines you read. Don't wait for review to annotate. Don't forget if
 a given PR doesn't include it. Let people and agents get to the work when it
 makes sense.
 

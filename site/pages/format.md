@@ -2,6 +2,7 @@
 layout: base.njk
 title: Format
 nav: format
+prose: true
 permalink: /format/
 ---
 
@@ -134,7 +135,19 @@ the old one. The `resolve` annotation kind is the canonical way to close
 something out, withdrawing the score of whatever it supersedes.
 
 ```jsonl
-{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-03-01T10:00:00Z","id":"b2c3...","body":{"kind":"comment","references":"a1b2...","summary":"Good catch, fixed in 8f3c2a1"}}
+{
+  "metabox": "1",
+  "type": "annotation",
+  "subject": "src/parser.rs",
+  "issuer": "mailto:bob@example.com",
+  "created_at": "2026-03-01T10:00:00Z",
+  "id": "b2c3...",
+  "body": {
+    "kind": "comment",
+    "references": "a1b2...",
+    "summary": "Good catch, fixed in 8f3c2a1"
+  }
+}
 ```
 
 Tools render threads with tree-drawing characters so the conversation reads
