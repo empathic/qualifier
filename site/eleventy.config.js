@@ -122,7 +122,9 @@ export default function (eleventyConfig) {
     );
   }
 
-  // Side-by-side / tabbed code comparison shortcode.
+  // Side-by-side / tabbed code comparison shortcode. Two panes appear
+  // side-by-side on desktop (>640px) and as tappable tabs on mobile.
+  // Pure CSS — radio inputs drive the tab switch.
   // Usage: {% codecompare lang, labelA, codeA, labelB, codeB %}
   let codeCompareCounter = 0;
   eleventyConfig.addShortcode(

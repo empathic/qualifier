@@ -182,9 +182,8 @@
     --space-2xl: 4rem;
 
     /* --- Layout primitives --- */
-    --max-w: 68rem;
+    --max-w: 56rem; /* ~896px — single content width; matches family rhythm */
     --nav-h: 3.5rem; /* ~56px */
-    --measure: 40rem; /* ~62ch — long-form prose width */
 
     /* --- Dark theme (canonical) --- */
     /* Surfaces — the lift ramp */
@@ -486,14 +485,8 @@
 
 @layer layout {
   body {
-    /* Push content below the fixed nav. Graph-paper grid tiled across
-       the full page ground — qualifier's quiet brand mark. */
+    /* Push content below the fixed nav. */
     padding: var(--nav-h) var(--space-lg) 0;
-    background-image:
-      linear-gradient(var(--grid-line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
-    background-size: 24px 24px;
-    background-position: -1px -1px;
   }
 
   main {
@@ -508,16 +501,10 @@
      code-compare, figures, headings) stay at the body's full width
      so the spec's wide tables and anchored heading structure render
      unchanged. */
-  .prose {
-    max-width: var(--max-w);
-  }
-  .prose > p,
-  .prose > ul,
-  .prose > ol,
-  .prose > dl,
-  .prose > blockquote {
-    max-width: var(--measure);
-  }
+  /* Long-form pages share one content width with the rest of the site
+     (--max-w on main). The .prose class is kept as a hook for any
+     future prose-specific overrides but applies no layout constraint
+     of its own. */
 
   @media (max-width: 600px) {
     body {
@@ -810,7 +797,11 @@
     margin-bottom: 2rem;
   }
 
-  /* --- Side-by-side / tabbed code comparison --- */
+  /* --- Side-by-side / tabbed code comparison ---
+     Two panes side-by-side on desktop, tabbed on mobile. Each pane
+     scrolls horizontally if its content overflows. Vertical real-
+     estate is the constraint — we trade pane width for layout
+     compactness. */
   .code-compare {
     margin: 1rem 0;
   }
@@ -835,9 +826,19 @@
     border-bottom: 1px solid var(--ridge);
     user-select: none;
   }
+  .code-compare .cc-pane {
+    min-width: 0; /* allow pre overflow-x to apply inside grid track */
+  }
   .code-compare .cc-pane > pre {
     margin: 0;
     height: 100%;
+    /* Slightly tighter padding to claw back horizontal room. */
+    padding: 0.75rem 0.9rem;
+  }
+  .code-compare .cc-pane > pre code {
+    /* Step down from the default 0.82rem so pretty-printed JSON fits
+       within a half-width pane without horizontal scrollbars. */
+    font-size: 0.72rem;
   }
   /* Distinguish the record body from the envelope: heavier weight and
      slightly brighter text. Stays inline so there's no layout disruption. */
@@ -848,9 +849,6 @@
     color: var(--white);
   }
   @media (max-width: 640px) {
-    .code-compare .cc-grid {
-      grid-template-columns: 1fr 1fr;
-    }
     .code-compare .cc-label {
       cursor: pointer;
       text-align: center;
