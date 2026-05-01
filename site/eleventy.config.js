@@ -47,6 +47,11 @@ export default function (eleventyConfig) {
   // Load SPEC.md from repo root, pre-render to HTML
   const specRaw = readFileSync("../SPEC.md", "utf-8");
   const specContent = specRaw.replace(/^# .+\n+(\*\*.+\n)*/m, "");
+  const specVersionMatch = specRaw.match(/^\*\*Version:\*\*\s*(.+)$/m);
+  if (!specVersionMatch) {
+    throw new Error("Could not parse `**Version:**` line from SPEC.md");
+  }
+  const specVersion = specVersionMatch[1].trim();
   const specMd = markdownIt({
     html: true,
     linkify: true,
@@ -56,6 +61,7 @@ export default function (eleventyConfig) {
     slugify,
   });
   eleventyConfig.addGlobalData("specHtml", specMd.render(specContent));
+  eleventyConfig.addGlobalData("specVersion", specVersion);
 
   // Load METABOX.md from repo root, pre-render to HTML
   const metaboxRaw = readFileSync("../METABOX.md", "utf-8");

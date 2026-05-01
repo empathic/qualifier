@@ -123,7 +123,8 @@ all work on `.qual` files. Two months later, the code under your flag changes
 again. `qualifier review` surfaces the drift automatically.
 
 Annotations are append-only, so **merge conflicts are structurally impossible**.
-Push straight to main. No branch, no PR, no ceremony.
+Push straight to main. No branch, no PR, no ceremony. (Compaction rewrites
+the file and should be coordinated like any other maintenance task.)
 
 <svg class="topo topo-wide" viewBox="0 0 900 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <!-- Blueprint ruler marks -->
