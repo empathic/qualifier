@@ -84,15 +84,18 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     if args.format == "json" {
         if args.pretty {
-            let mut value: serde_json::Value =
-                serde_json::from_str(&output::show_json(&args.artifact, &report, &display_records))?;
+            let mut value: serde_json::Value = serde_json::from_str(&output::show_json(
+                &args.artifact,
+                &report,
+                &display_records,
+            ))?;
             if let Some(records_arr) = value["records"].as_array_mut() {
                 for rec_val in records_arr.iter_mut() {
                     if let Some(span_val) = rec_val.get("body").and_then(|b| b.get("span"))
                         && !span_val.is_null()
-                        && let Some(record) = display_records.iter().find(|r| {
-                            rec_val.get("id").and_then(|v| v.as_str()) == Some(r.id())
-                        })
+                        && let Some(record) = display_records
+                            .iter()
+                            .find(|r| rec_val.get("id").and_then(|v| v.as_str()) == Some(r.id()))
                         && let Some(att) = record.as_annotation()
                         && let Some(ref span) = att.body.span
                     {
@@ -245,7 +248,11 @@ fn print_record(
     if let Some(replies) = children.get(record.id()) {
         for (i, reply) in replies.iter().enumerate() {
             let is_last = i == replies.len() - 1;
-            let branch = if is_last { "\u{2514}\u{2500} " } else { "\u{251c}\u{2500} " };
+            let branch = if is_last {
+                "\u{2514}\u{2500} "
+            } else {
+                "\u{251c}\u{2500} "
+            };
             let continuation = if is_last { "   " } else { "\u{2502}  " };
             let child_line = format!("{cont_prefix}{branch}");
             let child_cont = format!("{cont_prefix}{continuation}");

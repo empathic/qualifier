@@ -96,11 +96,7 @@ pub fn format_human(ctx: &SpanContext) -> String {
         return String::new();
     }
 
-    let max_line_num = ctx
-        .lines
-        .last()
-        .map(|l| l.line_number)
-        .unwrap_or(0);
+    let max_line_num = ctx.lines.last().map(|l| l.line_number).unwrap_or(0);
     let gutter_width = max_line_num.to_string().len();
 
     let mut out = String::new();

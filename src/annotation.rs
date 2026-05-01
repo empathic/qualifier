@@ -50,7 +50,11 @@ pub fn parse_span(s: &str) -> Result<Span, String> {
     match parts.len() {
         1 => {
             let start = parse_position(parts[0])?;
-            Ok(Span { start, end: None, content_hash: None })
+            Ok(Span {
+                start,
+                end: None,
+                content_hash: None,
+            })
         }
         2 => {
             let start = parse_position(parts[0])?;
@@ -129,10 +133,7 @@ pub fn parse_location(s: &str) -> (String, Option<Span>) {
                 return (
                     subject,
                     Some(Span {
-                        start: Position {
-                            line,
-                            col: None,
-                        },
+                        start: Position { line, col: None },
                         end: None,
                         content_hash: None,
                     }),
@@ -657,10 +658,10 @@ pub fn validate(annotation: &Annotation) -> Vec<String> {
     } else if !annotation.issuer.contains(':') {
         errors.push("issuer must be a URI (e.g. mailto:user@example.com)".into());
     }
-    if let Some(score) = annotation.body.score {
-        if score < -100 || score > 100 {
-            errors.push(format!("score {score} is out of range [-100, 100]"));
-        }
+    if let Some(score) = annotation.body.score
+        && !(-100..=100).contains(&score)
+    {
+        errors.push(format!("score {score} is out of range [-100, 100]"));
     }
     if annotation.id.is_empty() {
         errors.push("id must not be empty".into());
@@ -1760,10 +1761,7 @@ mod tests {
             },
         });
 
-        assert_ne!(
-            without_ref.id, with_ref.id,
-            "references should affect ID"
-        );
+        assert_ne!(without_ref.id, with_ref.id, "references should affect ID");
     }
 
     #[test]
@@ -1804,7 +1802,9 @@ mod tests {
 
         let errors = validate(&att);
         assert!(
-            errors.iter().any(|e| e.contains("references must not point to the record itself")),
+            errors
+                .iter()
+                .any(|e| e.contains("references must not point to the record itself")),
             "self-reference should be rejected, got: {:?}",
             errors
         );

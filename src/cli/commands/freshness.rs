@@ -42,18 +42,14 @@ pub fn run(args: Args) -> crate::Result<()> {
     }
 
     // Collect all active annotations with spans that have content_hash
-    let all_records: Vec<_> = qual_files
-        .iter()
-        .flat_map(|qf| qf.records.iter())
-        .collect();
+    let all_records: Vec<_> = qual_files.iter().flat_map(|qf| qf.records.iter()).collect();
 
     let all_owned: Vec<_> = qual_files
         .iter()
         .flat_map(|qf| qf.records.iter().cloned())
         .collect();
     let active = scoring::filter_superseded(&all_owned);
-    let active_ids: std::collections::HashSet<&str> =
-        active.iter().map(|r| r.id()).collect();
+    let active_ids: std::collections::HashSet<&str> = active.iter().map(|r| r.id()).collect();
 
     let mut results = Vec::new();
 
@@ -145,9 +141,7 @@ fn print_human(results: &[CheckResult]) {
 
     let total = results.len();
     println!();
-    println!(
-        "{total} annotations checked: {fresh} fresh, {drifted} drifted, {missing} missing"
-    );
+    println!("{total} annotations checked: {fresh} fresh, {drifted} drifted, {missing} missing");
 }
 
 fn print_json(results: &[CheckResult]) {

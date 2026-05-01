@@ -1286,16 +1286,19 @@ fn test_show_pretty_json() {
         ],
     );
 
-    let (stdout, _, code) =
-        run_qualifier(dir.path(), &["show", "example.rs", "--format", "json", "--pretty"]);
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &["show", "example.rs", "--format", "json", "--pretty"],
+    );
 
     assert_eq!(code, 0, "show --pretty --format json should succeed");
 
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!("should produce valid JSON: {e}\ngot: {stdout}")
-    });
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("should produce valid JSON: {e}\ngot: {stdout}"));
 
-    let records = parsed["records"].as_array().expect("should have records array");
+    let records = parsed["records"]
+        .as_array()
+        .expect("should have records array");
     assert!(!records.is_empty(), "should have at least one record");
 
     let rec = &records[0];
@@ -1687,7 +1690,10 @@ fn test_reply_with_kind_override() {
             "mailto:test@test.com",
         ],
     );
-    assert_eq!(code2, 0, "reply with --kind override should succeed: {stdout2}");
+    assert_eq!(
+        code2, 0,
+        "reply with --kind override should succeed: {stdout2}"
+    );
     assert!(
         stdout2.contains("pass"),
         "reply should use overridden kind: {stdout2}"
@@ -1749,7 +1755,9 @@ fn test_show_threads_replies_under_parent() {
     assert_eq!(code, 0);
 
     let lines: Vec<&str> = stdout.lines().collect();
-    let first_pos = lines.iter().position(|l| l.contains("first issue") && !l.contains("fixed"));
+    let first_pos = lines
+        .iter()
+        .position(|l| l.contains("first issue") && !l.contains("fixed"));
     let reply_pos = lines.iter().position(|l| l.contains("fixed first issue"));
     let second_pos = lines.iter().position(|l| l.contains("second issue"));
 
@@ -1839,7 +1847,8 @@ fn test_resolve_basic() {
     );
 
     // Show --all should display the tombstone
-    let (show_all_stdout, _, show_all_code) = run_qualifier(dir.path(), &["show", "lib.rs", "--all"]);
+    let (show_all_stdout, _, show_all_code) =
+        run_qualifier(dir.path(), &["show", "lib.rs", "--all"]);
     assert_eq!(show_all_code, 0);
     assert!(
         show_all_stdout.contains("resolve"),
@@ -1876,14 +1885,12 @@ fn test_resolve_default_message() {
     // Resolve without message — should default to "Resolved"
     let (stdout2, _, code2) = run_qualifier(
         dir.path(),
-        &[
-            "resolve",
-            &id[..8],
-            "--issuer",
-            "mailto:test@test.com",
-        ],
+        &["resolve", &id[..8], "--issuer", "mailto:test@test.com"],
     );
-    assert_eq!(code2, 0, "resolve without message should succeed: {stdout2}");
+    assert_eq!(
+        code2, 0,
+        "resolve without message should succeed: {stdout2}"
+    );
     assert!(
         stdout2.contains("Resolved"),
         "default message should be 'Resolved': {stdout2}"
@@ -1920,25 +1927,36 @@ fn test_resolve_removes_from_scoring() {
     // Verify score is -10 before resolving
     let (score_before, _, _) = run_qualifier(dir.path(), &["score", "--format", "json"]);
     let parsed_before: serde_json::Value = serde_json::from_str(&score_before).unwrap();
-    let entry_before = parsed_before.as_array().unwrap().iter().find(|e| e["subject"] == "lib.rs").unwrap();
-    assert_eq!(entry_before["raw_score"], -10, "score should be -10 before resolve");
+    let entry_before = parsed_before
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["subject"] == "lib.rs")
+        .unwrap();
+    assert_eq!(
+        entry_before["raw_score"], -10,
+        "score should be -10 before resolve"
+    );
 
     // Resolve it
     run_qualifier(
         dir.path(),
-        &[
-            "resolve",
-            &id[..8],
-            "--issuer",
-            "mailto:test@test.com",
-        ],
+        &["resolve", &id[..8], "--issuer", "mailto:test@test.com"],
     );
 
     // Score should now be 0 (original superseded, tombstone has score 0)
     let (score_after, _, _) = run_qualifier(dir.path(), &["score", "--format", "json"]);
     let parsed_after: serde_json::Value = serde_json::from_str(&score_after).unwrap();
-    let entry_after = parsed_after.as_array().unwrap().iter().find(|e| e["subject"] == "lib.rs").unwrap();
-    assert_eq!(entry_after["raw_score"], 0, "score should be 0 after resolve (original superseded)");
+    let entry_after = parsed_after
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["subject"] == "lib.rs")
+        .unwrap();
+    assert_eq!(
+        entry_after["raw_score"], 0,
+        "score should be 0 after resolve (original superseded)"
+    );
 }
 
 #[test]
@@ -1947,12 +1965,7 @@ fn test_resolve_not_found() {
 
     let (_, stderr, code) = run_qualifier(
         dir.path(),
-        &[
-            "resolve",
-            "deadbeef",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
+        &["resolve", "deadbeef", "--issuer", "mailto:test@test.com"],
     );
     assert_ne!(code, 0, "resolve with nonexistent ID should fail");
     assert!(
@@ -2145,11 +2158,7 @@ fn test_review_drifted() {
     );
 
     // Modify the file
-    std::fs::write(
-        &src,
-        "fn main() {\n    eprintln!(\"changed\");\n}\n",
-    )
-    .unwrap();
+    std::fs::write(&src, "fn main() {\n    eprintln!(\"changed\");\n}\n").unwrap();
 
     let (stdout, _, code) = run_qualifier(dir.path(), &["review"]);
     assert_eq!(code, 0, "review should succeed");

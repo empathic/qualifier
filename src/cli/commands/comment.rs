@@ -1,7 +1,7 @@
 use clap::Args as ClapArgs;
 
-use crate::annotation::Kind;
 use super::review::{self, ReviewArgs};
+use crate::annotation::Kind;
 
 #[derive(ClapArgs)]
 pub struct Args {

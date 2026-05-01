@@ -137,10 +137,7 @@ pub fn find_records_for<'a>(subject: &str, qual_files: &'a [QualFile]) -> Vec<&'
 /// Find all annotations for a given subject across all discovered `.qual` files.
 ///
 /// Filters to annotation records only (excludes epochs, dependencies, etc.).
-pub fn find_annotations_for<'a>(
-    subject: &str,
-    qual_files: &'a [QualFile],
-) -> Vec<&'a Annotation> {
+pub fn find_annotations_for<'a>(subject: &str, qual_files: &'a [QualFile]) -> Vec<&'a Annotation> {
     qual_files
         .iter()
         .flat_map(|qf| qf.records.iter())

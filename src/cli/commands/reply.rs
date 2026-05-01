@@ -61,7 +61,10 @@ pub struct Args {
 }
 
 /// Resolve a short ID prefix to a unique record across all qual files.
-pub(crate) fn resolve_id_prefix(prefix: &str, qual_files: &[qual_file::QualFile]) -> crate::Result<Record> {
+pub(crate) fn resolve_id_prefix(
+    prefix: &str,
+    qual_files: &[qual_file::QualFile],
+) -> crate::Result<Record> {
     if prefix.len() < 4 {
         return Err(crate::Error::Validation(
             "ID prefix must be at least 4 characters".into(),

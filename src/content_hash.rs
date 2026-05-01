@@ -142,10 +142,7 @@ mod tests {
         let f = make_file(&["alpha", "beta", "gamma"]);
         let hash = compute_span_hash(f.path(), &span(2, None)).unwrap();
         let s = Span {
-            start: Position {
-                line: 2,
-                col: None,
-            },
+            start: Position { line: 2, col: None },
             end: None,
             content_hash: Some(hash),
         };
@@ -156,16 +153,18 @@ mod tests {
     fn test_freshness_drifted() {
         let f = make_file(&["alpha", "beta", "gamma"]);
         let s = Span {
-            start: Position {
-                line: 2,
-                col: None,
-            },
+            start: Position { line: 2, col: None },
             end: None,
-            content_hash: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
+            content_hash: Some(
+                "0000000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
         };
         match check_freshness(f.path(), &s) {
             FreshnessStatus::Drifted { expected, actual } => {
-                assert_eq!(expected, "0000000000000000000000000000000000000000000000000000000000000000");
+                assert_eq!(
+                    expected,
+                    "0000000000000000000000000000000000000000000000000000000000000000"
+                );
                 assert_ne!(actual, expected);
             }
             other => panic!("expected Drifted, got {other:?}"),
@@ -175,10 +174,7 @@ mod tests {
     #[test]
     fn test_freshness_missing_file() {
         let s = Span {
-            start: Position {
-                line: 1,
-                col: None,
-            },
+            start: Position { line: 1, col: None },
             end: None,
             content_hash: Some("abc".into()),
         };
@@ -194,10 +190,7 @@ mod tests {
     fn test_freshness_missing_lines() {
         let f = make_file(&["only one line"]);
         let s = Span {
-            start: Position {
-                line: 5,
-                col: None,
-            },
+            start: Position { line: 5, col: None },
             end: None,
             content_hash: Some("abc".into()),
         };
