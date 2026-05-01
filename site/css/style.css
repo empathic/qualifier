@@ -309,6 +309,66 @@ pre code {
   border-radius: 0;
 }
 
+/* --- Side-by-side / tabbed code comparison --- */
+.code-compare {
+  margin: 1rem 0;
+}
+.code-compare .cc-radio {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.code-compare .cc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 1rem;
+  align-items: start;
+}
+.code-compare .cc-label {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--flint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--ridge);
+  user-select: none;
+}
+.code-compare .cc-pane > pre {
+  margin: 0;
+  height: 100%;
+}
+/* Distinguish the record body from the envelope: heavier weight and
+   slightly brighter text. Stays inline so there's no layout disruption. */
+.record-body .token {
+  font-weight: 600;
+}
+.record-body .token.property {
+  color: var(--white);
+}
+@media (max-width: 640px) {
+  .code-compare .cc-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .code-compare .cc-label {
+    cursor: pointer;
+    text-align: center;
+  }
+  .code-compare .cc-pane {
+    grid-column: 1 / -1;
+    display: none;
+  }
+  .code-compare .cc-radio-1:checked ~ .cc-grid .cc-pane-1,
+  .code-compare .cc-radio-2:checked ~ .cc-grid .cc-pane-2 {
+    display: block;
+  }
+  .code-compare .cc-radio-1:checked ~ .cc-grid .cc-label-1,
+  .code-compare .cc-radio-2:checked ~ .cc-grid .cc-label-2 {
+    color: var(--chalk);
+    border-bottom-color: var(--accent-mid);
+  }
+}
+
 /* --- Tables --- */
 table {
   border-collapse: collapse;

@@ -8,61 +8,72 @@ permalink: /format/
 # The .qual format
 
 <p class="subtitle">
-A friendly tour of the file format you'll be writing into.
+A friendly tour of the .qual file format.
 </p>
 
-You've decided to try Qualifier. Maybe you ran `qualifier flag` and now there's
-a `.qual` file sitting next to your source. What is that file, and what's
-inside it? This page is the orientation. The full canonical reference lives in
-the [spec](/spec/); the goal here is to get you comfortable enough to write
-your first record by hand.
+A `.qual` file is how Qualifier records structured observations about code.
+Concerns, suggestions, anything worth keeping is stored in plain UTF-8 encoded
+JSONL. Append-only, merge friendly, one record per line, sitting next to your
+source. This page is the orientation: enough to read one fluently and write one
+by hand. The full reference is the [spec](/spec/).
 
-## What's a .qual file?
-
-A `.qual` file is plain text. UTF-8, one JSON object per line, no commas
-between lines, no wrapping array. That's the JSONL convention, and it's the
-whole format. Append-only by design, so concurrent writers can each tack a
-line onto the end without stepping on each other.
-
-It lives next to your source code. If you're annotating `src/parser.rs`,
-the file is most often `src/.qual` (one file per directory) or
+Files live next to your source. An annotation about `src/parser.rs`
+typically lives in `src/.qual` (one file per directory) or
 `src/parser.rs.qual` (one file per source file). Either works, and `git`
 treats them like any other text file. `git blame`, `git log`, `git diff` all
 do the right thing.
 
-A two-line `.qual` file looks like this:
+A two-record `.qual` file looks like this:
 
 ```jsonl
-{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"a1b2...","body":{"kind":"concern","score":-30,"summary":"Panics on malformed input"}}
-{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-02-24T11:00:00Z","id":"e5f6...","body":{"kind":"praise","score":40,"summary":"Excellent test coverage"}}
+{"metabox":"1","type":"annotation","subject":"src/auth.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2...","body":{"kind":"concern","summary":"SQL injection risk in login handler"}}
+{"metabox":"1","type":"annotation","subject":"src/auth.rs","issuer":"urn:anthropic:claude","issuer_type":"ai","created_at":"2026-02-24T11:00:00Z","id":"e5f6...","body":{"kind":"comment","references":"a1b2...","summary":"Switched the handler to parameterized queries in 8f3c2a1"}}
 ```
 
-Two records. One concern, one bit of praise. Both about the same file.
+A human reviewer flags a concern; an AI agent replies with a fix, threaded
+to the original via `references`.
 
-## Show me one
+## Anatomy of a record
 
-Here's that first line again, but expanded so you can read it:
+Those two records, expanded side by side:
 
-```json
-{
+{% codecompare "json",
+  "Comment (Record 1)",
+'{
   "metabox": "1",
   "type": "annotation",
-  "subject": "src/parser.rs",
+  "subject": "src/auth.rs",
   "issuer": "mailto:alice@example.com",
+  "issuer_type": "human",
   "created_at": "2026-02-24T10:00:00Z",
   "id": "a1b2...",
   "body": {
     "kind": "concern",
-    "score": -30,
-    "summary": "Panics on malformed input"
+    "summary": "SQL injection risk in login handler"
   }
-}
-```
+}',
+  "Response (Record 2)",
+'{
+  "metabox": "1",
+  "type": "annotation",
+  "subject": "src/auth.rs",
+  "issuer": "urn:anthropic:claude",
+  "issuer_type": "ai",
+  "created_at": "2026-02-24T11:00:00Z",
+  "id": "e5f6...",
+  "body": {
+    "kind": "comment",
+    "references": "a1b2...",
+    "summary": "Switched the handler to parameterized queries in 8f3c2a1"
+  }
+}'
+%}
 
 There are two halves. The **envelope** (everything outside `body`) is
 who-said-what-about-which-subject-when. The **body** is what they actually
-said. Every record in a `.qual` file has the same envelope shape. The body
-varies by record type.
+said. Every record in a `.qual` file has the same envelope shape — that's
+why the two records above look nearly identical at the top. The body varies
+by record type.
 
 That split is intentional: tools that don't understand a particular body
 schema can still read the envelope and route the record sensibly.
