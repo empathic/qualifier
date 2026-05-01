@@ -512,6 +512,20 @@ impl Record {
     pub fn is_scored(&self) -> bool {
         matches!(self, Record::Annotation(_) | Record::Epoch(_))
     }
+
+    /// Get the envelope `type` string (e.g. `"annotation"`, `"epoch"`,
+    /// `"dependency"`, or any custom URI for `Unknown` records).
+    ///
+    /// For `Unknown` records, this reads the `type` field from the raw JSON
+    /// value; returns `""` if absent.
+    pub fn record_type(&self) -> &str {
+        match self {
+            Record::Annotation(a) => &a.record_type,
+            Record::Epoch(e) => &e.record_type,
+            Record::Dependency(d) => &d.record_type,
+            Record::Unknown(v) => v.get("type").and_then(|v| v.as_str()).unwrap_or(""),
+        }
+    }
 }
 
 // ─── Canonical views (for ID generation — MCF) ──────────────────────────────

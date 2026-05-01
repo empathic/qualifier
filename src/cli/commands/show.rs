@@ -31,6 +31,11 @@ pub struct Args {
     /// Show all records, including resolve tombstones
     #[arg(long)]
     pub all: bool,
+
+    /// Filter records by envelope `type` (e.g. `annotation`, `epoch`,
+    /// `dependency`, or a custom type URI). Open per spec §3.5.
+    #[arg(long = "type", value_name = "TYPE")]
+    pub record_type: Option<String>,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
@@ -61,7 +66,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         });
 
     // Filter records for display: remove superseded, and unless --all, remove resolve tombstones
-    let display_records: Vec<crate::annotation::Record> = if args.all {
+    let mut display_records: Vec<crate::annotation::Record> = if args.all {
         owned_records.clone()
     } else {
         let active = scoring::filter_superseded(&owned_records);
@@ -71,6 +76,11 @@ pub fn run(args: Args) -> crate::Result<()> {
             .cloned()
             .collect()
     };
+
+    // Apply --type filter (open type set per spec §3.5).
+    if let Some(ref type_filter) = args.record_type {
+        display_records.retain(|r| r.record_type() == type_filter);
+    }
 
     if args.format == "json" {
         if args.pretty {
@@ -211,6 +221,24 @@ fn print_record(
             date,
             id_short,
         );
+    } else if matches!(record, crate::annotation::Record::Dependency(_)) {
+        // Dependency records are graph metadata, not quality signals.
+        // `qualifier show <subject>` is for surfacing quality signals
+        // (annotations, epochs); skip dependencies in human output.
+        // They remain visible in `--format json` and via `qualifier graph`.
+        return;
+    } else {
+        // Fallback for unknown / extension record types — preserve substrate
+        // visibility per spec §2.5 without trying to interpret the body.
+        let id = record.id();
+        let id_short = &id[..8.min(id.len())];
+        let type_str = record.record_type();
+        let type_display = if type_str.is_empty() {
+            "<unknown>"
+        } else {
+            type_str
+        };
+        println!("{line_prefix}[---] {type_display}  {id_short}");
     }
 
     // Print threaded replies with tree-drawing characters

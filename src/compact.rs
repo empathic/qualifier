@@ -408,6 +408,70 @@ mod tests {
         assert_eq!(epoch_b.body.refs.len(), 1);
     }
 
+    fn make_unknown(subject: &str, id: &str) -> Record {
+        let value = serde_json::json!({
+            "metabox": "1",
+            "type": "https://example.com/custom/v1",
+            "subject": subject,
+            "issuer": "https://ci.example.com",
+            "created_at": "2026-04-01T00:00:00Z",
+            "id": id,
+            "body": {"foo": "bar"}
+        });
+        // Round-trip through Record so we exercise the Deserialize dispatch.
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn test_prune_preserves_unknown_records() {
+        // Spec §3.3.1: compaction MUST preserve records of unrecognized types.
+        let unknown_id = "u".repeat(64);
+        let original = make_record("test.rs", Kind::Concern, -10, "issue");
+        let replacement = make_superseding("test.rs", 5, original.id());
+        let unknown = make_unknown("test.rs", &unknown_id);
+
+        let qf = make_qual_file(vec![original, replacement, unknown]);
+        let (pruned, _) = prune(&qf);
+
+        assert!(
+            pruned
+                .records
+                .iter()
+                .any(|r| matches!(r, Record::Unknown(_))),
+            "prune must preserve unknown records"
+        );
+        assert!(
+            pruned.records.iter().any(|r| r.id() == unknown_id),
+            "unknown record id must round-trip"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_preserves_unknown_records() {
+        // Spec §3.3.1: snapshot compaction must pass non-scored unknowns
+        // through unchanged while collapsing scored records into an epoch.
+        let unknown_id = "u".repeat(64);
+        let unknown = make_unknown("test.rs", &unknown_id);
+        let scored = make_record("test.rs", Kind::Praise, 30, "good");
+
+        let qf = make_qual_file(vec![scored, unknown]);
+        let (snapped, _) = snapshot(&qf);
+
+        // Should contain exactly: 1 epoch (from scored) + 1 unknown passthrough.
+        assert_eq!(snapped.records.len(), 2);
+        assert!(
+            snapped.records.iter().any(|r| r.as_epoch().is_some()),
+            "snapshot should produce an epoch for the scored record"
+        );
+        let preserved = snapped
+            .records
+            .iter()
+            .find(|r| matches!(r, Record::Unknown(_)))
+            .expect("unknown record should be preserved");
+        assert_eq!(preserved.id(), unknown_id);
+        assert_eq!(preserved.record_type(), "https://example.com/custom/v1");
+    }
+
     #[test]
     fn test_prune_multi_subject() {
         let a1 = make_record("src/a.rs", Kind::Concern, -10, "issue");

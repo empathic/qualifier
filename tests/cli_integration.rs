@@ -2271,3 +2271,386 @@ fn test_review_subject_filter() {
         "should only check 1 annotation: {stdout}"
     );
 }
+
+// --- substrate / unknown record types (spec §2.5, §3.5) ---
+
+/// Helper: write a .qual file containing a single Unknown-type record
+/// alongside a normal annotation, returning the (custom_id, annotation_id).
+fn write_qual_with_unknown(dir: &Path, qual_rel_path: &str, subject: &str) -> (String, String) {
+    let custom_id = "f".repeat(64);
+    let custom_record = serde_json::json!({
+        "metabox": "1",
+        "type": "https://example.com/custom/v1",
+        "subject": subject,
+        "issuer": "https://ci.example.com",
+        "created_at": "2026-04-01T00:00:00Z",
+        "id": custom_id,
+        "body": {"foo": "bar"}
+    });
+
+    // Also write an ordinary annotation so the subject has scored content too.
+    let qual_path = dir.join(qual_rel_path);
+    if let Some(parent) = qual_path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(
+        &qual_path,
+        format!("{}\n", serde_json::to_string(&custom_record).unwrap()),
+    )
+    .unwrap();
+
+    // Append a real annotation via the CLI.
+    let (_, _, code) = run_qualifier(
+        dir,
+        &[
+            "attest",
+            subject,
+            "--kind",
+            "praise",
+            "--score",
+            "20",
+            "--summary",
+            "looks good",
+            "--issuer",
+            "mailto:test@test.com",
+            "--file",
+            qual_rel_path,
+        ],
+    );
+    assert_eq!(code, 0, "attest helper should succeed");
+
+    // Read the annotation id back from the file (the second JSONL line).
+    let contents = std::fs::read_to_string(&qual_path).unwrap();
+    let annotation_line = contents
+        .lines()
+        .find(|l| l.contains("\"type\":\"annotation\""))
+        .expect("expected an annotation line in the qual file");
+    let annotation_value: serde_json::Value = serde_json::from_str(annotation_line).unwrap();
+    let annotation_id = annotation_value["id"].as_str().unwrap().to_string();
+
+    (custom_id, annotation_id)
+}
+
+#[test]
+fn test_show_preserves_unknown_record_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_custom_id, _annotation_id) = write_qual_with_unknown(dir.path(), "lib.rs.qual", "lib.rs");
+
+    // Human format must not crash and must include the subject + the
+    // recognized annotation. The Unknown record shows up as a brief line.
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["show", "lib.rs"]);
+    assert_eq!(
+        code, 0,
+        "show must not crash on unknown record type. stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("lib.rs"),
+        "stdout should mention subject: {stdout}"
+    );
+    assert!(
+        stdout.contains("looks good") || stdout.contains("praise"),
+        "annotation should still be displayed: {stdout}"
+    );
+    assert!(
+        stdout.contains("https://example.com/custom/v1"),
+        "unknown type string should be visible in human output: {stdout}"
+    );
+
+    // JSON format must round-trip the Unknown record verbatim.
+    let (json_stdout, _, json_code) =
+        run_qualifier(dir.path(), &["show", "lib.rs", "--format", "json"]);
+    assert_eq!(json_code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&json_stdout).unwrap();
+    let records = parsed["records"].as_array().expect("records array");
+    assert_eq!(
+        records.len(),
+        2,
+        "both records should be present: {json_stdout}"
+    );
+
+    let unknown = records
+        .iter()
+        .find(|r| r["type"].as_str() == Some("https://example.com/custom/v1"))
+        .expect("unknown record should round-trip through JSON");
+    assert_eq!(unknown["body"]["foo"], "bar");
+    assert_eq!(unknown["subject"], "lib.rs");
+}
+
+#[test]
+fn test_show_omits_dependency_records_in_human_output() {
+    // `qualifier show <subject>` is for surfacing quality signals
+    // (annotations, epochs). Dependency records are graph metadata and
+    // should be silently skipped from human output (their prior behavior).
+    // They MUST still round-trip through `--format json` for callers that
+    // need the full record set.
+    let dir = tempfile::tempdir().unwrap();
+
+    // Hand-write a .qual file containing a dependency record. The id
+    // doesn't have to be canonical for this test — `qualifier show`
+    // doesn't recompute IDs, it just renders.
+    let dep_record = serde_json::json!({
+        "metabox": "1",
+        "type": "dependency",
+        "subject": "app.rs",
+        "issuer": "https://ci.example.com",
+        "created_at": "2026-04-01T00:00:00Z",
+        "id": "d".repeat(64),
+        "body": {"depends_on": ["lib.rs"]}
+    });
+    let qual_path = dir.path().join("app.rs.qual");
+    std::fs::write(
+        &qual_path,
+        format!("{}\n", serde_json::to_string(&dep_record).unwrap()),
+    )
+    .unwrap();
+
+    // Append a real annotation via the CLI so the subject has a quality
+    // signal to render alongside the dependency.
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "app.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "30",
+            "--summary",
+            "ships clean",
+            "--issuer",
+            "mailto:test@test.com",
+            "--file",
+            "app.rs.qual",
+        ],
+    );
+    assert_eq!(code, 0, "attest helper should succeed");
+
+    // Human output: annotation summary must appear, but the literal
+    // string "dependency" (the type label that would be emitted by the
+    // unknown/extension fallback) must NOT.
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["show", "app.rs"]);
+    assert_eq!(
+        code, 0,
+        "show must succeed on a subject with mixed records. stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("ships clean") || stdout.contains("praise"),
+        "annotation should be rendered in human output: {stdout}"
+    );
+    assert!(
+        !stdout.contains("dependency"),
+        "dependency records must not appear in human `show` output: {stdout}"
+    );
+    assert!(
+        !stdout.contains("[---]"),
+        "dependency should be silently skipped, not rendered with the unknown-fallback marker: {stdout}"
+    );
+
+    // JSON output: dependency record MUST still round-trip — graph
+    // metadata is part of the full record set.
+    let (json_stdout, _, json_code) =
+        run_qualifier(dir.path(), &["show", "app.rs", "--format", "json"]);
+    assert_eq!(json_code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&json_stdout).unwrap();
+    let records = parsed["records"].as_array().expect("records array");
+    let dep = records
+        .iter()
+        .find(|r| r["type"].as_str() == Some("dependency"))
+        .expect("dependency record should round-trip through JSON output");
+    assert_eq!(dep["subject"], "app.rs");
+    assert_eq!(dep["body"]["depends_on"][0], "lib.rs");
+}
+
+#[test]
+fn test_ls_preserves_unknown_record_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let _ = write_qual_with_unknown(dir.path(), "widget.rs.qual", "widget.rs");
+
+    // ls (formerly score) must not crash. Unknown records aren't scored
+    // (is_scored() == false), but the subject still has a real annotation.
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["ls"]);
+    assert_eq!(
+        code, 0,
+        "ls must not crash on unknown record type: {stderr}"
+    );
+    assert!(
+        stdout.contains("widget.rs"),
+        "ls output should list subject: {stdout}"
+    );
+
+    let (json_stdout, _, json_code) = run_qualifier(dir.path(), &["ls", "--format", "json"]);
+    assert_eq!(json_code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&json_stdout).unwrap();
+    let arr = parsed.as_array().unwrap();
+    let widget_entry = arr
+        .iter()
+        .find(|e| e["subject"] == "widget.rs")
+        .expect("widget.rs should appear in ls output");
+    // Only the annotation contributes to score; Unknown is opaque.
+    assert_eq!(widget_entry["raw_score"], 20);
+}
+
+#[test]
+fn test_show_filters_by_record_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let (custom_id, annotation_id) =
+        write_qual_with_unknown(dir.path(), "thing.rs.qual", "thing.rs");
+
+    // No --type: see both records.
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", "thing.rs", "--format", "json"]);
+    assert_eq!(code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["records"].as_array().unwrap().len(), 2);
+
+    // --type annotation: only the annotation.
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "show",
+            "thing.rs",
+            "--format",
+            "json",
+            "--type",
+            "annotation",
+        ],
+    );
+    assert_eq!(code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let records = parsed["records"].as_array().unwrap();
+    assert_eq!(
+        records.len(),
+        1,
+        "filter should keep only annotations: {stdout}"
+    );
+    assert_eq!(records[0]["id"], annotation_id);
+    assert_eq!(records[0]["type"], "annotation");
+
+    // --type <custom URI>: only the unknown record.
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "show",
+            "thing.rs",
+            "--format",
+            "json",
+            "--type",
+            "https://example.com/custom/v1",
+        ],
+    );
+    assert_eq!(code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let records = parsed["records"].as_array().unwrap();
+    assert_eq!(
+        records.len(),
+        1,
+        "filter should keep only the unknown type: {stdout}"
+    );
+    assert_eq!(records[0]["id"], custom_id);
+    assert_eq!(records[0]["type"], "https://example.com/custom/v1");
+
+    // --type with no matches: empty list, still exits 0.
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "show",
+            "thing.rs",
+            "--format",
+            "json",
+            "--type",
+            "no-such-type",
+        ],
+    );
+    assert_eq!(code, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["records"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn test_compact_preserves_unknown_record_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let (custom_id, first_annotation_id) =
+        write_qual_with_unknown(dir.path(), "keep.rs.qual", "keep.rs");
+
+    // Add a second annotation that supersedes the first so prune has work
+    // to do (otherwise compact short-circuits with "nothing to compact").
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "keep.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "25",
+            "--summary",
+            "even better",
+            "--issuer",
+            "mailto:test@test.com",
+            "--supersedes",
+            &first_annotation_id,
+            "--file",
+            "keep.rs.qual",
+        ],
+    );
+    assert_eq!(code, 0, "supersedes attest should succeed");
+
+    // prune: should remove the superseded record but keep the Unknown.
+    let (_, _, code) = run_qualifier(dir.path(), &["compact", "keep.rs"]);
+    assert_eq!(code, 0);
+
+    let after_prune = std::fs::read_to_string(dir.path().join("keep.rs.qual")).unwrap();
+    assert!(
+        after_prune.contains(&custom_id),
+        "prune compaction must preserve unknown records (spec §3.3.1):\n{after_prune}"
+    );
+    assert!(
+        after_prune.contains("https://example.com/custom/v1"),
+        "unknown type string should survive prune"
+    );
+    // The superseded annotation should be gone as its own record (its ID may
+    // still appear as the `supersedes` pointer of the survivor — that's fine).
+    let pruned_id_pattern = format!("\"id\":\"{first_annotation_id}\"");
+    assert!(
+        !after_prune.contains(&pruned_id_pattern),
+        "superseded annotation should have been pruned:\n{after_prune}"
+    );
+
+    // snapshot: scored records collapse into an epoch, but the Unknown record
+    // is non-scored and MUST pass through untouched. Two scored records remain
+    // after the supersedes attest above (the survivor + a fresh extra).
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "attest",
+            "keep.rs",
+            "--kind",
+            "praise",
+            "--score",
+            "5",
+            "--summary",
+            "minor extra",
+            "--issuer",
+            "mailto:test@test.com",
+            "--file",
+            "keep.rs.qual",
+        ],
+    );
+    assert_eq!(code, 0);
+
+    let (_, _, code) = run_qualifier(dir.path(), &["compact", "keep.rs", "--snapshot"]);
+    assert_eq!(code, 0);
+
+    let after_snapshot = std::fs::read_to_string(dir.path().join("keep.rs.qual")).unwrap();
+    assert!(
+        after_snapshot.contains(&custom_id),
+        "snapshot compaction must preserve unknown records (spec §3.3.1):\n{after_snapshot}"
+    );
+    assert!(
+        after_snapshot.contains("https://example.com/custom/v1"),
+        "unknown type string should survive snapshot"
+    );
+    assert!(
+        after_snapshot.contains("\"type\":\"epoch\""),
+        "snapshot should produce an epoch record:\n{after_snapshot}"
+    );
+}
