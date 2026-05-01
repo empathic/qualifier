@@ -23,6 +23,51 @@ Records use the [Metabox](METABOX.md) envelope format: a fixed envelope
 wrapping a type-specific `body` object. Records are content-addressed, append-only, and
 human-writable. No server, no database, no PKI required.
 
+## 0. Why Qualifier
+
+Software is full of structured observations that have no good home. A reviewer
+notices that a function panics on malformed input. A scanner reports a CVE in a
+transitive dependency. A profiler measures a regression on a hot path. A
+licensing audit confirms that a vendored file is MIT. Today, each of these
+observations lands in a different system — a PR comment, a SARIF report, a
+spreadsheet, a wiki page — and none of those systems talks to the others. The
+observations decay because they live somewhere code does not. Structured
+knowledge about code deserves the same rigor we apply to the code itself.
+
+Consider the alternatives we currently reach for. **GitHub PR comments** are
+tied to a diff window and disappear from view the moment the PR merges; the URL
+still resolves, but nothing in the working tree points at it, no tool can query
+it, and a refactor that touches the same lines a year later has no idea the
+conversation ever happened. **SARIF reports** are produced once by a tool, then
+either ignored or archived; they have no notion of human reply, threading, or
+follow-up. **`// TODO:` comments** are unstructured prose hidden in code, with
+no type, no severity, no author beyond `git blame`, and no way to thread a
+discussion. **Issue trackers** are separate from the code they describe; they
+collect bit-rot, can't address a specific span, and require context-switching
+to a different application to learn anything about the file in front of you.
+
+Each of these tools fails the same way: the observation is not a first-class,
+addressable, durable artifact alongside the code. Qualifier's wager is that if
+you make structured observations look like code — files in the repo, version
+controlled, content-addressed, append-only, threadable — they stop evaporating.
+A concern raised in February is still queryable in October. A reply written by
+an agent threads to the human comment that prompted it. A resolution
+supersedes the original signal without erasing it. Merges are clean under
+normal workflows because the file format is designed for it. Tooling can read
+every record because the envelope is uniform.
+
+The same skeleton that holds a human concern also holds a license declaration,
+a security advisory, or a performance measurement. The format is a substrate;
+annotations are simply its first and most-developed application. The cost of
+adoption is one JSONL file per directory and a CLI; the payoff is that the
+structured knowledge you produce — by hand, by review, by tool, by agent —
+finally has somewhere to live where it accumulates instead of decays.
+
+If you are forwarding this document to convince a teammate: the pitch is that
+your team already produces this metadata. It is currently scattered across
+five systems and lost on every merge. Qualifier gives it a single home, in
+files, that survives.
+
 ## 1. Design Principles
 
 1. **Files are the API.** The `.qual` format is the primary interface. Every
@@ -33,25 +78,43 @@ human-writable. No server, no database, no PKI required.
    diff readably, and blame usefully. Conflicts are structurally impossible
    under normal workflows (append-only + file-per-artifact).
 
-3. **Deterministic scoring.** Given identical `.qual` files and an identical
+3. **Open record types.** The format is a substrate, not a single application.
+   The Metabox envelope is fixed; record bodies are typed and extensible. New
+   record types extend the system without changing the envelope, and
+   unrecognized types pass through harmlessly. Annotations are the primary
+   record type and the reason qualifier exists, but the same skeleton supports
+   license declarations, security advisories, performance measurements, build
+   provenance, or any other structured observation about a software artifact.
+   Choosing the format does not lock you into a single domain.
+
+4. **Ambient annotation.** Record observations the moment you see them. No PR
+   required, no review window, no formal ceremony. A human reading code can
+   leave a `concern` in five seconds; an agent finishing a task can leave a
+   `comment` to flag a follow-up; a scanner can drop a `security-advisory`
+   into the same file. The practice is structurally enabled by append-only
+   JSONL plus content-addressed records — adding a record never conflicts with
+   another, and every record has a stable, addressable identity from the
+   moment it is written.
+
+5. **Deterministic scoring.** Given identical `.qual` files and an identical
    dependency graph, every implementation MUST produce identical quality scores.
    No floating point, no random weights — just deterministic integer arithmetic.
 
-4. **Propagation through the graph.** Quality is more than local. Software has
+6. **Propagation through the graph.** Quality is more than local. Software has
    dependencies. An artifact's *effective* quality is a function of its own
    annotations AND the effective quality of everything it depends on. A
    pristine binary that links a cursed library inherits the curse.
 
-5. **Human-first, agent-friendly.** The CLI is designed for humans at a
+7. **Human-first, agent-friendly.** The CLI is designed for humans at a
    terminal. The JSONL format and library API are designed for agents and
    tooling. Both are first-class.
 
-6. **Composable.** The record format uses the Metabox envelope — a uniform
+8. **Composable.** The record format uses the Metabox envelope — a uniform
    frame (who said something about which subject) wrapping typed payloads
-   (what they said). New record types extend the system without changing the
-   envelope. Unknown types pass through harmlessly.
+   (what they said). Records compose into threads via `references`, into
+   chains via `supersedes`, and into graphs via `dependency` records.
 
-7. **Interoperable.** Qualifier records project losslessly into in-toto
+9. **Interoperable.** Qualifier records project losslessly into in-toto
    annotation predicates. SARIF results import into qualifier annotations.
    The format bridges the gap between supply-chain annotation frameworks and
    human-scale quality tracking.
@@ -80,7 +143,7 @@ Every record uses the [Metabox](METABOX.md) envelope format with these fields:
 | `issuer_type`  | string   | no       | Issuer classification: `human`, `ai`, `tool`, `unknown` |
 | `created_at`   | string   | yes      | RFC 3339 timestamp |
 | `id`           | string   | yes      | Content-addressed BLAKE3 hash (see 2.8) |
-| `body`         | object   | yes      | Type-specific payload (see 2.6, 3.2, 3.4) |
+| `body`         | object   | yes      | Type-specific payload — see §3 for body schemas by type |
 
 These eight fields form the **uniform interface**. They are the same for every
 record type, they are stable across spec revisions, and they are sufficient
@@ -139,7 +202,7 @@ A span is an object with these fields:
 |----------------|--------|----------|-------------|
 | `start`        | object | yes      | Start of the range (inclusive) |
 | `end`          | object | no       | End of the range (inclusive). Defaults to `start`. |
-| `content_hash` | string | no       | BLAKE3 hash of the spanned lines (see 2.4.4) |
+| `content_hash` | string | no       | BLAKE3 hash of the spanned lines (see 2.4.3) |
 
 Each position has:
 
@@ -177,7 +240,7 @@ After normalization, `{"start":{"line":42}}` and
 `{"start":{"line":42},"end":{"line":42}}` produce identical canonical forms
 and therefore identical record IDs.
 
-#### 2.4.4 Content Hashing
+#### 2.4.3 Content Hashing
 
 When `content_hash` is present, it records a BLAKE3 hash of the source lines
 covered by the span at the time the annotation was created. This enables
@@ -213,7 +276,7 @@ while `content_hash` answers "has the code changed?"
 | Missing   | File not found or span beyond EOF |
 | No hash   | Annotation has no `content_hash` (older or whole-file annotations) |
 
-#### 2.4.3 Span Scoring
+#### 2.4.4 Span Scoring
 
 Span-addressed records contribute to the score of their parent **subject**.
 An annotation about `src/parser.rs` at span `{start: {line: 42}, end: {line: 58}}`
@@ -231,13 +294,19 @@ targets.
 ### 2.5 Record Types
 
 The `type` field is a string that identifies the body schema. Implementations
-MUST support the following types:
+MUST support the `annotation`, `epoch`, and `dependency` types. Additional
+types defined in this spec are RECOMMENDED but not strictly required —
+implementations that don't understand them MUST still preserve them (forward
+compatibility).
 
-| Type            | Description |
-|-----------------|-------------|
-| `annotation`   | A quality signal (see 2.6) |
-| `epoch`         | A compaction snapshot (see 3.2) |
-| `dependency`    | A dependency edge (see 3.4) |
+| Type                 | Description | Scored? |
+|----------------------|-------------|---------|
+| `annotation`         | A quality signal (see 2.6) | yes |
+| `epoch`              | A compaction snapshot (see 3.2) | yes |
+| `dependency`         | A dependency edge (see 3.4) | no |
+| `license`            | A license declaration (see 3.5) | no |
+| `security-advisory`  | A known vulnerability or weakness (see 3.6) | no |
+| `perf-measurement`   | A performance measurement (see 3.7) | no |
 
 Implementations MUST ignore records with unrecognized types (forward
 compatibility). Unrecognized records MUST be preserved during file operations
@@ -600,18 +669,105 @@ Qualifier accepts dependency information from two sources:
 Both sources are merged when computing effective scores. When both declare
 edges for the same subject, the union of all `depends_on` arrays is used.
 
-### 3.5 Defining New Record Types
+### 3.5 License (`type: "license"`)
 
-New record types are identified by a string value in the `type` field. Types
-defined outside this spec SHOULD use a URI to avoid collisions:
+A **license** record declares the licensing terms that apply to a subject.
+License records are typically produced by a license scanner or written by
+hand during a licensing audit.
+
+Body fields:
+
+| Field        | Type    | Required | Description |
+|--------------|---------|----------|-------------|
+| `confidence` | number  | no       | Detector confidence in `[0.0, 1.0]`. Omit for hand-asserted records. |
+| `evidence`   | string  | no       | Free-form provenance for the assertion (e.g., `"LICENSE file SHA256:abc..."`, `"package.json#license"`). |
+| `spdx_id`    | string  | yes      | SPDX license identifier (e.g., `"MIT"`, `"Apache-2.0"`, `"GPL-3.0-or-later"`). |
+
+**Example:**
 
 ```json
-{"metabox":"1","type":"https://example.com/qualifier/license/v1","subject":"src/parser.rs","issuer":"https://license-scanner.example.com","created_at":"...","id":"...","body":{"license":"MIT"}}
+{"metabox":"1","type":"license","subject":"vendor/lodash","issuer":"https://license-scanner.example.com","issuer_type":"tool","created_at":"2026-03-01T10:00:00Z","id":"...","body":{"confidence":0.98,"evidence":"LICENSE file SHA256:9f86d081...","spdx_id":"MIT"}}
 ```
 
-Types defined in this spec use short aliases (`annotation`, `epoch`,
-`dependency`). The spec reserves all unqualified type names (strings that
-do not contain `:` or `/`) for future standardization.
+**Scoring:** License records do NOT contribute to scoring. Only `annotation`
+and `epoch` records carry a `score` field (see 4.1). A license record
+documents an attribute of the subject; if a licensing problem warrants a
+quality signal, write a separate `annotation` (e.g., `kind: "blocker"`) and
+optionally `references` the license record.
+
+### 3.6 Security Advisory (`type: "security-advisory"`)
+
+A **security-advisory** record records a known vulnerability or weakness
+affecting a subject. Records of this type are typically produced by a
+vulnerability scanner, an SBOM tool, or written by hand when triaging a CVE.
+
+Body fields:
+
+| Field               | Type   | Required | Description |
+|---------------------|--------|----------|-------------|
+| `affected_versions` | string | no       | Version range expression (e.g., `"<1.4.2"`, `">=2.0.0,<2.3.1"`). |
+| `cve_id`            | string | no       | CVE identifier (e.g., `"CVE-2024-1234"`). |
+| `cwe_id`            | string | no       | CWE identifier (e.g., `"CWE-79"`). |
+| `severity`          | string | yes      | One of `critical`, `high`, `medium`, `low`, `info`. |
+| `summary`           | string | yes      | Human-readable one-line description of the issue. |
+
+At least one of `cve_id` or `cwe_id` SHOULD be present, but neither is
+strictly required (some advisories predate CVE assignment or describe
+project-specific issues).
+
+**Example:**
+
+```json
+{"metabox":"1","type":"security-advisory","subject":"vendor/openssl","issuer":"https://osv.dev","issuer_type":"tool","created_at":"2026-03-01T10:00:00Z","id":"...","body":{"affected_versions":"<3.0.8","cve_id":"CVE-2023-0286","severity":"high","summary":"X.400 address type confusion in X.509 GeneralName"}}
+```
+
+**Scoring:** Security advisory records do NOT contribute to scoring. Only
+`annotation` and `epoch` records carry a `score` field (see 4.1). To turn a
+security advisory into a quality gate, write an `annotation` (e.g.,
+`kind: "blocker"`) on the same subject that `references` the advisory.
+
+### 3.7 Performance Measurement (`type: "perf-measurement"`)
+
+A **perf-measurement** record captures a single performance measurement for
+a subject. Records of this type are typically produced by a benchmark
+harness, a profiler, or a CI job that records production telemetry.
+
+Body fields:
+
+| Field      | Type   | Required | Description |
+|------------|--------|----------|-------------|
+| `baseline` | number | no       | Reference value to compare against (e.g., the previous measurement). |
+| `metric`   | string | yes      | Metric identifier (e.g., `"latency_p99_ms"`, `"throughput_rps"`, `"binary_size_bytes"`). |
+| `unit`     | string | no       | Unit of measure (e.g., `"ms"`, `"req/s"`, `"bytes"`). May be embedded in the metric name; this field is for explicit cases. |
+| `value`    | number | yes      | The measured value. |
+
+**Example:**
+
+```json
+{"metabox":"1","type":"perf-measurement","subject":"bin/server","issuer":"https://ci.example.com","issuer_type":"tool","created_at":"2026-03-01T10:00:00Z","id":"...","body":{"baseline":42.0,"metric":"latency_p99_ms","unit":"ms","value":47.3}}
+```
+
+**Scoring:** Performance measurement records do NOT contribute to scoring.
+Only `annotation` and `epoch` records carry a `score` field (see 4.1). A
+regression worth gating on should be expressed as an `annotation` (e.g.,
+`kind: "concern"` or `kind: "blocker"`) that may `references` the underlying
+measurement record.
+
+### 3.8 Defining New Record Types
+
+Per design principle 3 (Open record types), implementations and integrations
+MAY define new record types. New record types are identified by a string
+value in the `type` field. Types defined outside this spec SHOULD use a URI
+to avoid collisions:
+
+```json
+{"metabox":"1","type":"https://example.com/qualifier/build-provenance/v1","subject":"bin/server","issuer":"https://build.example.com","created_at":"...","id":"...","body":{"builder":"github-actions","commit":"abc123"}}
+```
+
+Types defined in this spec use short unqualified names (`annotation`,
+`epoch`, `dependency`, `license`, `security-advisory`, `perf-measurement`).
+The spec reserves all unqualified type names (strings that do not contain
+`:` or `/`) for future standardization.
 
 A record type specification MUST define:
 
@@ -634,8 +790,8 @@ raw_score(A) = clamp(-100, 100, sum(record.body.score for active scored records 
 
 A subject with no scored records has a raw score of **0** (unqualified).
 
-Only records of types that carry a `score` field (`annotation`, `epoch`)
-contribute to scoring. Dependency records and unknown types do not.
+Only `annotation` and `epoch` records contribute to scoring; all other record
+types do not.
 
 ### 4.2 Effective Score
 
