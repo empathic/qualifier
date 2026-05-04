@@ -122,27 +122,26 @@ export default function (eleventyConfig) {
     );
   }
 
-  // Side-by-side / tabbed code comparison shortcode. Two panes appear
-  // side-by-side on desktop (>640px) and as tappable tabs on mobile.
-  // Pure CSS — radio inputs drive the tab switch.
+  // Vertically-stacked code comparison shortcode. Each record renders
+  // at full content width with a small uppercase label above. Side-by-
+  // side at the site's measure forced narrow panes that wrapped or
+  // scrolled pretty-printed JSON; stacking trades vertical space for
+  // legibility.
   // Usage: {% codecompare lang, labelA, codeA, labelB, codeB %}
-  let codeCompareCounter = 0;
   eleventyConfig.addShortcode(
     "codecompare",
     (lang, labelA, codeA, labelB, codeB) => {
-      codeCompareCounter += 1;
-      const id = `cc-${codeCompareCounter}`;
       const paneA = wrapRecordBody(prismHighlight(codeA, lang));
       const paneB = wrapRecordBody(prismHighlight(codeB, lang));
       return `<div class="code-compare">
-  <input type="radio" name="${id}" id="${id}-a" class="cc-radio cc-radio-1" checked>
-  <input type="radio" name="${id}" id="${id}-b" class="cc-radio cc-radio-2">
-  <div class="cc-grid">
-    <label for="${id}-a" class="cc-label cc-label-1">${labelA}</label>
-    <label for="${id}-b" class="cc-label cc-label-2">${labelB}</label>
-    <div class="cc-pane cc-pane-1">${paneA}</div>
-    <div class="cc-pane cc-pane-2">${paneB}</div>
-  </div>
+  <section class="cc-section">
+    <div class="cc-label">${labelA}</div>
+    <div class="cc-pane">${paneA}</div>
+  </section>
+  <section class="cc-section">
+    <div class="cc-label">${labelB}</div>
+    <div class="cc-pane">${paneB}</div>
+  </section>
 </div>`;
     },
   );

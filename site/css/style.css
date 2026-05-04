@@ -797,24 +797,20 @@
     margin-bottom: 2rem;
   }
 
-  /* --- Side-by-side / tabbed code comparison ---
-     Two panes side-by-side on desktop, tabbed on mobile. Each pane
-     scrolls horizontally if its content overflows. Vertical real-
-     estate is the constraint — we trade pane width for layout
-     compactness. */
+  /* --- Stacked code comparison ---
+     Two records, each at full content width, stacked vertically with a
+     small uppercase label above each. Side-by-side at our measure
+     forced narrow panes that wrapped or scrolled pretty-printed JSON;
+     stacking trades vertical space for legibility. */
   .code-compare {
-    margin: 1rem 0;
+    margin: 1.25rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
-  .code-compare .cc-radio {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-  }
-  .code-compare .cc-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.5rem 1rem;
-    align-items: start;
+  .code-compare .cc-section {
+    display: flex;
+    flex-direction: column;
   }
   .code-compare .cc-label {
     font-family: var(--mono);
@@ -823,22 +819,12 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
     padding: 0.25rem 0;
+    margin-bottom: 0.4rem;
     border-bottom: 1px solid var(--ridge);
     user-select: none;
   }
-  .code-compare .cc-pane {
-    min-width: 0; /* allow pre overflow-x to apply inside grid track */
-  }
   .code-compare .cc-pane > pre {
     margin: 0;
-    height: 100%;
-    /* Slightly tighter padding to claw back horizontal room. */
-    padding: 0.75rem 0.9rem;
-  }
-  .code-compare .cc-pane > pre code {
-    /* Step down from the default 0.82rem so pretty-printed JSON fits
-       within a half-width pane without horizontal scrollbars. */
-    font-size: 0.72rem;
   }
   /* Distinguish the record body from the envelope: heavier weight and
      slightly brighter text. Stays inline so there's no layout disruption. */
@@ -847,25 +833,6 @@
   }
   .record-body .token.property {
     color: var(--white);
-  }
-  @media (max-width: 640px) {
-    .code-compare .cc-label {
-      cursor: pointer;
-      text-align: center;
-    }
-    .code-compare .cc-pane {
-      grid-column: 1 / -1;
-      display: none;
-    }
-    .code-compare .cc-radio-1:checked ~ .cc-grid .cc-pane-1,
-    .code-compare .cc-radio-2:checked ~ .cc-grid .cc-pane-2 {
-      display: block;
-    }
-    .code-compare .cc-radio-1:checked ~ .cc-grid .cc-label-1,
-    .code-compare .cc-radio-2:checked ~ .cc-grid .cc-label-2 {
-      color: var(--chalk);
-      border-bottom-color: var(--accent-mid);
-    }
   }
 
   /* --- Concept cards --- */

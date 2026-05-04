@@ -476,11 +476,11 @@ Bad:   Error: An issue was encountered while attempting to locate the qualifier 
 Always include one example invocation. No marketing.
 
 ```
-Good:  Flag a concern at a specific location.
-       Usage: qualifier flag <location> <message>
-       Example: qualifier flag src/auth.rs:42 "SQL injection risk"
+Good:  Record an annotation at a specific location.
+       Usage: qualifier record <kind> <location> [message]
+       Example: qualifier record concern src/auth.rs:42 "SQL injection risk"
 
-Bad:   The flag command provides a powerful way to record concerns
+Bad:   The record command provides a powerful way to record concerns
        in your qualifier-enabled workflow.
 ```
 
