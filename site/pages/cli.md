@@ -16,17 +16,19 @@ cargo install qualifier
 
 ## Commands
 
-**Record signals:**
+**Write records:**
 
 ```
-qualifier comment  <location> <message>    Add a comment
-qualifier flag     <location> <message>    Flag a concern
-qualifier suggest  <location> <message>    Suggest a change
-qualifier approve  <location> <message>    Approve an artifact
-qualifier reject   <location> <message>    Reject an artifact
-qualifier reply    <id-prefix> <message>   Reply to a record
-qualifier resolve  <id-prefix> [message]   Resolve a record
+qualifier record   <kind> <location> [message]   Record an annotation
+qualifier reply    <target> <message>            Reply to an existing record
+qualifier resolve  <target> [message]            Resolve (close) an existing record
+qualifier emit     <type> <subject> --body JSON  Emit a raw record of any type
 ```
+
+`<kind>` accepts the built-in kinds (`pass`, `fail`, `blocker`, `concern`,
+`comment`, `praise`, `suggestion`, `waiver`, `resolve`) or any custom string.
+`<location>` is a path with an optional span (e.g., `src/auth.rs:42`).
+`<target>` is an id-prefix (≥4 chars) or a `<location>`.
 
 **Analysis:**
 
@@ -35,16 +37,16 @@ qualifier show     <artifact>              Show annotations and scores
 qualifier score    [artifact...]           Compute and display scores
 qualifier ls       [--below N] [--kind K]  List artifacts by score/kind
 qualifier check    [--min-score N]         CI gate: exit non-zero if below threshold
+qualifier review   [subject]               Check freshness of span-bound annotations
 ```
 
 **Management:**
 
 ```
-qualifier attest   <artifact> [options]    Add an annotation (low-level)
 qualifier compact  <artifact> [options]    Compact a .qual file
 qualifier graph    [--format dot|json]     Visualize the dependency graph
 qualifier init                             Initialize qualifier in a repo
-qualifier praise   <artifact>              Show who attested and why
+qualifier praise   <artifact>              Show who attested and why (alias: blame)
 ```
 
 All commands that produce output accept `--format json` for machine-readable output.
@@ -61,17 +63,18 @@ All commands that produce output accept `--format json` for machine-readable out
 
 ## Typical workflows
 
-### Flag and resolve an issue
+### Record and resolve an issue
 
 ```bash
-# Flag a concern at a specific line
-qualifier flag src/parser.rs:42 "Panics on malformed input"
+# Record a concern at a specific line
+qualifier record concern src/parser.rs:42 "Panics on malformed input"
 
-# See the flag
+# See it
 qualifier show src/parser.rs
 
-# Reply to the flag (ID prefix, min 4 chars)
+# Reply (id-prefix, min 4 chars — or a location)
 qualifier reply a1b2 "Good catch, fixed in latest commit"
+qualifier reply src/parser.rs:42 "Good catch, fixed in latest commit"
 
 # Close it
 qualifier resolve a1b2
@@ -98,15 +101,24 @@ qualifier show src/parser.rs
 
 Replies and resolves are threaded under their parent with tree-drawing characters.
 
-### Signal commands at a glance
+### Default scores by kind
 
-| Command   | Kind       | Default Score | Use for                             |
-| --------- | ---------- | ------------- | ----------------------------------- |
-| `comment` | comment    | absent        | Observations, questions, discussion |
-| `flag`    | concern    | -10           | Non-blocking issues                 |
-| `suggest` | suggestion | -5            | Proposed improvements               |
-| `approve` | pass       | +20           | Passes a quality bar                |
-| `reject`  | fail       | -20           | Fails a quality bar                 |
+`qualifier record` uses the recommended default score for the given kind
+when `--score` is omitted. `comment` and `resolve` are unscored by default.
+
+| Kind         | Default Score | Use for                             |
+| ------------ | ------------- | ----------------------------------- |
+| `pass`       | +20           | Passes a quality bar                |
+| `praise`     | +30           | Notable quality, exemplary work     |
+| `waiver`     | +10           | Accepted exception                  |
+| `comment`    | unscored      | Observations, questions, discussion |
+| `concern`    | -10           | Non-blocking issues                 |
+| `suggestion` | -5            | Proposed improvements               |
+| `fail`       | -20           | Fails a quality bar                 |
+| `blocker`    | -50           | Critical issues that must be fixed  |
+| `resolve`    | unscored      | Tombstone for resolved annotations  |
+
+`--score N` always takes precedence over the default.
 
 ### Show details for one artifact
 
@@ -125,15 +137,34 @@ qualifier show src/parser.rs
 
 Use `--all` to include resolved/superseded records. Use `--pretty` to force colored output.
 
-### Record a quality concern (low-level)
+### Record a quality concern with full options
 
 ```bash
-qualifier attest src/parser.rs --kind concern --score -30 \
-  --summary "Panics on malformed UTF-8 input" \
+qualifier record concern src/parser.rs "Panics on malformed UTF-8 input" \
+  --score -30 \
   --suggested-fix "Replace .unwrap() on line 42 with error propagation" \
   --tag robustness --tag error-handling \
-  --issuer "mailto:alice@example.com"
+  --issuer "mailto:alice@example.com" \
+  --span 42:58
 ```
+
+`--span` overrides any span parsed from `<location>`. When the source file is
+readable, `content_hash` is auto-computed.
+
+### Emit a raw record (raw or non-annotation types)
+
+```bash
+# A SPDX license record
+qualifier emit license src/lib.rs --body '{"spdx":"MIT"}'
+
+# A custom URI-typed record (round-trips via Record::Unknown)
+qualifier emit https://example.com/lint/v1 src/parser.rs \
+  --body '{"rule":"no-panic","matches":3}'
+```
+
+`emit` is a low-level passthrough: the body is preserved verbatim. For
+`--type annotation`, the body is validated against the annotation schema;
+other types are not validated.
 
 ### See scores for all artifacts
 
@@ -208,8 +239,11 @@ qualifier ls --unqualified   # artifacts with no annotations
 ### Batch annotation (for agents)
 
 ```bash
-# Pipe JSONL annotations from stdin
-cat annotations.jsonl | qualifier attest --stdin
+# Pipe overrides JSONL from stdin: {kind, location, message, ...}
+cat overrides.jsonl | qualifier record --stdin
+
+# Or pipe complete records (envelope + body)
+cat records.jsonl | qualifier emit --stdin
 ```
 
 <svg class="topo topo-wide" viewBox="0 0 900 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">

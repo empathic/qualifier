@@ -3,15 +3,17 @@ use clap::Args as ClapArgs;
 use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
-use crate::cli::commands::attest;
+use crate::cli::commands::record::{detect_issuer, normalize_issuer_uri};
 use crate::cli::commands::reply;
 use crate::cli::output;
 use crate::qual_file;
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// ID prefix of the record to resolve (minimum 4 characters)
-    pub id_prefix: String,
+    /// Target — either an id-prefix (≥4 chars) or a `<location>`
+    /// (e.g., `src/auth.rs:42`). A location resolves to the most-recent
+    /// active record there; ambiguity is reported with a candidate list.
+    pub target: String,
 
     /// Resolution message (defaults to "Resolved")
     pub message: Option<String>,
@@ -46,15 +48,15 @@ pub fn run(args: Args) -> crate::Result<()> {
     let discover_root = root.as_deref().unwrap_or(Path::new("."));
     let all_qual_files = qual_file::discover(discover_root, true)?;
 
-    let target = reply::resolve_id_prefix(&args.id_prefix, &all_qual_files)?;
+    let target = reply::resolve_target(&args.target, &all_qual_files)?;
     let subject = target.subject().to_string();
     let target_id = target.id().to_string();
 
     let message = args.message.unwrap_or_else(|| "Resolved".into());
 
-    let issuer = attest::normalize_issuer_uri(
+    let issuer = normalize_issuer_uri(
         args.issuer
-            .or_else(attest::detect_issuer)
+            .or_else(detect_issuer)
             .unwrap_or_else(|| "mailto:unknown@localhost".into()),
     );
 

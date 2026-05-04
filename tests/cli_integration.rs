@@ -79,29 +79,27 @@ fn test_init_idempotent() {
     assert!(stdout2.contains("already exists"));
 }
 
-// --- qualifier attest + show round-trip ---
+// --- qualifier record + show round-trip ---
 
 #[test]
-fn test_attest_and_show_roundtrip() {
+fn test_record_and_show_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
 
     let (stdout, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "praise",
+            "lib.rs",
+            "Well structured code",
             "--score",
             "40",
-            "--summary",
-            "Well structured code",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
 
-    assert_eq!(code, 0, "attest should succeed: {stdout}");
+    assert_eq!(code, 0, "record should succeed: {stdout}");
     assert!(stdout.contains("[+40]") || stdout.contains("[40]"));
     assert!(stdout.contains("lib.rs"));
 
@@ -118,15 +116,15 @@ fn test_attest_and_show_roundtrip() {
 }
 
 #[test]
-fn test_attest_requires_summary() {
+fn test_record_requires_message() {
     let dir = tempfile::tempdir().unwrap();
 
-    let (_, stderr, code) = run_qualifier(dir.path(), &["attest", "foo.rs", "--kind", "pass"]);
+    let (_, stderr, code) = run_qualifier(dir.path(), &["record", "pass", "foo.rs"]);
 
-    assert_ne!(code, 0, "attest without summary should fail");
+    assert_ne!(code, 0, "record without message should fail");
     assert!(
-        stderr.contains("summary") || stderr.contains("required"),
-        "error should mention summary: {stderr}"
+        stderr.contains("message") || stderr.contains("required"),
+        "error should mention message: {stderr}"
     );
 }
 
@@ -140,14 +138,12 @@ fn test_score_json_output_structure() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "mod.rs",
-            "--kind",
+            "record",
             "praise",
+            "mod.rs",
+            "nice",
             "--score",
             "50",
-            "--summary",
-            "nice",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -205,14 +201,12 @@ fn test_check_passes_with_good_scores() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "good.rs",
-            "--kind",
+            "record",
             "praise",
+            "good.rs",
+            "excellent",
             "--score",
             "50",
-            "--summary",
-            "excellent",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -230,13 +224,11 @@ fn test_check_fails_with_bad_scores() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "bad.rs",
-            "--kind",
+            "record",
             "blocker",
-            "--score=-50",
-            "--summary",
+            "bad.rs",
             "critical issue",
+            "--score=-50",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -258,27 +250,25 @@ fn test_check_passes_empty_project() {
     assert_eq!(code, 0, "check on empty project should pass (no artifacts)");
 }
 
-// --- qualifier attest --kind blocker uses default score ---
+// --- qualifier record default scores per kind ---
 
 #[test]
-fn test_attest_blocker_uses_default_score() {
+fn test_record_blocker_uses_default_score() {
     let dir = tempfile::tempdir().unwrap();
 
     let (stdout, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "vuln.rs",
-            "--kind",
+            "record",
             "blocker",
-            "--summary",
+            "vuln.rs",
             "security vulnerability",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
 
-    assert_eq!(code, 0, "attest should succeed");
+    assert_eq!(code, 0, "record should succeed");
     // The default score for blocker is -50
     assert!(
         stdout.contains("[-50]"),
@@ -287,24 +277,22 @@ fn test_attest_blocker_uses_default_score() {
 }
 
 #[test]
-fn test_attest_pass_uses_default_score() {
+fn test_record_pass_uses_default_score() {
     let dir = tempfile::tempdir().unwrap();
 
     let (stdout, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "ok.rs",
-            "--kind",
+            "record",
             "pass",
-            "--summary",
+            "ok.rs",
             "looks good",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
 
-    assert_eq!(code, 0, "attest should succeed");
+    assert_eq!(code, 0, "record should succeed");
     // The default score for pass is +20
     assert!(
         stdout.contains("[+20]") || stdout.contains("[20]"),
@@ -313,28 +301,75 @@ fn test_attest_pass_uses_default_score() {
 }
 
 #[test]
-fn test_attest_concern_uses_default_score() {
+fn test_record_concern_uses_default_score() {
     let dir = tempfile::tempdir().unwrap();
 
     let (stdout, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "meh.rs",
-            "--kind",
+            "record",
             "concern",
-            "--summary",
+            "meh.rs",
             "could be better",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
 
-    assert_eq!(code, 0, "attest should succeed");
+    assert_eq!(code, 0, "record should succeed");
     // The default score for concern is -10
     assert!(
         stdout.contains("[-10]"),
         "concern should default to score -10: {stdout}"
+    );
+}
+
+#[test]
+fn test_record_comment_is_unscored_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "lib.rs",
+            "just a note",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    assert_eq!(code, 0, "record comment should succeed");
+    // No-score marker in human output is "[---]"
+    assert!(
+        stdout.contains("[---]"),
+        "comment should be unscored by default: {stdout}"
+    );
+}
+
+#[test]
+fn test_record_comment_with_explicit_score() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "lib.rs",
+            "graded note",
+            "--score",
+            "5",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    assert_eq!(code, 0, "record comment with --score should succeed");
+    assert!(
+        stdout.contains("[+5]") || stdout.contains("[5]"),
+        "explicit --score should be honored on comment: {stdout}"
     );
 }
 
@@ -347,14 +382,12 @@ fn test_show_json_output() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "api.rs",
-            "--kind",
+            "record",
             "praise",
+            "api.rs",
+            "clean API",
             "--score",
             "30",
-            "--summary",
-            "clean API",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -400,14 +433,12 @@ fn test_multiple_annotations_accumulate() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "praise",
+            "lib.rs",
+            "good structure",
             "--score",
             "30",
-            "--summary",
-            "good structure",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -415,13 +446,11 @@ fn test_multiple_annotations_accumulate() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "concern",
-            "--score=-10",
-            "--summary",
+            "lib.rs",
             "needs docs",
+            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -443,25 +472,23 @@ fn test_multiple_annotations_accumulate() {
 // --- flexible .qual file layout ---
 
 #[test]
-fn test_attest_writes_to_directory_qual_by_default() {
+fn test_record_writes_to_directory_qual_by_default() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
 
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "src/foo.rs",
-            "--kind",
+            "record",
             "pass",
-            "--summary",
+            "src/foo.rs",
             "looks good",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
 
-    assert_eq!(code, 0, "attest should succeed");
+    assert_eq!(code, 0, "record should succeed");
 
     // Should write to src/.qual, NOT src/foo.rs.qual
     let dir_qual = dir.path().join("src/.qual");
@@ -471,7 +498,7 @@ fn test_attest_writes_to_directory_qual_by_default() {
 }
 
 #[test]
-fn test_attest_respects_existing_1to1_file() {
+fn test_record_respects_existing_1to1_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
 
@@ -481,11 +508,9 @@ fn test_attest_respects_existing_1to1_file() {
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "src/foo.rs",
-            "--kind",
+            "record",
             "pass",
-            "--summary",
+            "src/foo.rs",
             "looks good",
             "--issuer",
             "mailto:test@test.com",
@@ -510,17 +535,15 @@ fn test_attest_respects_existing_1to1_file() {
 }
 
 #[test]
-fn test_attest_file_flag_override() {
+fn test_record_file_flag_override() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "src/foo.rs",
-            "--kind",
+            "record",
             "praise",
-            "--summary",
+            "src/foo.rs",
             "nice",
             "--issuer",
             "mailto:test@test.com",
@@ -544,18 +567,16 @@ fn test_show_finds_annotation_in_directory_qual() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
 
-    // Attest writes to src/.qual by default
+    // Record writes to src/.qual by default
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "src/bar.rs",
-            "--kind",
+            "record",
             "praise",
+            "src/bar.rs",
+            "clean code",
             "--score",
             "30",
-            "--summary",
-            "clean code",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -578,14 +599,12 @@ fn test_score_accumulates_across_layouts() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "src/mixed.rs",
-            "--kind",
+            "record",
             "praise",
+            "src/mixed.rs",
+            "good",
             "--score",
             "40",
-            "--summary",
-            "good",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -595,13 +614,11 @@ fn test_score_accumulates_across_layouts() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "src/mixed.rs",
-            "--kind",
+            "record",
             "concern",
-            "--score=-10",
-            "--summary",
+            "src/mixed.rs",
             "needs work",
+            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
             "--file",
@@ -623,25 +640,23 @@ fn test_score_accumulates_across_layouts() {
 }
 
 #[test]
-fn test_attest_creates_parent_dirs() {
+fn test_record_creates_parent_dirs() {
     let dir = tempfile::tempdir().unwrap();
 
     // src/deep/ doesn't exist yet
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "src/deep/module.rs",
-            "--kind",
+            "record",
             "pass",
-            "--summary",
+            "src/deep/module.rs",
             "ok",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
 
-    assert_eq!(code, 0, "attest should create parent dirs as needed");
+    assert_eq!(code, 0, "record should create parent dirs as needed");
     assert!(dir.path().join("src/deep/.qual").exists());
 }
 
@@ -654,14 +669,12 @@ fn test_ls_basic_listing() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "foo.rs",
-            "--kind",
+            "record",
             "praise",
+            "foo.rs",
+            "great",
             "--score",
             "50",
-            "--summary",
-            "great",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -669,13 +682,11 @@ fn test_ls_basic_listing() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "bar.rs",
-            "--kind",
+            "record",
             "concern",
-            "--score=-20",
-            "--summary",
+            "bar.rs",
             "meh",
+            "--score=-20",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -694,14 +705,12 @@ fn test_ls_below_filter() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "good.rs",
-            "--kind",
+            "record",
             "praise",
+            "good.rs",
+            "nice",
             "--score",
             "50",
-            "--summary",
-            "nice",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -709,13 +718,11 @@ fn test_ls_below_filter() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "bad.rs",
-            "--kind",
+            "record",
             "blocker",
-            "--score=-50",
-            "--summary",
+            "bad.rs",
             "broken",
+            "--score=-50",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -737,11 +744,9 @@ fn test_ls_kind_filter() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "a.rs",
-            "--kind",
+            "record",
             "blocker",
-            "--summary",
+            "a.rs",
             "bad",
             "--issuer",
             "mailto:test@test.com",
@@ -750,14 +755,12 @@ fn test_ls_kind_filter() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "b.rs",
-            "--kind",
+            "record",
             "praise",
+            "b.rs",
+            "good",
             "--score",
             "30",
-            "--summary",
-            "good",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -778,14 +781,12 @@ fn test_praise_shows_records() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "foo.rs",
-            "--kind",
+            "record",
             "praise",
+            "foo.rs",
+            "Well structured code",
             "--score",
             "40",
-            "--summary",
-            "Well structured code",
             "--issuer",
             "mailto:alice@example.com",
         ],
@@ -794,13 +795,11 @@ fn test_praise_shows_records() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "foo.rs",
-            "--kind",
+            "record",
             "concern",
-            "--score=-10",
-            "--summary",
+            "foo.rs",
             "Missing error handling",
+            "--score=-10",
             "--issuer",
             "mailto:bob@example.com",
         ],
@@ -845,11 +844,9 @@ fn test_praise_blame_alias() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "foo.rs",
-            "--kind",
+            "record",
             "pass",
-            "--summary",
+            "foo.rs",
             "ok",
             "--issuer",
             "mailto:test@test.com",
@@ -875,11 +872,9 @@ fn test_praise_vcs_without_vcs() {
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "foo.rs",
-            "--kind",
+            "record",
             "pass",
-            "--summary",
+            "foo.rs",
             "ok",
             "--issuer",
             "mailto:test@test.com",
@@ -950,14 +945,12 @@ fn test_score_overflow_clamped() {
         run_qualifier(
             dir.path(),
             &[
-                "attest",
-                "big.rs",
-                "--kind",
+                "record",
                 "praise",
+                "big.rs",
+                &format!("praise {i}"),
                 "--score",
                 "100",
-                "--summary",
-                &format!("praise {i}"),
                 "--issuer",
                 "mailto:test@test.com",
             ],
@@ -979,23 +972,18 @@ fn test_score_overflow_clamped() {
 // --- batch validation ---
 
 #[test]
-fn test_attest_batch_validates() {
+fn test_record_batch_validates() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Pipe invalid JSONL (empty summary) into batch mode
+    // Pipe an invalid overrides line (empty message) into batch mode.
     let invalid_json = serde_json::json!({
-        "subject": "test.rs",
-        "body": {
-            "kind": "pass",
-            "score": 10,
-            "summary": ""
-        },
-        "issuer": "mailto:test@test.com",
-        "created_at": "2026-01-01T00:00:00Z"
+        "kind": "pass",
+        "location": "test.rs",
+        "message": ""
     });
 
     let output = std::process::Command::new(qualifier_bin())
-        .args(["attest", "--stdin"])
+        .args(["record", "--stdin"])
         .current_dir(dir.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1016,23 +1004,59 @@ fn test_attest_batch_validates() {
     );
 }
 
+#[test]
+fn test_record_batch_full_record_form() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // A complete record (envelope + body) — the older batch form.
+    let invalid_json = serde_json::json!({
+        "subject": "test.rs",
+        "body": {
+            "kind": "pass",
+            "score": 10,
+            "summary": ""
+        },
+        "issuer": "mailto:test@test.com",
+        "created_at": "2026-01-01T00:00:00Z"
+    });
+
+    let output = std::process::Command::new(qualifier_bin())
+        .args(["record", "--stdin"])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(ref mut stdin) = child.stdin {
+                writeln!(stdin, "{}", invalid_json).ok();
+            }
+            child.wait_with_output()
+        })
+        .expect("failed to run batch mode");
+
+    assert!(
+        !output.status.success(),
+        "batch mode should reject full record with empty summary"
+    );
+}
+
 // --- metabox format tests ---
 
 #[test]
-fn test_attest_with_issuer_type() {
+fn test_record_with_issuer_type() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "praise",
+            "lib.rs",
+            "Clean code",
             "--score",
             "30",
-            "--summary",
-            "Clean code",
             "--issuer",
             "mailto:test@test.com",
             "--issuer-type",
@@ -1040,7 +1064,7 @@ fn test_attest_with_issuer_type() {
         ],
     );
 
-    assert_eq!(code, 0, "attest with --issuer-type should succeed");
+    assert_eq!(code, 0, "record with --issuer-type should succeed");
 
     // Read the .qual file and verify issuer_type is present
     let qual_path = dir.path().join(".qual");
@@ -1052,20 +1076,18 @@ fn test_attest_with_issuer_type() {
 }
 
 #[test]
-fn test_attest_with_ref() {
+fn test_record_with_ref() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "pass",
+            "lib.rs",
+            "Looks good",
             "--score",
             "20",
-            "--summary",
-            "Looks good",
             "--issuer",
             "mailto:test@test.com",
             "--ref",
@@ -1073,7 +1095,7 @@ fn test_attest_with_ref() {
         ],
     );
 
-    assert_eq!(code, 0, "attest with --ref should succeed");
+    assert_eq!(code, 0, "record with --ref should succeed");
 
     let qual_path = dir.path().join(".qual");
     let content = std::fs::read_to_string(&qual_path).unwrap();
@@ -1090,14 +1112,12 @@ fn test_new_annotations_are_metabox() {
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "mod.rs",
-            "--kind",
+            "record",
             "praise",
+            "mod.rs",
+            "nice",
             "--score",
             "50",
-            "--summary",
-            "nice",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -1118,17 +1138,15 @@ fn test_new_annotations_are_metabox() {
 }
 
 #[test]
-fn test_attest_invalid_issuer_type() {
+fn test_record_invalid_issuer_type() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, stderr, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "pass",
-            "--summary",
+            "lib.rs",
             "ok",
             "--issuer",
             "mailto:test@test.com",
@@ -1147,19 +1165,17 @@ fn test_attest_invalid_issuer_type() {
 // --- span tests ---
 
 #[test]
-fn test_attest_with_span() {
+fn test_record_with_span() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "concern",
-            "--score=-10",
-            "--summary",
+            "lib.rs",
             "Problematic function",
+            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
             "--span",
@@ -1167,7 +1183,7 @@ fn test_attest_with_span() {
         ],
     );
 
-    assert_eq!(code, 0, "attest with --span should succeed");
+    assert_eq!(code, 0, "record with --span should succeed");
 
     let qual_path = dir.path().join(".qual");
     let content = std::fs::read_to_string(&qual_path).unwrap();
@@ -1186,19 +1202,48 @@ fn test_attest_with_span() {
 }
 
 #[test]
-fn test_attest_with_span_and_columns() {
+fn test_record_span_via_location() {
     let dir = tempfile::tempdir().unwrap();
 
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "concern",
+            "lib.rs:42:58",
+            "Problematic function",
             "--score=-10",
-            "--summary",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+
+    assert_eq!(code, 0, "record with location-encoded span should succeed");
+
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"line\":42"),
+        "span should contain start line: {content}"
+    );
+    assert!(
+        content.contains("\"line\":58"),
+        "span should contain end line: {content}"
+    );
+}
+
+#[test]
+fn test_record_with_span_and_columns() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
             "Bad code",
+            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
             "--span",
@@ -1206,7 +1251,7 @@ fn test_attest_with_span_and_columns() {
         ],
     );
 
-    assert_eq!(code, 0, "attest with --span line.col should succeed");
+    assert_eq!(code, 0, "record with --span line.col should succeed");
 
     let qual_path = dir.path().join(".qual");
     let content = std::fs::read_to_string(&qual_path).unwrap();
@@ -1234,10 +1279,11 @@ fn test_show_pretty_shows_source() {
     )
     .unwrap();
 
-    // Attest with a span
+    // Record with a span via location syntax
     run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "example.rs:3",
             "needs a better name",
@@ -1274,10 +1320,11 @@ fn test_show_pretty_json() {
     )
     .unwrap();
 
-    // Attest with a span
+    // Record with a span
     run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "example.rs:3",
             "check this",
@@ -1322,10 +1369,11 @@ fn test_show_pretty_json() {
 fn test_show_pretty_file_not_found() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Attest to a nonexistent file with a span
+    // Record on a nonexistent file with a span
     run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "nonexistent.rs:5",
             "some comment",
@@ -1353,15 +1401,13 @@ fn test_show_pretty_no_span() {
     let src = dir.path().join("example.rs");
     std::fs::write(&src, "fn main() {}\n").unwrap();
 
-    // Attest without span
+    // Record without span
     run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "example.rs",
-            "--kind",
+            "record",
             "pass",
-            "--summary",
+            "example.rs",
             "general comment",
             "--issuer",
             "mailto:test@test.com",
@@ -1381,25 +1427,23 @@ fn test_show_pretty_no_span() {
 // --- references tests ---
 
 #[test]
-fn test_attest_with_references() {
+fn test_record_with_references() {
     let dir = tempfile::tempdir().unwrap();
 
     // Create an initial annotation to reference
     let (stdout1, _, code1) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "concern",
-            "--score=-10",
-            "--summary",
+            "lib.rs",
             "Needs improvement",
+            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
-    assert_eq!(code1, 0, "first attest should succeed: {stdout1}");
+    assert_eq!(code1, 0, "first record should succeed: {stdout1}");
 
     // Extract the ID from the output (line: "  id: <hash>")
     let id = stdout1
@@ -1413,11 +1457,9 @@ fn test_attest_with_references() {
     let (_, _, code2) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "comment",
-            "--summary",
+            "lib.rs",
             "Addressed in latest refactor",
             "--issuer",
             "mailto:test@test.com",
@@ -1425,7 +1467,7 @@ fn test_attest_with_references() {
             &id,
         ],
     );
-    assert_eq!(code2, 0, "attest with --references should succeed");
+    assert_eq!(code2, 0, "record with --references should succeed");
 
     // Verify the .qual file contains the references field
     let qual_path = dir.path().join(".qual");
@@ -1444,13 +1486,11 @@ fn test_show_displays_references() {
     let (stdout1, _, _) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "concern",
-            "--score=-10",
-            "--summary",
+            "lib.rs",
             "Needs work",
+            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -1467,6 +1507,7 @@ fn test_show_displays_references() {
     run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "lib.rs",
             "This was fixed",
@@ -1508,6 +1549,7 @@ fn test_reply_basic() {
     let (stdout1, _, code1) = run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "lib.rs",
             "needs improvement",
@@ -1584,6 +1626,7 @@ fn test_reply_inherits_subject() {
     let (stdout1, _, code1) = run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "src/parser.rs",
             "needs refactoring",
@@ -1660,6 +1703,7 @@ fn test_reply_with_kind_override() {
     let (stdout1, _, _) = run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "lib.rs",
             "issue here",
@@ -1704,6 +1748,111 @@ fn test_reply_with_kind_override() {
     );
 }
 
+#[test]
+fn test_reply_by_location() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("src/auth.rs"),
+        "fn login() {}\nfn logout() {}\n",
+    )
+    .unwrap();
+
+    // Create an annotation at src/auth.rs:1
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "src/auth.rs:1",
+            "needs validation",
+            "--issuer",
+            "mailto:alice@test.com",
+        ],
+    );
+
+    // Reply by location (no id-prefix needed)
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            "src/auth.rs:1",
+            "added validation",
+            "--issuer",
+            "mailto:bob@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "reply by location should succeed: {stdout}");
+    assert!(
+        stdout.contains("re:"),
+        "reply output should show re: line: {stdout}"
+    );
+}
+
+#[test]
+fn test_reply_by_location_ambiguous() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("src/auth.rs"),
+        "fn login() {}\nfn logout() {}\n",
+    )
+    .unwrap();
+
+    // Create two annotations on the same subject (no spans).
+    // They have the same created_at second resolution and the same span
+    // (both whole-file), so the resolver should return the first match
+    // when there's no span filter — but two records means more than one
+    // candidate. Both will share the same timestamp tier => ambiguous.
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "src/auth.rs",
+            "first concern",
+            "--issuer",
+            "mailto:alice@test.com",
+        ],
+    );
+    // Sleep just a hair to nudge timestamps... but also create at a different
+    // location so this is simply two distinct records.
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "src/auth.rs",
+            "second concern",
+            "--issuer",
+            "mailto:bob@test.com",
+        ],
+    );
+
+    // Reply by bare subject path. The resolver should succeed by picking
+    // the most-recent record by created_at. (If timestamps tie, it would
+    // surface a disambiguation error — that's acceptable behavior here too.)
+    let (stdout, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            "src/auth.rs",
+            "responding",
+            "--issuer",
+            "mailto:carol@test.com",
+        ],
+    );
+    // Either succeeded by picking newest, or surfaced an ambiguity hint.
+    if code != 0 {
+        assert!(
+            stderr.contains("ambiguous"),
+            "should either succeed or surface ambiguity: stdout={stdout} stderr={stderr}"
+        );
+    } else {
+        assert!(stdout.contains("re:"), "should show re: line: {stdout}");
+    }
+}
+
 // --- show threading tests ---
 
 #[test]
@@ -1714,6 +1863,7 @@ fn test_show_threads_replies_under_parent() {
     let (stdout1, _, _) = run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "lib.rs",
             "first issue",
@@ -1731,6 +1881,7 @@ fn test_show_threads_replies_under_parent() {
     run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "lib.rs",
             "second issue",
@@ -1792,6 +1943,7 @@ fn test_resolve_basic() {
     let (stdout1, _, code1) = run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "lib.rs",
             "needs improvement",
@@ -1867,6 +2019,7 @@ fn test_resolve_default_message() {
     let (stdout1, _, _) = run_qualifier(
         dir.path(),
         &[
+            "record",
             "comment",
             "lib.rs",
             "some issue",
@@ -1905,13 +2058,11 @@ fn test_resolve_removes_from_scoring() {
     let (stdout1, _, _) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "concern",
-            "--score=-10",
-            "--summary",
+            "lib.rs",
             "needs work",
+            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -1974,10 +2125,46 @@ fn test_resolve_not_found() {
     );
 }
 
+#[test]
+fn test_resolve_by_location() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create a concern at a specific span.
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs:42",
+            "buggy",
+            "--issuer",
+            "mailto:alice@test.com",
+        ],
+    );
+
+    // Resolve by location — no id-prefix needed.
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "resolve",
+            "lib.rs:42",
+            "fixed",
+            "--issuer",
+            "mailto:bob@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "resolve by location should succeed: {stdout}");
+    assert!(stdout.contains("resolve"), "should show resolve kind");
+    assert!(
+        stdout.contains("supersedes:"),
+        "should show supersedes line: {stdout}"
+    );
+}
+
 // --- content_hash auto-population tests ---
 
 #[test]
-fn test_flag_auto_populates_content_hash() {
+fn test_record_concern_auto_populates_content_hash() {
     let dir = tempfile::tempdir().unwrap();
 
     // Create a source file
@@ -1988,18 +2175,19 @@ fn test_flag_auto_populates_content_hash() {
     )
     .unwrap();
 
-    // Flag with a span
+    // Record concern with a span via location
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "flag",
+            "record",
+            "concern",
             "example.rs:2",
             "needs a better name",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
-    assert_eq!(code, 0, "flag should succeed");
+    assert_eq!(code, 0, "record concern should succeed");
 
     // Read the .qual file and verify content_hash is present
     let qual_path = dir.path().join(".qual");
@@ -2011,7 +2199,7 @@ fn test_flag_auto_populates_content_hash() {
 }
 
 #[test]
-fn test_suggest_auto_populates_content_hash() {
+fn test_record_suggestion_auto_populates_content_hash() {
     let dir = tempfile::tempdir().unwrap();
 
     let src = dir.path().join("lib.rs");
@@ -2020,14 +2208,15 @@ fn test_suggest_auto_populates_content_hash() {
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "suggest",
+            "record",
+            "suggestion",
             "lib.rs:1:2",
             "Consider combining these",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
-    assert_eq!(code, 0, "suggest should succeed");
+    assert_eq!(code, 0, "record suggestion should succeed");
 
     let qual_path = dir.path().join(".qual");
     let content = std::fs::read_to_string(&qual_path).unwrap();
@@ -2038,7 +2227,7 @@ fn test_suggest_auto_populates_content_hash() {
 }
 
 #[test]
-fn test_attest_span_auto_populates_content_hash() {
+fn test_record_span_flag_auto_populates_content_hash() {
     let dir = tempfile::tempdir().unwrap();
 
     let src = dir.path().join("lib.rs");
@@ -2047,20 +2236,18 @@ fn test_attest_span_auto_populates_content_hash() {
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "lib.rs",
-            "--kind",
+            "record",
             "concern",
-            "--score=-10",
-            "--summary",
+            "lib.rs",
             "issue here",
+            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
             "--span",
             "2",
         ],
     );
-    assert_eq!(code, 0, "attest with span should succeed");
+    assert_eq!(code, 0, "record with --span should succeed");
 
     let qual_path = dir.path().join(".qual");
     let content = std::fs::read_to_string(&qual_path).unwrap();
@@ -2074,18 +2261,19 @@ fn test_attest_span_auto_populates_content_hash() {
 fn test_no_content_hash_when_file_missing() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Flag a nonexistent file
+    // Record on a nonexistent file with a span
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "flag",
+            "record",
+            "concern",
             "nonexistent.rs:5",
             "some concern",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
-    assert_eq!(code, 0, "flag should succeed even without file");
+    assert_eq!(code, 0, "record should succeed even without file");
 
     let qual_path = dir.path().join(".qual");
     let content = std::fs::read_to_string(&qual_path).unwrap();
@@ -2119,7 +2307,8 @@ fn test_review_fresh() {
     run_qualifier(
         dir.path(),
         &[
-            "flag",
+            "record",
+            "concern",
             "example.rs:2",
             "consider logging instead",
             "--issuer",
@@ -2149,7 +2338,8 @@ fn test_review_drifted() {
     run_qualifier(
         dir.path(),
         &[
-            "flag",
+            "record",
+            "concern",
             "example.rs:2",
             "consider logging",
             "--issuer",
@@ -2182,7 +2372,8 @@ fn test_review_missing() {
     run_qualifier(
         dir.path(),
         &[
-            "flag",
+            "record",
+            "concern",
             "example.rs:2",
             "consider logging",
             "--issuer",
@@ -2215,7 +2406,8 @@ fn test_review_json_output() {
     run_qualifier(
         dir.path(),
         &[
-            "flag",
+            "record",
+            "concern",
             "example.rs:2",
             "consider logging",
             "--issuer",
@@ -2253,7 +2445,8 @@ fn test_review_subject_filter() {
     run_qualifier(
         dir.path(),
         &[
-            "flag",
+            "record",
+            "concern",
             "a.rs:1",
             "issue in a",
             "--issuer",
@@ -2264,7 +2457,8 @@ fn test_review_subject_filter() {
     run_qualifier(
         dir.path(),
         &[
-            "flag",
+            "record",
+            "concern",
             "b.rs:1",
             "issue in b",
             "--issuer",
@@ -2278,6 +2472,102 @@ fn test_review_subject_filter() {
     assert!(
         stdout.contains("1 annotations checked"),
         "should only check 1 annotation: {stdout}"
+    );
+}
+
+// --- qualifier emit (raw record write) ---
+
+#[test]
+fn test_emit_annotation() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let body = serde_json::json!({
+        "kind": "pass",
+        "summary": "looks good",
+        "score": 25
+    });
+
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "emit",
+            "annotation",
+            "lib.rs",
+            "--body",
+            &body.to_string(),
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "emit annotation should succeed: {stdout}");
+    assert!(stdout.contains("annotation"), "output should mention type");
+
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"type\":\"annotation\""),
+        "should emit annotation type: {content}"
+    );
+    assert!(
+        content.contains("\"kind\":\"pass\""),
+        "should preserve body: {content}"
+    );
+}
+
+#[test]
+fn test_emit_unknown_type_roundtrips() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let body = serde_json::json!({"foo": "bar", "version": 1});
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "emit",
+            "https://example.com/custom/v1",
+            "widget.rs",
+            "--body",
+            &body.to_string(),
+            "--issuer",
+            "https://ci.example.com",
+        ],
+    );
+    assert_eq!(code, 0, "emit custom type should succeed");
+
+    let qual_path = dir.path().join(".qual");
+    let content = std::fs::read_to_string(&qual_path).unwrap();
+    assert!(
+        content.contains("\"type\":\"https://example.com/custom/v1\""),
+        "should preserve custom type URI: {content}"
+    );
+    assert!(
+        content.contains("\"foo\":\"bar\""),
+        "should preserve body verbatim: {content}"
+    );
+}
+
+#[test]
+fn test_emit_annotation_validates_body() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Body missing required `kind` field for an annotation
+    let body = serde_json::json!({"summary": "missing kind"});
+
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "emit",
+            "annotation",
+            "lib.rs",
+            "--body",
+            &body.to_string(),
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(
+        code, 0,
+        "emit annotation with invalid body should fail: stderr={stderr}"
     );
 }
 
@@ -2312,21 +2602,19 @@ fn write_qual_with_unknown(dir: &Path, qual_rel_path: &str, subject: &str) -> (S
     let (_, _, code) = run_qualifier(
         dir,
         &[
-            "attest",
-            subject,
-            "--kind",
+            "record",
             "praise",
+            subject,
+            "looks good",
             "--score",
             "20",
-            "--summary",
-            "looks good",
             "--issuer",
             "mailto:test@test.com",
             "--file",
             qual_rel_path,
         ],
     );
-    assert_eq!(code, 0, "attest helper should succeed");
+    assert_eq!(code, 0, "record helper should succeed");
 
     // Read the annotation id back from the file (the second JSONL line).
     let contents = std::fs::read_to_string(&qual_path).unwrap();
@@ -2418,21 +2706,19 @@ fn test_show_omits_dependency_records_in_human_output() {
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "app.rs",
-            "--kind",
+            "record",
             "praise",
+            "app.rs",
+            "ships clean",
             "--score",
             "30",
-            "--summary",
-            "ships clean",
             "--issuer",
             "mailto:test@test.com",
             "--file",
             "app.rs.qual",
         ],
     );
-    assert_eq!(code, 0, "attest helper should succeed");
+    assert_eq!(code, 0, "record helper should succeed");
 
     // Human output: annotation summary must appear, but the literal
     // string "dependency" (the type label that would be emitted by the
@@ -2585,14 +2871,12 @@ fn test_compact_preserves_unknown_record_type() {
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "keep.rs",
-            "--kind",
+            "record",
             "praise",
+            "keep.rs",
+            "even better",
             "--score",
             "25",
-            "--summary",
-            "even better",
             "--issuer",
             "mailto:test@test.com",
             "--supersedes",
@@ -2601,7 +2885,7 @@ fn test_compact_preserves_unknown_record_type() {
             "keep.rs.qual",
         ],
     );
-    assert_eq!(code, 0, "supersedes attest should succeed");
+    assert_eq!(code, 0, "supersedes record should succeed");
 
     // prune: should remove the superseded record but keep the Unknown.
     let (_, _, code) = run_qualifier(dir.path(), &["compact", "keep.rs"]);
@@ -2626,18 +2910,16 @@ fn test_compact_preserves_unknown_record_type() {
 
     // snapshot: scored records collapse into an epoch, but the Unknown record
     // is non-scored and MUST pass through untouched. Two scored records remain
-    // after the supersedes attest above (the survivor + a fresh extra).
+    // after the supersedes record above (the survivor + a fresh extra).
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "attest",
-            "keep.rs",
-            "--kind",
+            "record",
             "praise",
+            "keep.rs",
+            "minor extra",
             "--score",
             "5",
-            "--summary",
-            "minor extra",
             "--issuer",
             "mailto:test@test.com",
             "--file",

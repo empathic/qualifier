@@ -100,7 +100,7 @@ You're reading `src/auth.rs` and notice the login handler isn't sanitizing
 input. You could file a ticket, fix it yourself, or mention it in Slack. Instead:
 
 ```bash
-qualifier flag src/auth.rs:42 "SQL injection risk in login handler"
+qualifier record concern src/auth.rs:42 "SQL injection risk in login handler"
 ```
 
 Five seconds. The concern is recorded against the file and line, pinned to the

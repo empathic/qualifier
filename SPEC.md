@@ -387,8 +387,10 @@ negative scores.
 | `suggestion`  | -5            | -5 to -15         | negative |
 | `waiver`      | +10           | 0 to +30          | positive |
 
-When `--score` is omitted from `qualifier attest`, the CLI SHOULD use the
-default score for the given kind. `--score` always takes precedence.
+When `--score` is omitted from `qualifier record`, the CLI SHOULD use the
+default score for the given kind. `--score` always takes precedence. The
+`comment` and `resolve` kinds default to unscored (no `score` field set)
+unless `--score` is given explicitly.
 
 These are guidance, not constraints. Implementations MUST NOT reject an
 annotation solely because its score falls outside the recommended range.
@@ -929,20 +931,18 @@ defaults.
 
 ## 6. CLI Interface
 
-The CLI binary is named `qualifier`.
+The CLI binary is named `qualifier`. Writes go through four verbs:
+`record`, `reply`, `resolve`, and `emit`.
 
 ### 6.1 Core Commands
 
-**Signal commands:**
+**Write commands:**
 
 ```
-qualifier comment <location> <message>    Add a comment
-qualifier flag <location> <message>       Flag a concern
-qualifier suggest <location> <message>    Suggest a change
-qualifier approve <location> <message>    Approve an artifact
-qualifier reject <location> <message>     Reject an artifact
-qualifier reply <id-prefix> <message>     Reply to a record
-qualifier resolve <id-prefix> [message]   Resolve a record
+qualifier record <kind> <location> [message]    Record an annotation
+qualifier reply <target> <message>              Reply to an existing record
+qualifier resolve <target> [message]            Resolve (close) an existing record
+qualifier emit <type> <subject> --body '<JSON>' Emit a raw record of any type
 ```
 
 **Analysis commands:**
@@ -951,69 +951,60 @@ qualifier resolve <id-prefix> [message]   Resolve a record
 qualifier show <artifact>                 Show annotations and scores
 qualifier score [artifact...]             Compute and display scores
 qualifier ls [--below <n>] [--kind <k>]   List subjects by score/kind
-qualifier check [--min-score <n>]          CI gate: exit non-zero if below threshold
+qualifier check [--min-score <n>]         CI gate: exit non-zero if below threshold
 qualifier review [subject]                Check freshness of annotations
 ```
 
 **Management commands:**
 
 ```
-qualifier attest <artifact> [options]     Add an annotation (low-level)
-qualifier compact <artifact> [options]     Compact a .qual file (prune/snapshot)
-qualifier graph [--format dot|json]        Visualize the dependency graph
-qualifier init                             Initialize qualifier in a repo
-qualifier blame <artifact>                 Per-line VCS attribution for a .qual file
+qualifier compact <artifact> [options]    Compact a .qual file (prune/snapshot)
+qualifier graph [--format dot|json]       Visualize the dependency graph
+qualifier init                            Initialize qualifier in a repo
+qualifier praise <artifact>               Show who attested an artifact and why
+                                          (also available as the `blame` alias)
 ```
 
-### 6.2 `qualifier attest`
+### 6.2 `qualifier record`
 
-Interactive and non-interactive annotation creation.
+The unified annotation-write verb. Replaces the old `attest`, `flag`,
+`comment`, `suggest`, `approve`, and `reject` commands with a single
+shape: `qualifier record <kind> <location> [message] [flags]`.
 
 ```
-qualifier attest src/parser.rs \
-  --kind concern \
-  --score -30 \
-  --summary "Panics on malformed input" \
+qualifier record concern src/parser.rs:42:58 "Panics on malformed input" \
   --suggested-fix "Use proper error propagation" \
   --tag robustness \
   --tag error-handling \
-  --issuer "mailto:alice@example.com" \
-  --span 42:58
+  --issuer "mailto:alice@example.com"
 ```
 
-#### 6.2.1 Span Syntax
+**Arguments:**
 
-The `--span` flag accepts the following forms:
+| Argument | Meaning |
+|----------|---------|
+| `<kind>` | One of `concern`, `comment`, `suggestion`, `pass`, `fail`, `blocker`, `praise`, `waiver`, `resolve`. Custom strings are allowed (per spec §2.7.2). |
+| `<location>` | Subject path with optional span — see §6.2.1. |
+| `[message]` | One-line summary. Becomes `body.summary`. Required in non-interactive mode unless `--stdin` is set. |
 
-| Form | Meaning | Equivalent `span` object |
-|------|---------|--------------------------|
-| `42` | Line 42 | `{"start":{"line":42},"end":{"line":42}}` |
-| `42:58` | Lines 42 through 58 | `{"start":{"line":42},"end":{"line":58}}` |
-| `42.5:58.80` | Line 42 col 5 through line 58 col 80 | `{"start":{"line":42,"col":5},"end":{"line":58,"col":80}}` |
+**Flags:** `--score N`, `--detail TEXT`, `--ref REF`, `--tag T1 --tag T2 ...`,
+`--suggested-fix TEXT`, `--issuer URI`, `--issuer-type {human|ai|tool|unknown}`,
+`--file PATH`, `--span SPEC` (overrides any span in `<location>`),
+`--supersedes ID`, `--references ID`, `--stdin` (batch JSONL).
 
-When `--span` is omitted, no span is set (the annotation addresses the whole
-subject).
+**Defaults:**
 
-#### 6.2.2 Other Flags
+- When `--score` is omitted, the CLI uses the recommended default score for
+  the given kind (see §2.7.1). `comment` and `resolve` remain unscored
+  unless `--score` is given explicitly.
+- When `--issuer` is omitted, defaults to the VCS user identity (see §8.4).
+- When a span is given, `content_hash` is auto-computed if the source file
+  is readable.
 
-`--summary` is required in non-interactive mode.
+#### 6.2.1 Location and Span Syntax
 
-When `--score` is omitted, the CLI uses the recommended default score for the
-given kind (see section 2.7.1).
-
-`--file <path>` writes the annotation to a specific `.qual` file instead
-of using the default layout resolution.
-
-When `--issuer` is omitted, defaults to the VCS user identity (see 8.4).
-
-### 6.3 Signal Commands
-
-The signal commands are thin wrappers around `qualifier attest` that provide
-ergonomic, zero-ceremony entry points for recording quality signals.
-
-#### 6.3.1 Location Syntax
-
-Signal commands accept a `<location>` argument:
+The `<location>` argument folds the subject and an optional span into a
+single string:
 
 | Form | Meaning |
 |------|---------|
@@ -1021,44 +1012,105 @@ Signal commands accept a `<location>` argument:
 | `src/parser.rs:42` | Line 42 |
 | `src/parser.rs:15:28` | Lines 15 through 28 |
 
-#### 6.3.2 Signal Command Details
+The `--span` flag overrides any span parsed from `<location>` and accepts
+the same forms plus column granularity:
 
-**`qualifier comment <location> <message>`** — Creates an annotation with
-`kind: "comment"`. An unscored signal — observations, discussion points, questions.
+| Form | Meaning | Equivalent `span` object |
+|------|---------|--------------------------|
+| `42` | Line 42 | `{"start":{"line":42},"end":{"line":42}}` |
+| `42:58` | Lines 42 through 58 | `{"start":{"line":42},"end":{"line":58}}` |
+| `42.5:58.80` | Line 42 col 5 through line 58 col 80 | `{"start":{"line":42,"col":5},"end":{"line":58,"col":80}}` |
 
-**`qualifier flag <location> <message>`** — Creates an annotation with
-`kind: "concern"` and the default concern score (-10).
+#### 6.2.2 Default Score Mapping
 
-**`qualifier suggest <location> <message>`** — Creates an annotation with
-`kind: "suggestion"` and the default suggestion score (-5). Use `--suggested-fix`
-for actionable remediation text.
+| Kind | Default score |
+|------|---------------|
+| `pass` | +20 |
+| `praise` | +30 |
+| `waiver` | +10 |
+| `concern` | -10 |
+| `suggestion` | -5 |
+| `fail` | -20 |
+| `blocker` | -50 |
+| `comment` | unscored (no `score` field) |
+| `resolve` | unscored (resolve commands set `score: 0` explicitly) |
+| custom | 0 |
 
-**`qualifier approve <location> <message>`** — Creates an annotation with
-`kind: "pass"` and the default pass score (+20).
+#### 6.2.3 Batch Mode
 
-**`qualifier reject <location> <message>`** — Creates an annotation with
-`kind: "fail"` and the default fail score (-20).
+`qualifier record --stdin` reads JSONL from stdin. Each line is one of:
 
-**`qualifier reply <id-prefix> <message>`** — Creates an annotation with
-`kind: "comment"` and `references` pointing to the target record's ID. The
-ID prefix must be at least 4 characters and must resolve unambiguously within
-the subject's `.qual` file.
+- An overrides object: `{"kind":"...","location":"...","message":"...", ...}`
+  with optional `score`, `detail`, `ref`, `tags`, `issuer`, `issuer_type`,
+  `span`, `supersedes`, `references`, `suggested_fix`.
+- A complete record (envelope + body), accepted for forward-compat.
 
-**`qualifier resolve <id-prefix> [message]`** — Creates an annotation with
-`kind: "resolve"`, `supersedes` pointing to the target record, and a default
-summary of "Resolved". Withdraws the target's score from the raw total.
+### 6.3 `qualifier reply`
 
-#### 6.3.3 Example Workflow
+```
+qualifier reply <target> <message>
+```
+
+Sugar over "kind=comment + references=`<target-id>`". The default kind is
+`comment`; override with `--kind`.
+
+`<target>` is either:
+
+- An **id-prefix** (≥ 4 characters), or
+- A **`<location>`** (e.g., `src/auth.rs:42`). A location resolves to the
+  most-recent active record at that subject and span. If multiple active
+  records share the most-recent timestamp, exit non-zero with a
+  disambiguation list of `[id-prefix] kind L<line> "summary"`.
+
+Same body flags as `qualifier record` minus `--score` (provide `--score`
+explicitly to score the reply).
+
+### 6.4 `qualifier resolve`
+
+```
+qualifier resolve <target> [message]
+```
+
+Sugar over "kind=resolve + supersedes=`<target-id>`". `<target>` follows
+the same id-prefix-or-location rules as `qualifier reply`. The default
+summary is "Resolved" when `[message]` is omitted.
+
+### 6.5 `qualifier emit`
+
+```
+qualifier emit <type> <subject> --body '<JSON>'
+```
+
+A raw, script-oriented write for novel or uncommon record types. The body
+is passed through unchanged into the record's `body` field. For unknown
+types the record round-trips via `Record::Unknown` (preserving the body
+verbatim). For `--type annotation`, the body is validated against
+`AnnotationBody`.
+
+```
+qualifier emit license src/lib.rs --body '{"spdx":"MIT"}' \
+  --issuer "https://ci.example.com"
+
+qualifier emit https://example.com/lint/v1 src/parser.rs \
+  --body '{"rule":"no-panic","matches":3}'
+```
+
+`--stdin` reads JSONL where each line is a complete record. The
+positional `<type>` and `<subject>`, when supplied, become defaults
+applied to lines missing those fields.
+
+#### 6.5.1 Example Workflow
 
 ```bash
-# Flag a concern at line 42
-qualifier flag src/parser.rs:42 "Panics on malformed input"
+# Record a concern at line 42
+qualifier record concern src/parser.rs:42 "Panics on malformed input"
 
-# See the flag
+# See the concern
 qualifier show src/parser.rs
 
-# Reply to it (using ID prefix)
+# Reply to it (using ID prefix or location)
 qualifier reply a1b2 "Good catch, fixed in latest commit"
+qualifier reply src/parser.rs:42 "Good catch, fixed in latest commit"
 
 # Close it
 qualifier resolve a1b2
@@ -1067,7 +1119,7 @@ qualifier resolve a1b2
 qualifier score
 ```
 
-### 6.4 `qualifier show`
+### 6.6 `qualifier show`
 
 ```
 qualifier show src/parser.rs
@@ -1089,7 +1141,7 @@ When annotations have spans, the line range is displayed. Use
 `--all` shows all records including resolved/superseded ones (default hides
 them). `--pretty` forces colored output when piped.
 
-### 6.5 `qualifier score`
+### 6.7 `qualifier score`
 
 ```
 qualifier score
@@ -1101,7 +1153,7 @@ qualifier score
   bin/server             45    -20   ██░░░░░░░░  blocker
 ```
 
-### 6.6 `qualifier check`
+### 6.8 `qualifier check`
 
 Returns exit code 0 if all subjects meet the threshold, non-zero otherwise.
 
@@ -1109,7 +1161,7 @@ Returns exit code 0 if all subjects meet the threshold, non-zero otherwise.
 qualifier check --min-score 0
 ```
 
-### 6.7 `qualifier ls`
+### 6.9 `qualifier ls`
 
 ```
 qualifier ls --below 0
@@ -1117,7 +1169,7 @@ qualifier ls --kind blocker
 qualifier ls --unqualified
 ```
 
-### 6.8 `qualifier compact`
+### 6.10 `qualifier compact`
 
 ```
 qualifier compact src/parser.rs              # prune superseded records
@@ -1127,7 +1179,7 @@ qualifier compact --all                      # compact every .qual file
 qualifier compact --all --dry-run            # preview repo-wide compaction
 ```
 
-### 6.9 `qualifier review`
+### 6.11 `qualifier review`
 
 Check the freshness of span-addressed annotations against current file content.
 
@@ -1154,7 +1206,7 @@ are checked. Annotations without spans or without `content_hash` are skipped.
 **JSON output** includes `status` (`fresh`, `drifted`, `missing`) and `detail`
 with expected/actual hashes for drifted annotations or a reason for missing ones.
 
-### 6.10 `qualifier init`
+### 6.12 `qualifier init`
 
 ```
 qualifier init
@@ -1163,7 +1215,7 @@ qualifier init
   Added *.qual merge=union to .gitattributes
 ```
 
-### 6.11 Configuration
+### 6.13 Configuration
 
 Qualifier uses layered configuration. Precedence (highest wins):
 
@@ -1184,12 +1236,16 @@ Qualifier uses layered configuration. Precedence (highest wins):
 | `format`    | `--format`     | `QUALIFIER_FORMAT`   | `human` |
 | `min_score` | `--min-score`  | `QUALIFIER_MIN_SCORE`| `0` |
 
-### 6.12 `qualifier blame`
+### 6.14 `qualifier praise`
 
-Delegates to the underlying VCS blame command for the subject's `.qual` file.
+Show who recorded annotations against an artifact and why. Available
+under the alias `qualifier blame`; the canonical name is `praise` (the
+tool tracks who helped, not who to blame). With `--vcs`, delegates to
+the underlying VCS blame command for the subject's `.qual` file.
 
 ```
-qualifier blame src/parser.rs
+qualifier praise src/parser.rs
+qualifier praise src/parser.rs --vcs
 ```
 
 ## 7. Library API
@@ -1366,7 +1422,9 @@ When `--issuer` is omitted:
 Qualifier is designed to be used by AI coding agents. Key affordances:
 
 - **Structured output:** `--format json` on `score`, `show`, and `ls` commands.
-- **Batch annotation:** `qualifier attest --stdin` reads JSONL from stdin.
+- **Batch annotation:** `qualifier record --stdin` reads JSONL from stdin
+  (overrides objects or full records). For non-annotation record types,
+  `qualifier emit --stdin` accepts complete records.
 - **Suggested fixes:** The `suggested_fix` body field gives agents a concrete
   action to take.
 - **Span precision:** The `span` body field lets agents target specific line
@@ -1449,17 +1507,13 @@ qualifier/
         ├── mod.rs
         ├── config.rs
         ├── output.rs
+        ├── span_context.rs
         └── commands/
             ├── mod.rs
-            ├── attest.rs
-            ├── review.rs         # Shared review command logic
-            ├── comment.rs        # qualifier comment
-            ├── flag.rs           # qualifier flag
-            ├── suggest.rs        # qualifier suggest
-            ├── approve.rs        # qualifier approve
-            ├── reject.rs         # qualifier reject
-            ├── reply.rs          # qualifier reply
-            ├── resolve.rs        # qualifier resolve
+            ├── record.rs         # qualifier record (unified annotation write)
+            ├── reply.rs          # qualifier reply (id-prefix or location)
+            ├── resolve.rs        # qualifier resolve (id-prefix or location)
+            ├── emit.rs           # qualifier emit (raw record write)
             ├── freshness.rs      # qualifier review (freshness checking)
             ├── show.rs
             ├── score.rs
@@ -1468,7 +1522,8 @@ qualifier/
             ├── compact.rs
             ├── graph_cmd.rs
             ├── init.rs
-            └── blame.rs
+            ├── praise.rs         # qualifier praise (alias: blame)
+            └── haiku.rs
 ```
 
 ```toml

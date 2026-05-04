@@ -18,8 +18,14 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Add an annotation to an artifact
-    Attest(Box<commands::attest::Args>),
+    /// Record an annotation: `qualifier record <kind> <location> [message]`
+    Record(Box<commands::record::Args>),
+    /// Reply to an existing record (id-prefix or location)
+    Reply(commands::reply::Args),
+    /// Resolve (close) an existing record (id-prefix or location)
+    Resolve(commands::resolve::Args),
+    /// Emit a raw record of any type: `qualifier emit <type> <subject> --body '<JSON>'`
+    Emit(commands::emit::Args),
     /// Show annotations and scores for an artifact
     Show(commands::show::Args),
     /// Compute and display scores
@@ -39,20 +45,6 @@ pub enum Commands {
     /// Show who attested an artifact and why
     #[command(alias = "blame")]
     Praise(commands::praise::Args),
-    /// Add a comment to an artifact (no score by default)
-    Comment(commands::comment::Args),
-    /// Suggest a change to an artifact
-    Suggest(commands::suggest::Args),
-    /// Flag a concern on an artifact
-    Flag(commands::flag::Args),
-    /// Approve an artifact (pass)
-    Approve(commands::approve::Args),
-    /// Reject an artifact (fail)
-    Reject(commands::reject::Args),
-    /// Reply to an existing annotation
-    Reply(commands::reply::Args),
-    /// Resolve (close) an existing annotation
-    Resolve(commands::resolve::Args),
     /// Check freshness of annotations against current code
     Review(commands::freshness::Args),
 }
@@ -70,7 +62,10 @@ pub fn run() {
     }
 
     let result: crate::Result<()> = match cli.command {
-        Commands::Attest(args) => commands::attest::run(*args),
+        Commands::Record(args) => commands::record::run(*args),
+        Commands::Reply(args) => commands::reply::run(args),
+        Commands::Resolve(args) => commands::resolve::run(args),
+        Commands::Emit(args) => commands::emit::run(args),
         Commands::Show(args) => commands::show::run(args),
         Commands::Score(args) => commands::score::run(args),
         Commands::Ls(args) => commands::ls::run(args),
@@ -83,13 +78,6 @@ pub fn run() {
         }
         Commands::Init => commands::init::run(),
         Commands::Praise(args) => commands::praise::run(args),
-        Commands::Comment(args) => commands::comment::run(args),
-        Commands::Suggest(args) => commands::suggest::run(args),
-        Commands::Flag(args) => commands::flag::run(args),
-        Commands::Approve(args) => commands::approve::run(args),
-        Commands::Reject(args) => commands::reject::run(args),
-        Commands::Reply(args) => commands::reply::run(args),
-        Commands::Resolve(args) => commands::resolve::run(args),
         Commands::Review(args) => commands::freshness::run(args),
     };
 
