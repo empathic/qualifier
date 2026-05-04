@@ -3,7 +3,6 @@ pub mod compact;
 pub mod content_hash;
 pub mod graph;
 pub mod qual_file;
-pub mod scoring;
 
 #[cfg(feature = "cli")]
 pub mod cli;
@@ -22,9 +21,6 @@ pub enum Error {
 
     #[error("{0}")]
     Validation(String),
-
-    #[error("{0}")]
-    CheckFailed(String),
 }
 
 /// Library-wide result type.

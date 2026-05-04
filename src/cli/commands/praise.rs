@@ -1,9 +1,8 @@
 use clap::Args as ClapArgs;
 use std::path::Path;
 
-use crate::cli::output;
+use crate::compact::filter_superseded;
 use crate::qual_file::{self, find_project_root};
-use crate::scoring;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -50,7 +49,7 @@ fn run_records(args: Args) -> crate::Result<()> {
     }
 
     let owned: Vec<crate::annotation::Record> = records.iter().map(|r| (*r).clone()).collect();
-    let active = scoring::filter_superseded(&owned);
+    let active = filter_superseded(&owned);
 
     if args.format == "json" {
         let entries: Vec<serde_json::Value> =
@@ -80,10 +79,9 @@ fn run_records(args: Args) -> crate::Result<()> {
                 att.id.clone()
             };
 
-            // Line 1: score + kind + summary
+            // Line 1: kind + summary
             println!(
-                "    {} {:<10} {:?}",
-                output::format_score(att.body.score),
+                "    {:<10} {:?}",
                 att.body.kind.to_string(),
                 att.body.summary,
             );
@@ -127,8 +125,7 @@ fn run_records(args: Args) -> crate::Result<()> {
                 epoch.id.clone()
             };
             println!(
-                "    {} {:<10} {:?}",
-                output::format_score(Some(epoch.body.score)),
+                "    {:<10} {:?}",
                 "epoch",
                 epoch.body.summary,
             );
@@ -161,7 +158,6 @@ fn record_to_json(record: &crate::annotation::Record) -> Option<serde_json::Valu
         let mut entry = serde_json::json!({
             "id": att.id,
             "kind": att.body.kind.to_string(),
-            "score": att.body.score,
             "summary": att.body.summary,
             "issuer": att.issuer,
             "created_at": att.created_at.to_rfc3339(),
@@ -183,7 +179,6 @@ fn record_to_json(record: &crate::annotation::Record) -> Option<serde_json::Valu
         let mut entry = serde_json::json!({
             "id": epoch.id,
             "type": "epoch",
-            "score": epoch.body.score,
             "summary": epoch.body.summary,
             "issuer": epoch.issuer,
             "created_at": epoch.created_at.to_rfc3339(),

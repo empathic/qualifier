@@ -3,7 +3,6 @@ use std::path::Path;
 
 use crate::compact as compact_lib;
 use crate::qual_file::{self, find_project_root};
-use crate::scoring;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -67,24 +66,11 @@ fn run_all(args: &Args) -> crate::Result<()> {
 }
 
 fn compact_one(qf: &qual_file::QualFile, snapshot: bool, dry_run: bool) -> crate::Result<()> {
-    let score_before = scoring::raw_score(&qf.records);
-
     let (compacted, result) = if snapshot {
         compact_lib::snapshot(qf)
     } else {
         compact_lib::prune(qf)
     };
-
-    // Verify the invariant
-    let score_after = scoring::raw_score(&compacted.records);
-    if score_before != score_after {
-        return Err(crate::Error::Validation(format!(
-            "BUG: compaction changed raw score from {} to {} for {}",
-            score_before,
-            score_after,
-            qf.path.display()
-        )));
-    }
 
     if result.pruned == 0 {
         println!(
@@ -97,11 +83,10 @@ fn compact_one(qf: &qual_file::QualFile, snapshot: bool, dry_run: bool) -> crate
 
     if snapshot {
         println!(
-            "  {}: {} -> {} record (epoch, raw score: {})",
+            "  {}: {} -> {} record (epoch)",
             qf.path.display(),
             result.before,
             result.after,
-            score_after,
         );
     } else {
         println!(

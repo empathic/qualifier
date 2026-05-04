@@ -201,24 +201,6 @@ impl std::str::FromStr for Kind {
     }
 }
 
-impl Kind {
-    /// Recommended default score for each annotation kind.
-    pub fn default_score(&self) -> i32 {
-        match self {
-            Kind::Pass => 20,
-            Kind::Fail => -20,
-            Kind::Blocker => -50,
-            Kind::Concern => -10,
-            Kind::Comment => 0,
-            Kind::Resolve => 0,
-            Kind::Praise => 30,
-            Kind::Suggestion => -5,
-            Kind::Waiver => 10,
-            Kind::Custom(_) => 0,
-        }
-    }
-}
-
 // ─── IssuerType enum ────────────────────────────────────────────────────────
 
 /// Issuer classification for annotations.
@@ -269,8 +251,6 @@ pub struct AnnotationBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub references: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub score: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<Span>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggested_fix: Option<String>,
@@ -285,7 +265,6 @@ pub struct AnnotationBody {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EpochBody {
     pub refs: Vec<String>,
-    pub score: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<Span>,
     pub summary: String,
@@ -344,7 +323,7 @@ pub struct Annotation {
 // ─── Epoch struct ───────────────────────────────────────────────────────────
 
 /// An epoch record — a compaction summary that replaces a set of records
-/// with a single scored record preserving the net score.
+/// with a single record summarising their net effect.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Epoch {
     #[serde(default = "default_metabox")]
@@ -450,15 +429,6 @@ impl Record {
         }
     }
 
-    /// Get the score (if this is a scored record type and has a score).
-    pub fn score(&self) -> Option<i32> {
-        match self {
-            Record::Annotation(a) => a.body.score,
-            Record::Epoch(e) => Some(e.body.score),
-            _ => None,
-        }
-    }
-
     /// Get the supersedes ID (annotations only).
     pub fn supersedes(&self) -> Option<&str> {
         match self {
@@ -507,11 +477,6 @@ impl Record {
             Record::Dependency(d) => d.issuer_type.as_ref(),
             Record::Unknown(_) => None,
         }
-    }
-
-    /// Returns true if this is a scored record type (annotation or epoch).
-    pub fn is_scored(&self) -> bool {
-        matches!(self, Record::Annotation(_) | Record::Epoch(_))
     }
 
     /// Get the envelope `type` string (e.g. `"annotation"`, `"epoch"`,
@@ -657,11 +622,6 @@ pub fn validate(annotation: &Annotation) -> Vec<String> {
         errors.push("issuer must not be empty".into());
     } else if !annotation.issuer.contains(':') {
         errors.push("issuer must be a URI (e.g. mailto:user@example.com)".into());
-    }
-    if let Some(score) = annotation.body.score
-        && !(-100..=100).contains(&score)
-    {
-        errors.push(format!("score {score} is out of range [-100, 100]"));
     }
     if annotation.id.is_empty() {
         errors.push("id must not be empty".into());
@@ -830,15 +790,9 @@ pub fn validate_supersession_targets(records: &[Record]) -> crate::Result<()> {
 
 // ─── Finalize ───────────────────────────────────────────────────────────────
 
-/// Clamp a score to the valid range [-100, 100].
-pub fn clamp_score(score: i32) -> i32 {
-    score.clamp(-100, 100)
-}
-
 /// Build an annotation with a generated ID. The `id` field on the input is
 /// ignored and replaced with the content-addressed hash.
 pub fn finalize(mut annotation: Annotation) -> Annotation {
-    annotation.body.score = annotation.body.score.map(clamp_score);
     annotation.metabox = "1".into();
     annotation.record_type = "annotation".to_string();
     // Normalize span
@@ -852,7 +806,6 @@ pub fn finalize(mut annotation: Annotation) -> Annotation {
 
 /// Build an epoch with a generated ID.
 pub fn finalize_epoch(mut epoch: Epoch) -> Epoch {
-    epoch.body.score = clamp_score(epoch.body.score);
     epoch.metabox = "1".into();
     epoch.record_type = "epoch".to_string();
     if let Some(ref mut span) = epoch.body.span {
@@ -902,7 +855,6 @@ mod tests {
                 kind: Kind::Concern,
                 r#ref: None,
                 references: None,
-                score: Some(-30),
                 span: None,
                 suggested_fix: None,
                 summary: "Panics on malformed input".into(),
@@ -928,7 +880,7 @@ mod tests {
     fn test_generate_id_changes_with_content() {
         let att1 = sample_annotation();
         let mut att2 = att1.clone();
-        att2.body.score = Some(-20);
+        att2.body.summary = "different summary".into();
         att2.id = generate_id(&att2);
         assert_ne!(att1.id, att2.id);
     }
@@ -955,7 +907,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(0),
                 span: None,
                 suggested_fix: None,
                 summary: String::new(),
@@ -971,29 +922,11 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_score_out_of_range() {
-        let mut att = sample_annotation();
-        att.body.score = Some(200);
-        att.id = generate_id(&att);
-        let errors = validate(&att);
-        assert!(errors.iter().any(|e| e.contains("out of range")));
-    }
-
-    #[test]
     fn test_validate_id_mismatch() {
         let mut att = sample_annotation();
         att.id = "deadbeef".repeat(8);
         let errors = validate(&att);
         assert!(errors.iter().any(|e| e.contains("id mismatch")));
-    }
-
-    #[test]
-    fn test_clamp_score() {
-        assert_eq!(clamp_score(50), 50);
-        assert_eq!(clamp_score(-200), -100);
-        assert_eq!(clamp_score(200), 100);
-        assert_eq!(clamp_score(-100), -100);
-        assert_eq!(clamp_score(100), 100);
     }
 
     #[test]
@@ -1011,7 +944,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(200), // over max
                 span: None,
                 suggested_fix: None,
                 summary: "good".into(),
@@ -1020,7 +952,6 @@ mod tests {
             },
         };
         let finalized = finalize(att);
-        assert_eq!(finalized.body.score, Some(100)); // clamped
         assert_eq!(finalized.metabox, "1");
         assert_eq!(finalized.id, generate_id(&finalized)); // valid ID
     }
@@ -1040,7 +971,6 @@ mod tests {
                 kind: Kind::Concern,
                 r#ref: None,
                 references: None,
-                score: Some(-10),
                 span: Some(Span {
                     start: Position {
                         line: 42,
@@ -1085,7 +1015,6 @@ mod tests {
                 kind: Kind::Concern,
                 r#ref: None,
                 references: None,
-                score: Some(-10),
                 span: None,
                 suggested_fix: None,
                 summary: "issue".into(),
@@ -1107,7 +1036,6 @@ mod tests {
                 kind: Kind::Concern,
                 r#ref: None,
                 references: None,
-                score: Some(-10),
                 span: Some(Span {
                     start: Position {
                         line: 42,
@@ -1142,7 +1070,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "a".into(),
@@ -1163,7 +1090,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "b".into(),
@@ -1210,19 +1136,6 @@ mod tests {
     }
 
     #[test]
-    fn test_kind_default_scores() {
-        assert_eq!(Kind::Pass.default_score(), 20);
-        assert_eq!(Kind::Fail.default_score(), -20);
-        assert_eq!(Kind::Blocker.default_score(), -50);
-        assert_eq!(Kind::Concern.default_score(), -10);
-        assert_eq!(Kind::Comment.default_score(), 0);
-        assert_eq!(Kind::Praise.default_score(), 30);
-        assert_eq!(Kind::Suggestion.default_score(), -5);
-        assert_eq!(Kind::Waiver.default_score(), 10);
-        assert_eq!(Kind::Custom("foo".into()).default_score(), 0);
-    }
-
-    #[test]
     fn test_typo_detection_in_validate() {
         let mut att = sample_annotation();
         att.body.kind = Kind::Custom("pss".into());
@@ -1263,7 +1176,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1285,7 +1197,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(20),
                 span: None,
                 suggested_fix: None,
                 summary: "updated".into(),
@@ -1313,7 +1224,6 @@ mod tests {
                 kind: Kind::Concern,
                 r#ref: None,
                 references: None,
-                score: Some(-10),
                 span: None,
                 suggested_fix: None,
                 summary: "bad".into(),
@@ -1335,7 +1245,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(20),
                 span: None,
                 suggested_fix: None,
                 summary: "fixed".into(),
@@ -1371,7 +1280,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1402,7 +1310,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1424,7 +1331,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1446,7 +1352,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: Some("git:abc123".into()),
                 references: None,
-                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1476,7 +1381,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1512,7 +1416,6 @@ mod tests {
                 kind: Kind::Praise,
                 r#ref: Some("git:3aba500".into()),
                 references: None,
-                score: Some(30),
                 span: None,
                 suggested_fix: None,
                 summary: "great".into(),
@@ -1549,7 +1452,6 @@ mod tests {
                 kind: Kind::Pass,
                 r#ref: None,
                 references: None,
-                score: Some(10),
                 span: None,
                 suggested_fix: None,
                 summary: "ok".into(),
@@ -1567,7 +1469,7 @@ mod tests {
     #[test]
     fn test_record_type_defaults_to_annotation() {
         // JSON without "type" field should parse as annotation
-        let json = r#"{"metabox":"1","subject":"x.rs","issuer":"mailto:test@test.com","created_at":"2026-02-24T10:00:00Z","id":"abc","body":{"kind":"pass","score":10,"summary":"ok"}}"#;
+        let json = r#"{"metabox":"1","subject":"x.rs","issuer":"mailto:test@test.com","created_at":"2026-02-24T10:00:00Z","id":"abc","body":{"kind":"pass","summary":"ok"}}"#;
         let record: Record = serde_json::from_str(json).unwrap();
         assert!(record.as_annotation().is_some());
     }
@@ -1586,7 +1488,6 @@ mod tests {
             id: String::new(),
             body: EpochBody {
                 refs: vec!["aaa".into(), "bbb".into()],
-                score: 30,
                 span: None,
                 summary: "Compacted from 3 records".into(),
             },
@@ -1598,7 +1499,7 @@ mod tests {
 
         let parsed: Record = serde_json::from_str(&json).unwrap();
         assert!(parsed.as_epoch().is_some());
-        assert_eq!(parsed.as_epoch().unwrap().body.score, 30);
+        assert_eq!(parsed.as_epoch().unwrap().body.refs.len(), 2);
     }
 
     #[test]
@@ -1730,7 +1631,6 @@ mod tests {
                 kind: Kind::Comment,
                 r#ref: None,
                 references: None,
-                score: Some(0),
                 span: None,
                 suggested_fix: None,
                 summary: "note".into(),
@@ -1752,7 +1652,6 @@ mod tests {
                 kind: Kind::Comment,
                 r#ref: None,
                 references: Some("deadbeef".into()),
-                score: Some(0),
                 span: None,
                 suggested_fix: None,
                 summary: "note".into(),
@@ -1779,7 +1678,6 @@ mod tests {
                 kind: Kind::Comment,
                 r#ref: None,
                 references: None,
-                score: Some(0),
                 span: None,
                 suggested_fix: None,
                 summary: "self-ref".into(),

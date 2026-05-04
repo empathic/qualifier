@@ -108,8 +108,8 @@ the format itself needing to grow.
 The types defined in the spec today:
 
 - `annotation` — a quality signal (concern, praise, blocker, comment, ...). The one you'll write most often.
-- `epoch` — a compaction snapshot. Synthesizes a chunk of history into one scored record.
-- `dependency` — declares that one subject depends on others, so scores can propagate.
+- `epoch` — a compaction snapshot. Synthesizes a chunk of history into one summary record.
+- `dependency` — declares that one subject depends on others, so layered tools can propagate signals across edges.
 - `license` — a license declaration for a subject.
 - `security-advisory` — a known vulnerability or weakness.
 - `perf-measurement` — a performance measurement against a baseline.
@@ -126,13 +126,13 @@ Two body fields turn a flat list of records into a conversation.
 
 `references` is a lightweight "re:" link. Bob sees Alice's concern, replies
 with a comment, and points `body.references` at Alice's record ID. Both
-records stay active in scoring; the link is purely for threading.
+records stay active; the link is purely for threading.
 
 `supersedes` is stronger. A new record with `body.supersedes` set to a prior
-record's ID withdraws the prior record from scoring. That's how you "edit"
-something in an immutable, append-only file: write a new record that replaces
-the old one. The `resolve` annotation kind is the canonical way to close
-something out, withdrawing the score of whatever it supersedes.
+record's ID withdraws the prior record from the active set. That's how you
+"edit" something in an immutable, append-only file: write a new record that
+replaces the old one. The `resolve` annotation kind is the canonical way to
+close something out, retiring whatever it supersedes.
 
 ```jsonl
 {
@@ -153,17 +153,19 @@ something out, withdrawing the score of whatever it supersedes.
 Tools render threads with tree-drawing characters so the conversation reads
 naturally in a terminal.
 
-## Scoring, briefly
+## Custom body fields
 
-Annotations carry an integer `score` in the range -100 to +100. A `concern`
-is negative, a `praise` is positive, a `comment` is unscored. The CLI picks
-sensible defaults per kind so you rarely set the number by hand.
+The annotation body has a small set of well-known fields (`kind`, `summary`,
+`detail`, `references`, `supersedes`, `span`, `tags`, `suggested_fix`), but
+the format doesn't constrain what else you put there. A team that wants
+numeric scoring can attach a `score` field to each annotation; a tool that
+imports SARIF can stash the original `ruleId`. Records that round-trip
+through tooling preserve unknown body fields verbatim.
 
-Scoring is deterministic: given the same set of records, every implementation
-computes the same raw score for every subject. When you have a dependency
-graph, scores propagate across edges so a problem in `lib/auth` shows up in
-`bin/server` too. The full rules (raw vs. effective scores, propagation,
-status thresholds) live in [section 4 of the spec](/spec/#4-scoring).
+This is one example of how an ecosystem can layer quality signals on top
+of the substrate. The spec sketches a numeric `score` field as an
+[abstract example](/spec/#4-layering-quality-signals-on-top); the
+`qualifier` CLI itself doesn't compute or gate on scores.
 
 ## Why JSONL?
 

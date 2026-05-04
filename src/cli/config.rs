@@ -24,10 +24,6 @@ pub struct Config {
     /// Default output format ("human" or "json").
     #[serde(default = "default_format")]
     pub format: String,
-
-    /// Minimum score threshold for `qualifier check`.
-    #[serde(default)]
-    pub min_score: i32,
 }
 
 fn default_graph_path() -> PathBuf {
@@ -44,7 +40,6 @@ impl Default for Config {
             graph: default_graph_path(),
             issuer: None,
             format: default_format(),
-            min_score: 0,
         }
     }
 }

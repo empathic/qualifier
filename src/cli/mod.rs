@@ -5,11 +5,48 @@ pub mod config;
 pub mod output;
 pub mod span_context;
 
+// Clap doesn't natively group subcommands into headed sections in the
+// parent --help, so we render the Commands block ourselves via a custom
+// help_template. If you add, rename, or remove a subcommand, update
+// HELP_TEMPLATE to match — the Commands enum below is still the source
+// of truth for parsing.
+const HELP_TEMPLATE: &str = "\
+{about-with-newline}
+{usage-heading} {usage}
+
+Record observations:
+  record     Record an annotation: `qualifier record <kind> <location> [message]`
+  reply      Reply to an existing record (id-prefix or location)
+  resolve    Resolve (close) an existing record (id-prefix or location)
+  emit       Emit a raw record of any type
+
+Inspect annotations:
+  show       Show annotations for an artifact
+  ls         List artifacts by kind
+  praise     Show who annotated an artifact and why (alias: blame)
+  graph      Visualize the dependency graph
+  review     Check freshness of annotations against current code
+
+Manage a repository:
+  init       Initialize qualifier in a repository
+  compact    Compact a .qual file
+
+Other:
+  haiku      Print a random qualifier haiku
+  help       Print this message or the help of the given subcommand(s)
+
+Run `qualifier <COMMAND> --help` for command-specific options.
+
+Options:
+{options}
+";
+
 #[derive(Parser)]
 #[command(
     name = "qualifier",
     version,
-    about = "Deterministic quality annotations for software artifacts"
+    about = "Deterministic quality annotations for software artifacts",
+    help_template = HELP_TEMPLATE
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -26,27 +63,26 @@ pub enum Commands {
     Resolve(commands::resolve::Args),
     /// Emit a raw record of any type: `qualifier emit <type> <subject> --body '<JSON>'`
     Emit(commands::emit::Args),
-    /// Show annotations and scores for an artifact
+
+    /// Show annotations for an artifact
     Show(commands::show::Args),
-    /// Compute and display scores
-    Score(commands::score::Args),
-    /// List artifacts by score or kind
+    /// List artifacts by kind
     Ls(commands::ls::Args),
-    /// CI gate: exit non-zero if below threshold
-    Check(commands::check::Args),
-    /// Compact a .qual file
-    Compact(commands::compact::Args),
-    /// Visualize the dependency graph
-    Graph(commands::graph_cmd::Args),
-    /// Print a random qualifier haiku
-    Haiku,
-    /// Initialize qualifier in a repository
-    Init,
-    /// Show who attested an artifact and why
+    /// Show who annotated an artifact and why
     #[command(alias = "blame")]
     Praise(commands::praise::Args),
+    /// Visualize the dependency graph
+    Graph(commands::graph_cmd::Args),
     /// Check freshness of annotations against current code
     Review(commands::freshness::Args),
+
+    /// Initialize qualifier in a repository
+    Init,
+    /// Compact a .qual file
+    Compact(commands::compact::Args),
+
+    /// Print a random qualifier haiku
+    Haiku,
 }
 
 pub fn run() {
@@ -67,9 +103,7 @@ pub fn run() {
         Commands::Resolve(args) => commands::resolve::run(args),
         Commands::Emit(args) => commands::emit::run(args),
         Commands::Show(args) => commands::show::run(args),
-        Commands::Score(args) => commands::score::run(args),
         Commands::Ls(args) => commands::ls::run(args),
-        Commands::Check(args) => commands::check::run(args),
         Commands::Compact(args) => commands::compact::run(args),
         Commands::Graph(args) => commands::graph_cmd::run(args),
         Commands::Haiku => {
@@ -82,15 +116,7 @@ pub fn run() {
     };
 
     if let Err(e) = result {
-        match &e {
-            crate::Error::CheckFailed(msg) => {
-                eprintln!("\n{msg}");
-                std::process::exit(1);
-            }
-            _ => {
-                eprintln!("qualifier: {e}");
-                std::process::exit(1);
-            }
-        }
+        eprintln!("qualifier: {e}");
+        std::process::exit(1);
     }
 }

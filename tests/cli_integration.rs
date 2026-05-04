@@ -92,15 +92,12 @@ fn test_record_and_show_roundtrip() {
             "praise",
             "lib.rs",
             "Well structured code",
-            "--score",
-            "40",
             "--issuer",
             "mailto:test@test.com",
         ],
     );
 
     assert_eq!(code, 0, "record should succeed: {stdout}");
-    assert!(stdout.contains("[+40]") || stdout.contains("[40]"));
     assert!(stdout.contains("lib.rs"));
 
     // Verify the qual file was created (directory-level .qual for root artifacts)
@@ -112,7 +109,6 @@ fn test_record_and_show_roundtrip() {
 
     assert_eq!(show_code, 0, "show should succeed");
     assert!(show_stdout.contains("lib.rs"));
-    assert!(show_stdout.contains("40"));
 }
 
 #[test]
@@ -125,251 +121,6 @@ fn test_record_requires_message() {
     assert!(
         stderr.contains("message") || stderr.contains("required"),
         "error should mention message: {stderr}"
-    );
-}
-
-// --- qualifier score --format json ---
-
-#[test]
-fn test_score_json_output_structure() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Create an annotation first
-    run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "praise",
-            "mod.rs",
-            "nice",
-            "--score",
-            "50",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    let (stdout, _, code) = run_qualifier(dir.path(), &["score", "--format", "json"]);
-
-    assert_eq!(code, 0, "score should succeed");
-
-    // Parse JSON output
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!("score --format json should produce valid JSON: {e}\ngot: {stdout}")
-    });
-
-    assert!(parsed.is_array(), "JSON output should be an array");
-    let arr = parsed.as_array().unwrap();
-    assert!(!arr.is_empty(), "should have at least one entry");
-
-    let entry = &arr[0];
-    assert!(
-        entry.get("subject").is_some(),
-        "entry should have 'subject'"
-    );
-    assert!(
-        entry.get("raw_score").is_some(),
-        "entry should have 'raw_score'"
-    );
-    assert!(
-        entry.get("effective_score").is_some(),
-        "entry should have 'effective_score'"
-    );
-    assert!(entry.get("status").is_some(), "entry should have 'status'");
-}
-
-#[test]
-fn test_score_empty_project() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let (stdout, _, code) = run_qualifier(dir.path(), &["score"]);
-
-    assert_eq!(code, 0);
-    assert!(
-        stdout.contains("No qualified artifacts") || stdout.is_empty() || stdout.trim().is_empty(),
-        "empty project should show no artifacts message: {stdout}"
-    );
-}
-
-// --- qualifier check exit codes ---
-
-#[test]
-fn test_check_passes_with_good_scores() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Create a positive annotation
-    run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "praise",
-            "good.rs",
-            "excellent",
-            "--score",
-            "50",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    let (_, _, code) = run_qualifier(dir.path(), &["check", "--min-score", "0"]);
-    assert_eq!(code, 0, "check should pass when all scores above threshold");
-}
-
-#[test]
-fn test_check_fails_with_bad_scores() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Create a negative annotation
-    run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "blocker",
-            "bad.rs",
-            "critical issue",
-            "--score=-50",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    let (_, stderr, code) = run_qualifier(dir.path(), &["check", "--min-score", "0"]);
-    assert_eq!(code, 1, "check should fail when scores below threshold");
-    assert!(
-        stderr.contains("FAIL") || stderr.contains("below minimum"),
-        "stderr should mention failure: {stderr}"
-    );
-}
-
-#[test]
-fn test_check_passes_empty_project() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let (_, _, code) = run_qualifier(dir.path(), &["check"]);
-    assert_eq!(code, 0, "check on empty project should pass (no artifacts)");
-}
-
-// --- qualifier record default scores per kind ---
-
-#[test]
-fn test_record_blocker_uses_default_score() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let (stdout, _, code) = run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "blocker",
-            "vuln.rs",
-            "security vulnerability",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    assert_eq!(code, 0, "record should succeed");
-    // The default score for blocker is -50
-    assert!(
-        stdout.contains("[-50]"),
-        "blocker should default to score -50: {stdout}"
-    );
-}
-
-#[test]
-fn test_record_pass_uses_default_score() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let (stdout, _, code) = run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "pass",
-            "ok.rs",
-            "looks good",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    assert_eq!(code, 0, "record should succeed");
-    // The default score for pass is +20
-    assert!(
-        stdout.contains("[+20]") || stdout.contains("[20]"),
-        "pass should default to score +20: {stdout}"
-    );
-}
-
-#[test]
-fn test_record_concern_uses_default_score() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let (stdout, _, code) = run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "concern",
-            "meh.rs",
-            "could be better",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    assert_eq!(code, 0, "record should succeed");
-    // The default score for concern is -10
-    assert!(
-        stdout.contains("[-10]"),
-        "concern should default to score -10: {stdout}"
-    );
-}
-
-#[test]
-fn test_record_comment_is_unscored_by_default() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let (stdout, _, code) = run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "comment",
-            "lib.rs",
-            "just a note",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    assert_eq!(code, 0, "record comment should succeed");
-    // No-score marker in human output is "[---]"
-    assert!(
-        stdout.contains("[---]"),
-        "comment should be unscored by default: {stdout}"
-    );
-}
-
-#[test]
-fn test_record_comment_with_explicit_score() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let (stdout, _, code) = run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "comment",
-            "lib.rs",
-            "graded note",
-            "--score",
-            "5",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    assert_eq!(code, 0, "record comment with --score should succeed");
-    assert!(
-        stdout.contains("[+5]") || stdout.contains("[5]"),
-        "explicit --score should be honored on comment: {stdout}"
     );
 }
 
@@ -386,8 +137,6 @@ fn test_show_json_output() {
             "praise",
             "api.rs",
             "clean API",
-            "--score",
-            "30",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -402,8 +151,6 @@ fn test_show_json_output() {
     });
 
     assert_eq!(parsed["subject"], "api.rs");
-    assert_eq!(parsed["raw_score"], 30);
-    assert_eq!(parsed["effective_score"], 30);
     assert!(parsed["records"].is_array());
     assert_eq!(parsed["records"].as_array().unwrap().len(), 1);
 }
@@ -420,52 +167,6 @@ fn test_show_nonexistent_artifact() {
     assert!(
         stderr.contains("No .qual file") || stderr.contains("nonexistent"),
         "error should mention missing qual file: {stderr}"
-    );
-}
-
-// --- multiple annotations on same artifact ---
-
-#[test]
-fn test_multiple_annotations_accumulate() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Add two annotations to the same artifact
-    run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "praise",
-            "lib.rs",
-            "good structure",
-            "--score",
-            "30",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-    run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "concern",
-            "lib.rs",
-            "needs docs",
-            "--score=-10",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    // Score should reflect both (30 + -10 = 20)
-    let (stdout, _, code) = run_qualifier(dir.path(), &["score", "--format", "json"]);
-    assert_eq!(code, 0);
-
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    let arr = parsed.as_array().unwrap();
-    let entry = arr.iter().find(|e| e["subject"] == "lib.rs").unwrap();
-    assert_eq!(
-        entry["raw_score"], 20,
-        "scores should accumulate: 30 + -10 = 20"
     );
 }
 
@@ -575,8 +276,6 @@ fn test_show_finds_annotation_in_directory_qual() {
             "praise",
             "src/bar.rs",
             "clean code",
-            "--score",
-            "30",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -587,56 +286,6 @@ fn test_show_finds_annotation_in_directory_qual() {
 
     assert_eq!(code, 0, "show should find annotation in directory .qual");
     assert!(stdout.contains("src/bar.rs"));
-    assert!(stdout.contains("30"));
-}
-
-#[test]
-fn test_score_accumulates_across_layouts() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join("src")).unwrap();
-
-    // First annotation → goes to src/.qual
-    run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "praise",
-            "src/mixed.rs",
-            "good",
-            "--score",
-            "40",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    // Pre-create a 1:1 file and write a second annotation via --file
-    run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "concern",
-            "src/mixed.rs",
-            "needs work",
-            "--score=-10",
-            "--issuer",
-            "mailto:test@test.com",
-            "--file",
-            "src/mixed.rs.qual",
-        ],
-    );
-
-    // Score should see both (40 + -10 = 30)
-    let (stdout, _, code) = run_qualifier(dir.path(), &["score", "--format", "json"]);
-    assert_eq!(code, 0);
-
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    let arr = parsed.as_array().unwrap();
-    let entry = arr.iter().find(|e| e["subject"] == "src/mixed.rs").unwrap();
-    assert_eq!(
-        entry["raw_score"], 30,
-        "scores should accumulate across layouts: 40 + -10 = 30"
-    );
 }
 
 #[test]
@@ -673,8 +322,6 @@ fn test_ls_basic_listing() {
             "praise",
             "foo.rs",
             "great",
-            "--score",
-            "50",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -686,7 +333,6 @@ fn test_ls_basic_listing() {
             "concern",
             "bar.rs",
             "meh",
-            "--score=-20",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -696,45 +342,6 @@ fn test_ls_basic_listing() {
     assert_eq!(code, 0, "ls should succeed");
     assert!(stdout.contains("foo.rs"), "ls should list foo.rs");
     assert!(stdout.contains("bar.rs"), "ls should list bar.rs");
-}
-
-#[test]
-fn test_ls_below_filter() {
-    let dir = tempfile::tempdir().unwrap();
-
-    run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "praise",
-            "good.rs",
-            "nice",
-            "--score",
-            "50",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-    run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "blocker",
-            "bad.rs",
-            "broken",
-            "--score=-50",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    let (stdout, _, code) = run_qualifier(dir.path(), &["ls", "--below", "0"]);
-    assert_eq!(code, 0);
-    assert!(stdout.contains("bad.rs"), "below filter should show bad.rs");
-    assert!(
-        !stdout.contains("good.rs"),
-        "below filter should hide good.rs"
-    );
 }
 
 #[test]
@@ -759,8 +366,6 @@ fn test_ls_kind_filter() {
             "praise",
             "b.rs",
             "good",
-            "--score",
-            "30",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -785,8 +390,6 @@ fn test_praise_shows_records() {
             "praise",
             "foo.rs",
             "Well structured code",
-            "--score",
-            "40",
             "--issuer",
             "mailto:alice@example.com",
         ],
@@ -799,7 +402,6 @@ fn test_praise_shows_records() {
             "concern",
             "foo.rs",
             "Missing error handling",
-            "--score=-10",
             "--issuer",
             "mailto:bob@example.com",
         ],
@@ -814,14 +416,6 @@ fn test_praise_shows_records() {
     assert!(
         stdout.contains("2 records"),
         "should show record count: {stdout}"
-    );
-    assert!(
-        stdout.contains("[+40]"),
-        "should show praise score: {stdout}"
-    );
-    assert!(
-        stdout.contains("[-10]"),
-        "should show concern score: {stdout}"
     );
     assert!(
         stdout.contains("alice@example.com"),
@@ -934,41 +528,6 @@ fn test_graph_missing_file() {
     );
 }
 
-// --- score overflow ---
-
-#[test]
-fn test_score_overflow_clamped() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Create 5 annotations each with score +100
-    for i in 0..5 {
-        run_qualifier(
-            dir.path(),
-            &[
-                "record",
-                "praise",
-                "big.rs",
-                &format!("praise {i}"),
-                "--score",
-                "100",
-                "--issuer",
-                "mailto:test@test.com",
-            ],
-        );
-    }
-
-    let (stdout, _, code) = run_qualifier(dir.path(), &["score", "--format", "json"]);
-    assert_eq!(code, 0);
-
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    let arr = parsed.as_array().unwrap();
-    let entry = arr.iter().find(|e| e["subject"] == "big.rs").unwrap();
-    assert_eq!(
-        entry["raw_score"], 100,
-        "raw score should be clamped to 100, not 500"
-    );
-}
-
 // --- batch validation ---
 
 #[test]
@@ -1013,7 +572,6 @@ fn test_record_batch_full_record_form() {
         "subject": "test.rs",
         "body": {
             "kind": "pass",
-            "score": 10,
             "summary": ""
         },
         "issuer": "mailto:test@test.com",
@@ -1055,8 +613,6 @@ fn test_record_with_issuer_type() {
             "praise",
             "lib.rs",
             "Clean code",
-            "--score",
-            "30",
             "--issuer",
             "mailto:test@test.com",
             "--issuer-type",
@@ -1086,8 +642,6 @@ fn test_record_with_ref() {
             "pass",
             "lib.rs",
             "Looks good",
-            "--score",
-            "20",
             "--issuer",
             "mailto:test@test.com",
             "--ref",
@@ -1116,8 +670,6 @@ fn test_new_annotations_are_metabox() {
             "praise",
             "mod.rs",
             "nice",
-            "--score",
-            "50",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -1175,7 +727,6 @@ fn test_record_with_span() {
             "concern",
             "lib.rs",
             "Problematic function",
-            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
             "--span",
@@ -1212,7 +763,6 @@ fn test_record_span_via_location() {
             "concern",
             "lib.rs:42:58",
             "Problematic function",
-            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -1243,7 +793,6 @@ fn test_record_with_span_and_columns() {
             "concern",
             "lib.rs",
             "Bad code",
-            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
             "--span",
@@ -1438,7 +987,6 @@ fn test_record_with_references() {
             "concern",
             "lib.rs",
             "Needs improvement",
-            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -1490,7 +1038,6 @@ fn test_show_displays_references() {
             "concern",
             "lib.rs",
             "Needs work",
-            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -1728,8 +1275,6 @@ fn test_reply_with_kind_override() {
             "approved the fix",
             "--kind",
             "pass",
-            "--score",
-            "20",
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -1741,10 +1286,6 @@ fn test_reply_with_kind_override() {
     assert!(
         stdout2.contains("pass"),
         "reply should use overridden kind: {stdout2}"
-    );
-    assert!(
-        stdout2.contains("[+20]") || stdout2.contains("[20]"),
-        "reply should use overridden score: {stdout2}"
     );
 }
 
@@ -2051,66 +1592,6 @@ fn test_resolve_default_message() {
 }
 
 #[test]
-fn test_resolve_removes_from_scoring() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Create a concern with score -10
-    let (stdout1, _, _) = run_qualifier(
-        dir.path(),
-        &[
-            "record",
-            "concern",
-            "lib.rs",
-            "needs work",
-            "--score=-10",
-            "--issuer",
-            "mailto:test@test.com",
-        ],
-    );
-
-    let id = stdout1
-        .lines()
-        .find(|l| l.contains("id:"))
-        .and_then(|l| l.split("id:").nth(1))
-        .map(|s| s.trim().to_string())
-        .expect("should find id in output");
-
-    // Verify score is -10 before resolving
-    let (score_before, _, _) = run_qualifier(dir.path(), &["score", "--format", "json"]);
-    let parsed_before: serde_json::Value = serde_json::from_str(&score_before).unwrap();
-    let entry_before = parsed_before
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["subject"] == "lib.rs")
-        .unwrap();
-    assert_eq!(
-        entry_before["raw_score"], -10,
-        "score should be -10 before resolve"
-    );
-
-    // Resolve it
-    run_qualifier(
-        dir.path(),
-        &["resolve", &id[..8], "--issuer", "mailto:test@test.com"],
-    );
-
-    // Score should now be 0 (original superseded, tombstone has score 0)
-    let (score_after, _, _) = run_qualifier(dir.path(), &["score", "--format", "json"]);
-    let parsed_after: serde_json::Value = serde_json::from_str(&score_after).unwrap();
-    let entry_after = parsed_after
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["subject"] == "lib.rs")
-        .unwrap();
-    assert_eq!(
-        entry_after["raw_score"], 0,
-        "score should be 0 after resolve (original superseded)"
-    );
-}
-
-#[test]
 fn test_resolve_not_found() {
     let dir = tempfile::tempdir().unwrap();
 
@@ -2240,7 +1721,6 @@ fn test_record_span_flag_auto_populates_content_hash() {
             "concern",
             "lib.rs",
             "issue here",
-            "--score=-10",
             "--issuer",
             "mailto:test@test.com",
             "--span",
@@ -2483,8 +1963,7 @@ fn test_emit_annotation() {
 
     let body = serde_json::json!({
         "kind": "pass",
-        "summary": "looks good",
-        "score": 25
+        "summary": "looks good"
     });
 
     let (stdout, _, code) = run_qualifier(
@@ -2587,7 +2066,7 @@ fn write_qual_with_unknown(dir: &Path, qual_rel_path: &str, subject: &str) -> (S
         "body": {"foo": "bar"}
     });
 
-    // Also write an ordinary annotation so the subject has scored content too.
+    // Also write an ordinary annotation alongside the unknown record.
     let qual_path = dir.join(qual_rel_path);
     if let Some(parent) = qual_path.parent() {
         std::fs::create_dir_all(parent).unwrap();
@@ -2606,8 +2085,6 @@ fn write_qual_with_unknown(dir: &Path, qual_rel_path: &str, subject: &str) -> (S
             "praise",
             subject,
             "looks good",
-            "--score",
-            "20",
             "--issuer",
             "mailto:test@test.com",
             "--file",
@@ -2710,8 +2187,6 @@ fn test_show_omits_dependency_records_in_human_output() {
             "praise",
             "app.rs",
             "ships clean",
-            "--score",
-            "30",
             "--issuer",
             "mailto:test@test.com",
             "--file",
@@ -2761,8 +2236,6 @@ fn test_ls_preserves_unknown_record_type() {
     let dir = tempfile::tempdir().unwrap();
     let _ = write_qual_with_unknown(dir.path(), "widget.rs.qual", "widget.rs");
 
-    // ls (formerly score) must not crash. Unknown records aren't scored
-    // (is_scored() == false), but the subject still has a real annotation.
     let (stdout, stderr, code) = run_qualifier(dir.path(), &["ls"]);
     assert_eq!(
         code, 0,
@@ -2777,12 +2250,10 @@ fn test_ls_preserves_unknown_record_type() {
     assert_eq!(json_code, 0);
     let parsed: serde_json::Value = serde_json::from_str(&json_stdout).unwrap();
     let arr = parsed.as_array().unwrap();
-    let widget_entry = arr
+    let _widget_entry = arr
         .iter()
         .find(|e| e["subject"] == "widget.rs")
         .expect("widget.rs should appear in ls output");
-    // Only the annotation contributes to score; Unknown is opaque.
-    assert_eq!(widget_entry["raw_score"], 20);
 }
 
 #[test]
@@ -2875,8 +2346,6 @@ fn test_compact_preserves_unknown_record_type() {
             "praise",
             "keep.rs",
             "even better",
-            "--score",
-            "25",
             "--issuer",
             "mailto:test@test.com",
             "--supersedes",
@@ -2908,9 +2377,6 @@ fn test_compact_preserves_unknown_record_type() {
         "superseded annotation should have been pruned:\n{after_prune}"
     );
 
-    // snapshot: scored records collapse into an epoch, but the Unknown record
-    // is non-scored and MUST pass through untouched. Two scored records remain
-    // after the supersedes record above (the survivor + a fresh extra).
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
@@ -2918,8 +2384,6 @@ fn test_compact_preserves_unknown_record_type() {
             "praise",
             "keep.rs",
             "minor extra",
-            "--score",
-            "5",
             "--issuer",
             "mailto:test@test.com",
             "--file",

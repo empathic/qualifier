@@ -5,7 +5,6 @@ use std::path::Path;
 use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
 use crate::cli::commands::record::{detect_issuer, normalize_issuer_uri};
 use crate::cli::commands::reply;
-use crate::cli::output;
 use crate::qual_file;
 
 #[derive(ClapArgs)]
@@ -80,7 +79,6 @@ pub fn run(args: Args) -> crate::Result<()> {
             kind: Kind::Resolve,
             r#ref: args.r#ref,
             references: None,
-            score: Some(0),
             span: None,
             suggested_fix: None,
             summary: message,
@@ -113,11 +111,8 @@ pub fn run(args: Args) -> crate::Result<()> {
         println!("{}", serde_json::to_string(&record)?);
     } else {
         println!(
-            "{} {} {} {}",
-            att.body.kind,
-            att.subject,
-            output::format_score(att.body.score),
-            att.body.summary,
+            "{} {} {}",
+            att.body.kind, att.subject, att.body.summary,
         );
         println!("  id: {}", att.id);
         println!("  supersedes: {}", &target_id[..8]);

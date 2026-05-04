@@ -30,23 +30,21 @@ qualifier emit     <type> <subject> --body JSON  Emit a raw record of any type
 `<location>` is a path with an optional span (e.g., `src/auth.rs:42`).
 `<target>` is an id-prefix (≥4 chars) or a `<location>`.
 
-**Analysis:**
+**Inspect:**
 
 ```
-qualifier show     <artifact>              Show annotations and scores
-qualifier score    [artifact...]           Compute and display scores
-qualifier ls       [--below N] [--kind K]  List artifacts by score/kind
-qualifier check    [--min-score N]         CI gate: exit non-zero if below threshold
+qualifier show     <artifact>              Show annotations for an artifact
+qualifier ls       [--kind K]              List artifacts (optionally by kind)
+qualifier praise   <artifact>              Show who annotated and why (alias: blame)
+qualifier graph    [--format dot|json]     Visualize the dependency graph
 qualifier review   [subject]               Check freshness of span-bound annotations
 ```
 
-**Management:**
+**Manage:**
 
 ```
-qualifier compact  <artifact> [options]    Compact a .qual file
-qualifier graph    [--format dot|json]     Visualize the dependency graph
 qualifier init                             Initialize qualifier in a repo
-qualifier praise   <artifact>              Show who attested and why (alias: blame)
+qualifier compact  <artifact> [options]    Compact a .qual file
 ```
 
 All commands that produce output accept `--format json` for machine-readable output.
@@ -78,9 +76,6 @@ qualifier reply src/parser.rs:42 "Good catch, fixed in latest commit"
 
 # Close it
 qualifier resolve a1b2
-
-# Negative score is gone
-qualifier score
 ```
 
 ### Threaded conversations
@@ -89,36 +84,15 @@ qualifier score
 qualifier show src/parser.rs
 
   src/parser.rs
-  Raw score:       5
-  Effective score: 5
 
   Records (4):
-    [-10] concern  L42 "Panics on malformed input"          alice  2026-03-01  a1b2c3d4
-    ├── [   ] comment  "Good catch, fixed in latest commit" bob    2026-03-01  b2c3d4e5
-    └── [  0] resolve  "Resolved"                           alice  2026-03-01  c3d4e5f6
-    [+40] praise       "Excellent property-based test coverage"  bob  2026-02-24  e5f6a7b8
+    concern  L42 "Panics on malformed input"          alice  2026-03-01  a1b2c3d4
+    ├── comment  "Good catch, fixed in latest commit" bob    2026-03-01  b2c3d4e5
+    └── resolve  "Resolved"                           alice  2026-03-01  c3d4e5f6
+    praise       "Excellent property-based test coverage"  bob  2026-02-24  e5f6a7b8
 ```
 
 Replies and resolves are threaded under their parent with tree-drawing characters.
-
-### Default scores by kind
-
-`qualifier record` uses the recommended default score for the given kind
-when `--score` is omitted. `comment` and `resolve` are unscored by default.
-
-| Kind         | Default Score | Use for                             |
-| ------------ | ------------- | ----------------------------------- |
-| `pass`       | +20           | Passes a quality bar                |
-| `praise`     | +30           | Notable quality, exemplary work     |
-| `waiver`     | +10           | Accepted exception                  |
-| `comment`    | unscored      | Observations, questions, discussion |
-| `concern`    | -10           | Non-blocking issues                 |
-| `suggestion` | -5            | Proposed improvements               |
-| `fail`       | -20           | Fails a quality bar                 |
-| `blocker`    | -50           | Critical issues that must be fixed  |
-| `resolve`    | unscored      | Tombstone for resolved annotations  |
-
-`--score N` always takes precedence over the default.
 
 ### Show details for one artifact
 
@@ -126,13 +100,11 @@ when `--score` is omitted. `comment` and `resolve` are unscored by default.
 qualifier show src/parser.rs
 
   src/parser.rs
-  Raw score:       5
-  Effective score: 5
 
   Records (3):
-    [-30] concern     L42–58 "Panics on malformed UTF-8 input"  alice  2026-02-24  a1b2c3d4
-    [+40] praise      "Excellent property-based test coverage"   bob    2026-02-24  e5f6a7b8
-    [ -5] suggestion  "Consider adding fuzzing targets"          carol  2026-02-24  f1f2f3f4
+    concern     L42–58 "Panics on malformed UTF-8 input"  alice  2026-02-24  a1b2c3d4
+    praise      "Excellent property-based test coverage"   bob    2026-02-24  e5f6a7b8
+    suggestion  "Consider adding fuzzing targets"          carol  2026-02-24  f1f2f3f4
 ```
 
 Use `--all` to include resolved/superseded records. Use `--pretty` to force colored output.
@@ -141,7 +113,6 @@ Use `--all` to include resolved/superseded records. Use `--pretty` to force colo
 
 ```bash
 qualifier record concern src/parser.rs "Panics on malformed UTF-8 input" \
-  --score -30 \
   --suggested-fix "Replace .unwrap() on line 42 with error propagation" \
   --tag robustness --tag error-handling \
   --issuer "mailto:alice@example.com" \
@@ -165,32 +136,6 @@ qualifier emit https://example.com/lint/v1 src/parser.rs \
 `emit` is a low-level passthrough: the body is preserved verbatim. For
 `--type annotation`, the body is validated against the annotation schema;
 other types are not validated.
-
-### See scores for all artifacts
-
-```bash
-qualifier score
-
-  ARTIFACT              RAW    EFF   STATUS
-  lib/crypto            -20    -20   ██░░░░░░░░  blocker
-  src/auth.rs           -30    -30   █░░░░░░░░░  blocker
-  lib/http               50     50   ████████░░  healthy
-  src/parser.rs            5      5   ██████░░░░  ok
-  bin/server              50    -30   █░░░░░░░░░  blocker
-```
-
-### CI gating
-
-```bash
-# In your CI pipeline
-qualifier check --min-score 0
-
-# Fails with exit code 1 if any artifact is below threshold
-# Stderr shows which artifacts failed:
-#   FAIL  lib/crypto      eff: -20  (threshold: 0)
-#   FAIL  src/auth.rs     eff: -30  (threshold: 0)
-#   FAIL  bin/server      eff: -30  (threshold: 0)
-```
 
 ### Compact old annotations
 
@@ -228,10 +173,9 @@ qualifier init
   Added *.qual merge=union to .gitattributes
 ```
 
-### List the worst offenders
+### List artifacts
 
 ```bash
-qualifier ls --below 0
 qualifier ls --kind blocker
 qualifier ls --unqualified   # artifacts with no annotations
 ```

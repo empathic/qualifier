@@ -2,7 +2,7 @@
 
 Quality is forensic. Qualifier records who said what about which artifact,
 when, and with what verdict — flags, suggestions, approvals, threads,
-resolutions, scores that propagate through a dependency graph. The visual
+resolutions, signals that propagate through a dependency graph. The visual
 identity has to feel like a manual that earned its precision through use,
 not aesthetic posturing.
 
@@ -42,8 +42,7 @@ chrome, dark grounds, no decorative gradients, an `@layer reset, base,
 layout, components` cascade target. What's distinct: the palette, the body
 type, and the primary visual artifact. Toolpath's distinctive marks are
 copper, the DAG, and FIG_NNN; qualifier's distinctive marks are **indigo**,
-the **graph-paper grid**, the **threaded record output**, and the **score
-readout**.
+the **graph-paper grid**, and the **threaded record output**.
 
 ## Canonical tokens
 
@@ -98,7 +97,7 @@ never used as a neutral fill.
 
 ### Signal palette (the verdict colors)
 
-The signal palette encodes scoring and status. Scoring is core to
+The signal palette encodes annotation kind and status. Verdicts are core to
 qualifier, and the palette is the readout. It is the only place in the
 brand where multiple non-accent colors are permitted, and they are
 allowed only on **status marks** — not on flooded surfaces.
@@ -106,7 +105,7 @@ allowed only on **status marks** — not on flooded surfaces.
 | Token        | Dark        | Light       | Purpose                                       |
 | ------------ | ----------- | ----------- | --------------------------------------------- |
 | `--pass`     | `#34d399`   | `#059669`   | Pass / praise / healthy. Emerald.             |
-| `--pass-dim` | `#34d39920` | `#05966920` | Pass swatch backgrounds, score-bar fills.     |
+| `--pass-dim` | `#34d39920` | `#05966920` | Pass swatch backgrounds, status-bar fills.    |
 | `--warn`     | `#fbbf24`   | `#d97706`   | Warn / suggestion / unqualified. Amber.       |
 | `--warn-dim` | `#fbbf2420` | `#d9770620` | Warn swatch backgrounds.                      |
 | `--fail`     | `#f87171`   | `#dc2626`   | Fail / blocker / concern (severe). Coral.     |
@@ -237,40 +236,25 @@ original. Every render below is a projection of this metaphor.
 ### The threaded show output
 
 `qualifier show <subject>` renders annotations as a tree. Tree-drawing
-characters in `--flint`. Each record line carries a score bracket, a
-kind label, summary, issuer, date, and short ID:
+characters in `--flint`. Each record line carries a kind label, summary,
+issuer, date, and short ID:
 
 ```
-[-30] concern  L42–58 "Panics on malformed input"    alice  2026-02-24  a1b2c3d4
-├── [ 0] comment       "Good catch, fixed"           bob    2026-02-25  b2c3d4e5
-└── [ 0] resolve       "Resolved"                    alice  2026-02-25  c3d4e5f6
-[+40] praise          "Excellent property test coverage"  bob  2026-02-24  e5f6a7b8
+concern  L42–58 "Panics on malformed input"          alice  2026-02-24  a1b2c3d4
+├── comment      "Good catch, fixed"                 bob    2026-02-25  b2c3d4e5
+└── resolve      "Resolved"                          alice  2026-02-25  c3d4e5f6
+praise           "Excellent property test coverage"  bob    2026-02-24  e5f6a7b8
 ```
 
 The render is plain text in monospace; that is the brand. No iconography
 for kinds (the words are the icons), no curved connectors, no color in
-the body of the line — color is reserved for the score bracket and the
-kind label, drawn from the signal palette.
+the body of the line — color is reserved for the kind label, drawn from
+the signal palette.
 
-### The score readout
-
-`qualifier score` renders a table of subjects with raw and effective
-scores plus a status word and a unit-bar:
-
-```
-SUBJECT               RAW    EFF   STATUS
-lib/crypto            -20    -20   ██░░░░░░░░  blocker
-lib/auth               60    -20   ██░░░░░░░░  blocker
-lib/http               80     80   ████████░░  healthy
-bin/server             45    -20   ██░░░░░░░░  blocker
-```
-
-Status words map to the signal palette per spec §4.4: `blocker`/`fail` →
-`--fail`; `unqualified` → `--flint`; `ok`/`info` → `--info` or
-`--chalk`; `healthy`/`pass` → `--pass`. The bar uses the matching
-`*-dim` token as fill and `--ridge` as the empty track. The status word
-**always** appears next to the bar; color alone never carries the
-verdict.
+Kind labels map to the signal palette: `blocker`/`fail` → `--fail`;
+`concern`/`suggestion` → `--warn`; `comment`/`resolve` → `--flint`;
+`pass`/`praise` → `--pass`. The kind word **always** carries the
+verdict; color alone never does.
 
 ### The activity strip (the topo motif)
 
@@ -456,7 +440,7 @@ act of judging.
 | Good                                                                                       | Bad                                                                   |
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
 | An annotation records one observation about one subject by one issuer.                     | Annotations are our flexible way of capturing feedback in the system. |
-| Resolution withdraws a concern's score from the raw total via supersession.                | We provide flexible options for closing out review items.             |
+| Resolution withdraws a concern from the active set via supersession.                       | We provide flexible options for closing out review items.             |
 | When Claude flags an issue and a human replies with a fix, both records share an envelope. | Modern AI workflows can integrate seamlessly with human review.       |
 | Push straight to main. Append-only files merge cleanly because there's nothing to edit.    | Our innovative architecture eliminates merge conflicts.               |
 
@@ -561,9 +545,9 @@ breaks at the first edge case.
 - **Don't use color alone to encode hierarchy.** Reach for size,
   weight, and tracking first. The signal palette pairs with text
   status — color is the last differentiator, not the first.
-- **Don't decorate the threaded render or the score readout.** Those
-  renders are information. No emoji status, no animated edges, no
-  curved connectors, no node icons. Their plainness is the brand.
+- **Don't decorate the threaded render.** That render is information.
+  No emoji status, no animated edges, no curved connectors, no node
+  icons. Its plainness is the brand.
 - **Don't replace the topographic activity strip with a generic
   divider or `<hr>`.** The strip is one of the few marks that
   distinguish qualifier from any other dark-mode mono site.
@@ -596,7 +580,7 @@ selector specificity:
   `.nav-right`, `.nav-links`, `.theme-toggle`, `.nav-menu-btn`,
   `.site-footer`, `.hero`, `.hero-install`, `.try-it-btn`,
   `.code-compare` and friends, `.concepts`, `.concept-card`,
-  `.divider`, `.subtitle`, `.topo-*`, `.kind-badge`, `.score-bar`,
+  `.divider`, `.subtitle`, `.topo-*`, `.kind-badge`,
   `.propagation-figure`, `.spec-content`. Everything in the
   Components section above lives here.
 
@@ -699,7 +683,7 @@ appear only inside `<code>` blocks.
 | Typography   | Instrument Sans display, Atkinson Hyperlegible Next body, JetBrains Mono code     |
 | Hierarchy    | Tracked uppercase mono chrome (10–13px); 16px / 1.6 Atkinson body                 |
 | Container    | 68rem max-width, ~56px nav, 1.5rem gutter, sharp corners                          |
-| Renders      | Threaded show output, score readout, topographic activity strip                   |
+| Renders      | Threaded show output, topographic activity strip                                  |
 | Distinctives | Graph-paper grid, indigo accent dot, signal palette for verdicts                  |
 | Voice        | Direct, precise, observational — the inspector's logbook                          |
 | Cascade      | `@layer reset, base, layout, components` (current)                                |

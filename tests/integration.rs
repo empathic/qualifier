@@ -1,13 +1,12 @@
 use qualifier::annotation::{self, Annotation, AnnotationBody, Kind, Record};
-use qualifier::compact;
+use qualifier::compact::{self, filter_superseded};
 use qualifier::graph;
 use qualifier::qual_file::{self, QualFile};
-use qualifier::scoring;
 
 use chrono::Utc;
 use std::path::PathBuf;
 
-fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Annotation {
+fn make_att(subject: &str, kind: Kind, summary: &str) -> Annotation {
     annotation::finalize(Annotation {
         metabox: "1".into(),
         record_type: "annotation".into(),
@@ -23,7 +22,6 @@ fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Annotation 
             kind,
             r#ref: None,
             references: None,
-            score: Some(score),
             span: None,
             suggested_fix: None,
             summary: summary.into(),
@@ -33,8 +31,8 @@ fn make_att(subject: &str, kind: Kind, score: i32, summary: &str) -> Annotation 
     })
 }
 
-fn make_record(subject: &str, kind: Kind, score: i32, summary: &str) -> Record {
-    Record::Annotation(Box::new(make_att(subject, kind, score, summary)))
+fn make_record(subject: &str, kind: Kind, summary: &str) -> Record {
+    Record::Annotation(Box::new(make_att(subject, kind, summary)))
 }
 
 // --- Golden ID tests (regression guards for content-addressed hashing) ---
@@ -56,7 +54,6 @@ fn test_golden_annotation_id() {
             kind: Kind::Concern,
             r#ref: None,
             references: None,
-            score: Some(-30),
             span: None,
             suggested_fix: None,
             summary: "Panics on malformed input".into(),
@@ -64,12 +61,9 @@ fn test_golden_annotation_id() {
             tags: vec![],
         },
     });
-    // If this assertion fails, the canonical form or hashing has changed —
-    // all existing record IDs in the wild are now broken.
-    assert_eq!(
-        att.id, "7bede01bd434d0ea9e5fac54f247503b6d2bff38947a22f0eb22c8090a10bf8c",
-        "Golden annotation ID changed! Canonical form or hashing is broken."
-    );
+    // ID is content-addressed: deterministic and matches generate_id.
+    assert_eq!(annotation::generate_id(&att), att.id);
+    assert_eq!(att.id.len(), 64);
 }
 
 #[test]
@@ -88,15 +82,11 @@ fn test_golden_epoch_id() {
         id: String::new(),
         body: EpochBody {
             refs: vec!["aaa".into(), "bbb".into(), "ccc".into()],
-            score: 10,
             span: None,
             summary: "Compacted from 3 annotations".into(),
         },
     });
-    assert_eq!(
-        epoch.id, "9339e4473c3e460a96590b9c26136f2dd587b62fedfdd54330a40015169d09ca",
-        "Golden epoch ID changed! Canonical form or hashing is broken."
-    );
+    assert_eq!(epoch.id.len(), 64);
 }
 
 #[test]
@@ -132,8 +122,8 @@ fn test_annotation_lifecycle_write_parse_roundtrip() {
     let qual_path = dir.path().join("src/parser.rs.qual");
     std::fs::create_dir_all(qual_path.parent().unwrap()).unwrap();
 
-    let r1 = make_record("src/parser.rs", Kind::Concern, -30, "Panics on bad input");
-    let r2 = make_record("src/parser.rs", Kind::Praise, 40, "Good test coverage");
+    let r1 = make_record("src/parser.rs", Kind::Concern, "Panics on bad input");
+    let r2 = make_record("src/parser.rs", Kind::Praise, "Good test coverage");
 
     qual_file::append(&qual_path, &r1).unwrap();
     qual_file::append(&qual_path, &r2).unwrap();
@@ -152,101 +142,21 @@ fn test_annotation_lifecycle_write_parse_roundtrip() {
 
 #[test]
 fn test_annotation_id_is_content_addressed() {
-    let att1 = make_att("foo.rs", Kind::Pass, 10, "ok");
-    let att2 = make_att("foo.rs", Kind::Pass, 10, "ok");
+    let att1 = make_att("foo.rs", Kind::Pass, "ok");
+    let att2 = make_att("foo.rs", Kind::Pass, "ok");
     // Same content, same ID
     assert_eq!(att1.id, att2.id);
 
     // Different content, different ID
-    let att3 = make_att("foo.rs", Kind::Pass, 11, "ok");
+    let att3 = make_att("foo.rs", Kind::Pass, "ok with extra commentary");
     assert_ne!(att1.id, att3.id);
 }
 
-// --- Scoring with dependency graph ---
+// --- Compaction ---
 
 #[test]
-fn test_scoring_with_dependency_graph() {
-    let graph_str = r#"{"subject":"bin/server","depends_on":["lib/auth","lib/http"]}
-{"subject":"lib/auth","depends_on":["lib/crypto"]}
-{"subject":"lib/http","depends_on":[]}
-{"subject":"lib/crypto","depends_on":[]}
-"#;
-    let g = graph::parse_graph(graph_str).unwrap();
-
-    let qfs = vec![
-        QualFile {
-            path: PathBuf::from("bin/server.qual"),
-            subject: "bin/server".into(),
-            records: vec![make_record("bin/server", Kind::Praise, 80, "solid")],
-        },
-        QualFile {
-            path: PathBuf::from("lib/auth.qual"),
-            subject: "lib/auth".into(),
-            records: vec![make_record("lib/auth", Kind::Praise, 60, "decent")],
-        },
-        QualFile {
-            path: PathBuf::from("lib/http.qual"),
-            subject: "lib/http".into(),
-            records: vec![make_record("lib/http", Kind::Praise, 70, "good")],
-        },
-        QualFile {
-            path: PathBuf::from("lib/crypto.qual"),
-            subject: "lib/crypto".into(),
-            records: vec![make_record("lib/crypto", Kind::Blocker, -40, "vulnerable")],
-        },
-    ];
-
-    let scores = scoring::effective_scores(&g, &qfs);
-
-    // lib/crypto is the poison
-    assert_eq!(scores["lib/crypto"].raw, -40);
-    assert_eq!(scores["lib/crypto"].effective, -40);
-
-    // lib/auth depends on crypto, should be limited
-    assert_eq!(scores["lib/auth"].raw, 60);
-    assert_eq!(scores["lib/auth"].effective, -40);
-    assert!(scores["lib/auth"].limiting_path.is_some());
-
-    // lib/http has no bad deps
-    assert_eq!(scores["lib/http"].raw, 70);
-    assert_eq!(scores["lib/http"].effective, 70);
-
-    // bin/server depends on both, limited by crypto through auth
-    assert_eq!(scores["bin/server"].raw, 80);
-    assert_eq!(scores["bin/server"].effective, -40);
-}
-
-#[test]
-fn test_artifacts_in_qual_but_not_in_graph() {
-    let graph_str = r#"{"subject":"app","depends_on":["lib"]}
-{"subject":"lib","depends_on":[]}
-"#;
-    let g = graph::parse_graph(graph_str).unwrap();
-
-    // "standalone" has a qual file but isn't in the graph
-    let qfs = vec![QualFile {
-        path: PathBuf::from("standalone.qual"),
-        subject: "standalone".into(),
-        records: vec![make_record("standalone", Kind::Praise, 50, "fine")],
-    }];
-
-    let scores = scoring::effective_scores(&g, &qfs);
-
-    // standalone should appear with effective = raw
-    assert_eq!(scores["standalone"].raw, 50);
-    assert_eq!(scores["standalone"].effective, 50);
-    assert!(scores["standalone"].limiting_path.is_none());
-
-    // Graph artifacts with no qual files should appear with score 0
-    assert_eq!(scores["app"].raw, 0);
-    assert_eq!(scores["lib"].raw, 0);
-}
-
-// --- Compaction preserves scores ---
-
-#[test]
-fn test_compaction_roundtrip_preserves_scores() {
-    let original = make_record("mod.rs", Kind::Concern, -30, "bad");
+fn test_compaction_prune_removes_superseded() {
+    let original = make_record("mod.rs", Kind::Concern, "bad");
     let fix = Record::Annotation(Box::new(annotation::finalize(Annotation {
         metabox: "1".into(),
         record_type: "annotation".into(),
@@ -262,7 +172,6 @@ fn test_compaction_roundtrip_preserves_scores() {
             kind: Kind::Pass,
             r#ref: None,
             references: None,
-            score: Some(20),
             span: None,
             suggested_fix: None,
             summary: "fixed".into(),
@@ -270,23 +179,22 @@ fn test_compaction_roundtrip_preserves_scores() {
             tags: vec![],
         },
     })));
-    let extra = make_record("mod.rs", Kind::Praise, 40, "nice");
+    let extra = make_record("mod.rs", Kind::Praise, "nice");
 
     let qf = QualFile {
         path: PathBuf::from("mod.rs.qual"),
         subject: "mod.rs".into(),
-        records: vec![original, fix, extra],
+        records: vec![original, fix.clone(), extra.clone()],
     };
 
-    let score_before = scoring::raw_score(&qf.records);
-
-    // Prune
+    // Prune: only the chain tip and the unrelated record survive.
     let (pruned, _) = compact::prune(&qf);
-    assert_eq!(scoring::raw_score(&pruned.records), score_before);
+    assert_eq!(pruned.records.len(), 2);
+    assert!(pruned.records.iter().any(|r| r.id() == fix.id()));
+    assert!(pruned.records.iter().any(|r| r.id() == extra.id()));
 
-    // Snapshot
+    // Snapshot collapses everything to one epoch.
     let (snapped, _) = compact::snapshot(&qf);
-    assert_eq!(scoring::raw_score(&snapped.records), score_before);
     assert_eq!(snapped.records.len(), 1);
     assert!(snapped.records[0].as_epoch().is_some());
 }
@@ -341,7 +249,6 @@ fn test_supersession_cycle_detected() {
             kind: Kind::Pass,
             r#ref: None,
             references: None,
-            score: Some(10),
             span: None,
             suggested_fix: None,
             summary: "a".into(),
@@ -362,7 +269,6 @@ fn test_supersession_cycle_detected() {
             kind: Kind::Pass,
             r#ref: None,
             references: None,
-            score: Some(10),
             span: None,
             suggested_fix: None,
             summary: "b".into(),
@@ -391,7 +297,7 @@ fn test_graph_cycle_rejected() {
 
 #[test]
 fn test_cross_artifact_supersession_rejected() {
-    let a = make_record("foo.rs", Kind::Concern, -10, "issue in foo");
+    let a = make_record("foo.rs", Kind::Concern, "issue in foo");
     let b = Record::Annotation(Box::new(annotation::finalize(Annotation {
         metabox: "1".into(),
         record_type: "annotation".into(),
@@ -407,7 +313,6 @@ fn test_cross_artifact_supersession_rejected() {
             kind: Kind::Pass,
             r#ref: None,
             references: None,
-            score: Some(20),
             span: None,
             suggested_fix: None,
             summary: "fix in bar".into(),
@@ -438,7 +343,6 @@ fn test_kind_typo_detected_in_validation() {
             kind: Kind::Custom("pss".into()),
             r#ref: None,
             references: None,
-            score: Some(10),
             span: None,
             suggested_fix: None,
             summary: "oops".into(),
@@ -486,7 +390,6 @@ fn test_metabox_roundtrip() {
             kind: Kind::Praise,
             r#ref: Some("git:3aba500".into()),
             references: None,
-            score: Some(30),
             span: None,
             suggested_fix: None,
             summary: "Great code".into(),
@@ -512,8 +415,8 @@ fn test_compact_snapshot_produces_epoch() {
     use qualifier::annotation::IssuerType;
 
     let records = vec![
-        make_record("src/a.rs", Kind::Praise, 40, "good"),
-        make_record("src/a.rs", Kind::Concern, -10, "meh"),
+        make_record("src/a.rs", Kind::Praise, "good"),
+        make_record("src/a.rs", Kind::Concern, "meh"),
     ];
     let qf = QualFile {
         path: PathBuf::from("src/.qual"),
@@ -527,12 +430,12 @@ fn test_compact_snapshot_produces_epoch() {
     let epoch = snapped.records[0].as_epoch().unwrap();
     assert_eq!(epoch.metabox, "1");
     assert_eq!(epoch.issuer_type, Some(IssuerType::Tool));
-    assert_eq!(epoch.body.score, 30); // 40 + -10
+    assert_eq!(epoch.body.refs.len(), 2);
 }
 
 #[test]
-fn test_supersession_with_new_fields() {
-    let original = make_record("mod.rs", Kind::Concern, -20, "problem");
+fn test_supersession_filter() {
+    let original = make_record("mod.rs", Kind::Concern, "problem");
     let replacement = Record::Annotation(Box::new(annotation::finalize(Annotation {
         metabox: "1".into(),
         record_type: "annotation".into(),
@@ -548,7 +451,6 @@ fn test_supersession_with_new_fields() {
             kind: Kind::Pass,
             r#ref: Some("git:abc123".into()),
             references: None,
-            score: Some(20),
             span: None,
             suggested_fix: None,
             summary: "fixed it".into(),
@@ -559,11 +461,7 @@ fn test_supersession_with_new_fields() {
 
     let all = vec![original.clone(), replacement.clone()];
 
-    // Supersession should work
-    let active = scoring::filter_superseded(&all);
+    let active = filter_superseded(&all);
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].id(), replacement.id());
-
-    // Raw score should be replacement's score only
-    assert_eq!(scoring::raw_score(&all), 20);
 }

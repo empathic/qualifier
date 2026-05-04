@@ -4,7 +4,6 @@ use std::io::{self, BufRead};
 use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
-use crate::cli::output;
 use crate::content_hash;
 use crate::qual_file;
 
@@ -23,12 +22,6 @@ pub struct Args {
     /// One-line summary message. Becomes `body.summary`.
     /// Required (in non-interactive mode) unless --stdin is used.
     pub message: Option<String>,
-
-    /// Quality score override (-100..=100). Defaults to the recommended
-    /// score for the kind (per spec §2.7.1). `comment` and `resolve` remain
-    /// unscored unless --score is explicit.
-    #[arg(long, allow_hyphen_values = true)]
-    pub score: Option<i32>,
 
     /// Extended description.
     #[arg(long)]
@@ -63,7 +56,7 @@ pub struct Args {
     #[arg(long)]
     pub supersedes: Option<String>,
 
-    /// ID of a related annotation (conversational reference, no scoring impact).
+    /// ID of a related annotation (conversational reference).
     #[arg(long)]
     pub references: Option<String>,
 
@@ -114,8 +107,6 @@ pub fn run(args: Args) -> crate::Result<()> {
         s.content_hash = Some(hash);
     }
 
-    let score = resolve_score(&kind, args.score);
-
     let issuer = normalize_issuer_uri(
         args.issuer
             .or_else(detect_issuer)
@@ -142,7 +133,6 @@ pub fn run(args: Args) -> crate::Result<()> {
             kind,
             r#ref: args.r#ref,
             references: args.references,
-            score,
             span,
             suggested_fix: args.suggested_fix,
             summary: message,
@@ -186,12 +176,8 @@ pub fn run(args: Args) -> crate::Result<()> {
             None => String::new(),
         };
         println!(
-            "{} {}{} {} {}",
-            att.body.kind,
-            att.subject,
-            span_str,
-            output::format_score(att.body.score),
-            att.body.summary,
+            "{} {}{} {}",
+            att.body.kind, att.subject, span_str, att.body.summary,
         );
         println!("  id: {}", att.id);
     }
@@ -211,7 +197,7 @@ fn run_batch() -> crate::Result<()> {
         }
 
         // Each line is one of:
-        // - A record overrides object: {kind, location, message, score?, detail?, ...}
+        // - A record overrides object: {kind, location, message, detail?, ...}
         // - A complete record (envelope + body) for forward-compat.
         let value: serde_json::Value = serde_json::from_str(trimmed)?;
 
@@ -287,9 +273,6 @@ fn build_record_from_overrides(value: serde_json::Value) -> crate::Result<Record
         s.content_hash = Some(hash);
     }
 
-    let explicit_score = obj.get("score").and_then(|v| v.as_i64()).map(|i| i as i32);
-    let score = resolve_score(&kind, explicit_score);
-
     let issuer = normalize_issuer_uri(
         obj.get("issuer")
             .and_then(|v| v.as_str())
@@ -340,7 +323,6 @@ fn build_record_from_overrides(value: serde_json::Value) -> crate::Result<Record
             kind,
             r#ref,
             references,
-            score,
             span,
             suggested_fix,
             summary: message.to_string(),
@@ -350,21 +332,6 @@ fn build_record_from_overrides(value: serde_json::Value) -> crate::Result<Record
     });
 
     Ok(Record::Annotation(Box::new(att)))
-}
-
-/// Resolve the score for an annotation given the kind and an explicit override.
-///
-/// - If `explicit` is `Some(n)`, return `Some(n)`.
-/// - For `comment` and `resolve`, return `None` (unscored by default).
-/// - Otherwise return `Some(kind.default_score())` per spec §2.7.1.
-pub fn resolve_score(kind: &Kind, explicit: Option<i32>) -> Option<i32> {
-    if let Some(n) = explicit {
-        return Some(n);
-    }
-    match kind {
-        Kind::Comment | Kind::Resolve => None,
-        _ => Some(kind.default_score()),
-    }
 }
 
 /// Detect the issuer identity from VCS configuration.

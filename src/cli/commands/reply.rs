@@ -4,9 +4,8 @@ use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record, Span};
 use crate::cli::commands::record::{detect_issuer, normalize_issuer_uri};
-use crate::cli::output;
+use crate::compact::filter_superseded;
 use crate::qual_file;
-use crate::scoring;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -21,10 +20,6 @@ pub struct Args {
     /// Override the default kind (comment)
     #[arg(long)]
     pub kind: Option<String>,
-
-    /// Quality score override (-100..=100)
-    #[arg(long, allow_hyphen_values = true)]
-    pub score: Option<i32>,
 
     /// Extended description
     #[arg(long)]
@@ -138,7 +133,7 @@ fn resolve_location_target(
         .iter()
         .flat_map(|qf| qf.records.iter().cloned())
         .collect();
-    let active = scoring::filter_superseded(&all);
+    let active = filter_superseded(&all);
     let active_ids: std::collections::HashSet<&str> = active.iter().map(|r| r.id()).collect();
 
     // Filter to records matching subject and (if specified) span overlap.
@@ -230,7 +225,6 @@ pub fn run(args: Args) -> crate::Result<()> {
     let target_id = target.id().to_string();
 
     let kind: Kind = args.kind.as_deref().unwrap_or("comment").parse().unwrap();
-    let score = args.score;
 
     let issuer = normalize_issuer_uri(
         args.issuer
@@ -258,7 +252,6 @@ pub fn run(args: Args) -> crate::Result<()> {
             kind,
             r#ref: args.r#ref,
             references: Some(target_id),
-            score,
             span: None,
             suggested_fix: args.suggested_fix,
             summary: args.message,
@@ -292,11 +285,8 @@ pub fn run(args: Args) -> crate::Result<()> {
         println!("{}", serde_json::to_string(&record)?);
     } else {
         println!(
-            "{} {} {} {}",
-            att.body.kind,
-            att.subject,
-            output::format_score(att.body.score),
-            att.body.summary,
+            "{} {} {}",
+            att.body.kind, att.subject, att.body.summary,
         );
         println!("  id: {}", att.id);
         println!("  re: {}", &att.body.references.as_ref().unwrap()[..8]);

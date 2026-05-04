@@ -2,9 +2,9 @@ use std::path::Path;
 
 use clap::Args as ClapArgs;
 
+use crate::compact::filter_superseded;
 use crate::content_hash::{self, FreshnessStatus};
 use crate::qual_file;
-use crate::scoring;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -48,7 +48,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         .iter()
         .flat_map(|qf| qf.records.iter().cloned())
         .collect();
-    let active = scoring::filter_superseded(&all_owned);
+    let active = filter_superseded(&all_owned);
     let active_ids: std::collections::HashSet<&str> = active.iter().map(|r| r.id()).collect();
 
     let mut results = Vec::new();

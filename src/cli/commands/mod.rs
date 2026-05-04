@@ -1,4 +1,3 @@
-pub mod check;
 pub mod compact;
 pub mod emit;
 pub mod freshness;
@@ -10,5 +9,4 @@ pub mod praise;
 pub mod record;
 pub mod reply;
 pub mod resolve;
-pub mod score;
 pub mod show;

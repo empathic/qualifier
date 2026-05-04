@@ -4,8 +4,8 @@ use std::path::Path;
 use crate::annotation::Kind;
 use crate::cli::output;
 use crate::cli::span_context;
+use crate::compact::filter_superseded;
 use crate::qual_file::{self, find_project_root};
-use crate::scoring;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -15,10 +15,6 @@ pub struct Args {
     /// Output format (human, json)
     #[arg(long, default_value = "human")]
     pub format: String,
-
-    /// Path to the dependency graph file
-    #[arg(long)]
-    pub graph: Option<String>,
 
     /// Disable .gitignore and .qualignore filtering
     #[arg(long)]
@@ -40,7 +36,6 @@ pub struct Args {
 
 pub fn run(args: Args) -> crate::Result<()> {
     let root = find_project_root(Path::new("."));
-    let graph = crate::cli::config::load_graph(args.graph.as_deref(), root.as_deref());
     let discover_root = root.as_deref().unwrap_or(Path::new("."));
     let all_qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
 
@@ -53,23 +48,14 @@ pub fn run(args: Args) -> crate::Result<()> {
         )));
     }
 
-    let scores = scoring::effective_scores(&graph, &all_qual_files);
     let owned_records: Vec<crate::annotation::Record> =
         records.iter().map(|r| (*r).clone()).collect();
-    let report = scores
-        .get(&args.artifact)
-        .cloned()
-        .unwrap_or(scoring::ScoreReport {
-            raw: scoring::raw_score(&owned_records),
-            effective: scoring::raw_score(&owned_records),
-            limiting_path: None,
-        });
 
     // Filter records for display: remove superseded, and unless --all, remove resolve tombstones
     let mut display_records: Vec<crate::annotation::Record> = if args.all {
         owned_records.clone()
     } else {
-        let active = scoring::filter_superseded(&owned_records);
+        let active = filter_superseded(&owned_records);
         active
             .into_iter()
             .filter(|r| r.kind() != Some(&Kind::Resolve))
@@ -84,11 +70,8 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     if args.format == "json" {
         if args.pretty {
-            let mut value: serde_json::Value = serde_json::from_str(&output::show_json(
-                &args.artifact,
-                &report,
-                &display_records,
-            ))?;
+            let mut value: serde_json::Value =
+                serde_json::from_str(&output::show_json(&args.artifact, &display_records))?;
             if let Some(records_arr) = value["records"].as_array_mut() {
                 for rec_val in records_arr.iter_mut() {
                     if let Some(span_val) = rec_val.get("body").and_then(|b| b.get("span"))
@@ -110,10 +93,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             }
             println!("{}", serde_json::to_string_pretty(&value)?);
         } else {
-            println!(
-                "{}",
-                output::show_json(&args.artifact, &report, &display_records)
-            );
+            println!("{}", output::show_json(&args.artifact, &display_records));
         }
         return Ok(());
     }
@@ -121,16 +101,6 @@ pub fn run(args: Args) -> crate::Result<()> {
     // Human output
     println!();
     println!("  {}", args.artifact);
-    println!("  Raw score:       {}", report.raw);
-    if let Some(ref path) = report.limiting_path {
-        println!(
-            "  Effective score: {} (limited by {})",
-            report.effective,
-            path.join(" -> ")
-        );
-    } else {
-        println!("  Effective score: {}", report.effective);
-    }
 
     // Build threading: group replies under their parent record
     let display_ids: std::collections::HashSet<&str> =
@@ -187,13 +157,8 @@ fn print_record(
             .unwrap_or(&att.issuer);
         let id_short = &att.id[..8.min(att.id.len())];
         println!(
-            "{line_prefix}{} {}  {:?}  {}  {}  {}",
-            output::format_score(att.body.score),
-            att.body.kind,
-            att.body.summary,
-            issuer_short,
-            date,
-            id_short,
+            "{line_prefix}{}  {:?}  {}  {}  {}",
+            att.body.kind, att.body.summary, issuer_short, date, id_short,
         );
         if args.pretty
             && let Some(ref span) = att.body.span
@@ -217,12 +182,8 @@ fn print_record(
         let date = epoch.created_at.format("%Y-%m-%d");
         let id_short = &epoch.id[..8.min(epoch.id.len())];
         println!(
-            "{line_prefix}{} epoch  {:?}  {}  {}  {}",
-            output::format_score(Some(epoch.body.score)),
-            epoch.body.summary,
-            epoch.issuer,
-            date,
-            id_short,
+            "{line_prefix}epoch  {:?}  {}  {}  {}",
+            epoch.body.summary, epoch.issuer, date, id_short,
         );
     } else if matches!(record, crate::annotation::Record::Dependency(_)) {
         // Dependency records are graph metadata, not quality signals.
@@ -241,7 +202,7 @@ fn print_record(
         } else {
             type_str
         };
-        println!("{line_prefix}[---] {type_display}  {id_short}");
+        println!("{line_prefix}{type_display}  {id_short}");
     }
 
     // Print threaded replies with tree-drawing characters

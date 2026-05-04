@@ -300,7 +300,7 @@ mod tests {
     use chrono::Utc;
     use std::fs;
 
-    fn make_annotation(subject: &str, kind: Kind, score: i32, summary: &str) -> Annotation {
+    fn make_annotation(subject: &str, kind: Kind, summary: &str) -> Annotation {
         annotation::finalize(Annotation {
             metabox: "1".into(),
             record_type: "annotation".into(),
@@ -316,7 +316,6 @@ mod tests {
                 kind,
                 r#ref: None,
                 references: None,
-                score: Some(score),
                 span: None,
                 suggested_fix: None,
                 summary: summary.into(),
@@ -326,8 +325,8 @@ mod tests {
         })
     }
 
-    fn make_record(subject: &str, kind: Kind, score: i32, summary: &str) -> Record {
-        Record::Annotation(Box::new(make_annotation(subject, kind, score, summary)))
+    fn make_record(subject: &str, kind: Kind, summary: &str) -> Record {
+        Record::Annotation(Box::new(make_annotation(subject, kind, summary)))
     }
 
     #[test]
@@ -347,8 +346,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let qual_path = dir.path().join("test.rs.qual");
 
-        let r1 = make_record("test.rs", Kind::Praise, 40, "Good tests");
-        let r2 = make_record("test.rs", Kind::Concern, -20, "Missing docs");
+        let r1 = make_record("test.rs", Kind::Praise, "Good tests");
+        let r2 = make_record("test.rs", Kind::Concern, "Missing docs");
 
         append(&qual_path, &r1).unwrap();
         append(&qual_path, &r2).unwrap();
@@ -374,7 +373,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let qual_path = dir.path().join("test.rs.qual");
 
-        let att = make_annotation("test.rs", Kind::Pass, 10, "ok");
+        let att = make_annotation("test.rs", Kind::Pass, "ok");
         let json = serde_json::to_string(&att).unwrap();
 
         fs::write(
@@ -393,8 +392,8 @@ mod tests {
         let src = dir.path().join("src");
         fs::create_dir_all(&src).unwrap();
 
-        let r1 = make_record("src/a.rs", Kind::Pass, 10, "ok");
-        let r2 = make_record("src/b.rs", Kind::Fail, -10, "bad");
+        let r1 = make_record("src/a.rs", Kind::Pass, "ok");
+        let r2 = make_record("src/b.rs", Kind::Fail, "bad");
 
         append(&src.join("a.rs.qual"), &r1).unwrap();
         append(&src.join("b.rs.qual"), &r2).unwrap();
@@ -412,7 +411,7 @@ mod tests {
         let hidden = dir.path().join(".git");
         fs::create_dir_all(&hidden).unwrap();
 
-        let r = make_record("x", Kind::Pass, 10, "ok");
+        let r = make_record("x", Kind::Pass, "ok");
         append(&hidden.join("x.qual"), &r).unwrap();
 
         let found = discover(dir.path(), true).unwrap();
@@ -427,8 +426,8 @@ mod tests {
         fs::create_dir_all(&src).unwrap();
         fs::create_dir_all(&examples).unwrap();
 
-        let r1 = make_record("src/a.rs", Kind::Pass, 10, "ok");
-        let r2 = make_record("examples/demo.rs", Kind::Pass, 10, "ok");
+        let r1 = make_record("src/a.rs", Kind::Pass, "ok");
+        let r2 = make_record("examples/demo.rs", Kind::Pass, "ok");
 
         append(&src.join("a.rs.qual"), &r1).unwrap();
         append(&examples.join("demo.rs.qual"), &r2).unwrap();
@@ -454,8 +453,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let qual_path = dir.path().join("test.rs.qual");
 
-        let r1 = make_record("test.rs", Kind::Praise, 40, "Good");
-        let r2 = make_record("test.rs", Kind::Concern, -20, "Bad");
+        let r1 = make_record("test.rs", Kind::Praise, "Good");
+        let r2 = make_record("test.rs", Kind::Concern, "Bad");
         let id1 = r1.id().to_string();
         let id2 = r2.id().to_string();
 
@@ -543,9 +542,9 @@ mod tests {
 
     #[test]
     fn test_find_annotations_for_across_files() {
-        let att_a1 = make_annotation("src/a.rs", Kind::Praise, 40, "good");
-        let att_a2 = make_annotation("src/a.rs", Kind::Concern, -10, "meh");
-        let att_b = make_annotation("src/b.rs", Kind::Pass, 20, "ok");
+        let att_a1 = make_annotation("src/a.rs", Kind::Praise, "good");
+        let att_a2 = make_annotation("src/a.rs", Kind::Concern, "meh");
+        let att_b = make_annotation("src/b.rs", Kind::Pass, "ok");
 
         let qfs = vec![
             QualFile {
