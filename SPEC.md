@@ -1,6 +1,6 @@
 # Qualifier Specification
 
-**Version:** 0.3.0-draft
+**Version:** 0.4.0
 **Status:** Draft
 **Authors:** Alex Kesling
 
@@ -1135,7 +1135,7 @@ qualifier praise src/parser.rs --vcs
 ## 7. Library API
 
 The `qualifier` crate exposes its library API from `src/lib.rs`. Library
-consumers add `qualifier = { version = "0.3", default-features = false }` to
+consumers add `qualifier = { version = "0.4", default-features = false }` to
 avoid pulling in CLI dependencies.
 
 ```rust
