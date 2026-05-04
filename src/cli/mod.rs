@@ -24,11 +24,9 @@ Inspect annotations:
   show       Show annotations for an artifact
   ls         List artifacts by kind
   praise     Show who annotated an artifact and why (alias: blame)
-  graph      Visualize the dependency graph
   review     Check freshness of annotations against current code
 
-Manage a repository:
-  init       Initialize qualifier in a repository
+Maintain:
   compact    Compact a .qual file
 
 Other:
@@ -71,13 +69,9 @@ pub enum Commands {
     /// Show who annotated an artifact and why
     #[command(alias = "blame")]
     Praise(commands::praise::Args),
-    /// Visualize the dependency graph
-    Graph(commands::graph_cmd::Args),
     /// Check freshness of annotations against current code
     Review(commands::freshness::Args),
 
-    /// Initialize qualifier in a repository
-    Init,
     /// Compact a .qual file
     Compact(commands::compact::Args),
 
@@ -105,12 +99,10 @@ pub fn run() {
         Commands::Show(args) => commands::show::run(args),
         Commands::Ls(args) => commands::ls::run(args),
         Commands::Compact(args) => commands::compact::run(args),
-        Commands::Graph(args) => commands::graph_cmd::run(args),
         Commands::Haiku => {
             commands::haiku::run();
             Ok(())
         }
-        Commands::Init => commands::init::run(),
         Commands::Praise(args) => commands::praise::run(args),
         Commands::Review(args) => commands::freshness::run(args),
     };

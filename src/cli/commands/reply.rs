@@ -284,10 +284,7 @@ pub fn run(args: Args) -> crate::Result<()> {
     if args.format == "json" {
         println!("{}", serde_json::to_string(&record)?);
     } else {
-        println!(
-            "{} {} {}",
-            att.body.kind, att.subject, att.body.summary,
-        );
+        println!("{} {} {}", att.body.kind, att.subject, att.body.summary,);
         println!("  id: {}", att.id);
         println!("  re: {}", &att.body.references.as_ref().unwrap()[..8]);
     }

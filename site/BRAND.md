@@ -452,7 +452,7 @@ Qualifier is primarily a CLI. Three surfaces need brand discipline:
 fix. One sentence each.
 
 ```
-Good:  error: no .qual file for src/parser.rs (run `qualifier init` to bootstrap)
+Good:  error: no .qual file for src/parser.rs (record an annotation to create one)
 Bad:   Error: An issue was encountered while attempting to locate the qualifier file.
 ```
 

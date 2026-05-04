@@ -13,10 +13,6 @@ use std::path::{Path, PathBuf};
 /// 5. Defaults
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Path to the dependency graph file.
-    #[serde(default = "default_graph_path")]
-    pub graph: PathBuf,
-
     /// Default issuer for annotations.
     #[serde(default)]
     pub issuer: Option<String>,
@@ -26,10 +22,6 @@ pub struct Config {
     pub format: String,
 }
 
-fn default_graph_path() -> PathBuf {
-    PathBuf::from("qualifier.graph.jsonl")
-}
-
 fn default_format() -> String {
     "human".into()
 }
@@ -37,7 +29,6 @@ fn default_format() -> String {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            graph: default_graph_path(),
             issuer: None,
             format: default_format(),
         }
@@ -63,31 +54,8 @@ pub fn load(project_root: Option<&Path>) -> Config {
         figment = figment.merge(Toml::file(project_config));
     }
 
-    // Environment variables: QUALIFIER_GRAPH, QUALIFIER_ISSUER, etc.
+    // Environment variables: QUALIFIER_ISSUER, QUALIFIER_FORMAT, etc.
     figment = figment.merge(Env::prefixed("QUALIFIER_"));
 
     figment.extract().unwrap_or_default()
-}
-
-/// Load the dependency graph, falling back to an empty graph.
-///
-/// If `explicit_path` is set, loads from that path.
-/// Otherwise looks for `qualifier.graph.jsonl` under `root`.
-pub fn load_graph(
-    explicit_path: Option<&str>,
-    root: Option<&Path>,
-) -> crate::graph::DependencyGraph {
-    if let Some(path) = explicit_path {
-        crate::graph::load(Path::new(path))
-            .unwrap_or_else(|_| crate::graph::DependencyGraph::empty())
-    } else if let Some(root) = root {
-        let default = root.join("qualifier.graph.jsonl");
-        if default.exists() {
-            crate::graph::load(&default).unwrap_or_else(|_| crate::graph::DependencyGraph::empty())
-        } else {
-            crate::graph::DependencyGraph::empty()
-        }
-    } else {
-        crate::graph::DependencyGraph::empty()
-    }
 }

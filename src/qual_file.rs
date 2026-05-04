@@ -244,10 +244,9 @@ pub fn subject_name(qual_path: &Path) -> String {
     }
 }
 
-/// Find the project root by searching upward for VCS markers or qualifier.graph.jsonl.
+/// Find the project root by searching upward for VCS markers.
 pub fn find_project_root(start: &Path) -> Option<PathBuf> {
     const VCS_MARKERS: &[&str] = &[".git", ".hg", ".jj", ".pijul", "_FOSSIL_", ".svn"];
-    const QUALIFIER_MARKER: &str = "qualifier.graph.jsonl";
 
     let mut current = if start.is_file() {
         start.parent()?.to_path_buf()
@@ -256,17 +255,11 @@ pub fn find_project_root(start: &Path) -> Option<PathBuf> {
     };
 
     loop {
-        // Check for qualifier marker first
-        if current.join(QUALIFIER_MARKER).exists() {
-            return Some(current);
-        }
-        // Then VCS markers
         for marker in VCS_MARKERS {
             if current.join(marker).exists() {
                 return Some(current);
             }
         }
-        // Move up
         match current.parent() {
             Some(parent) if parent != current => current = parent.to_path_buf(),
             _ => return None,

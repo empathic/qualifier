@@ -124,11 +124,7 @@ fn run_records(args: Args) -> crate::Result<()> {
             } else {
                 epoch.id.clone()
             };
-            println!(
-                "    {:<10} {:?}",
-                "epoch",
-                epoch.body.summary,
-            );
+            println!("    {:<10} {:?}", "epoch", epoch.body.summary,);
             let issuer_type_suffix = match &epoch.issuer_type {
                 Some(at) if *at != crate::annotation::IssuerType::Human => {
                     format!("  ({})", at)

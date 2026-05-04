@@ -1,9 +1,7 @@
 pub mod compact;
 pub mod emit;
 pub mod freshness;
-pub mod graph_cmd;
 pub mod haiku;
-pub mod init;
 pub mod ls;
 pub mod praise;
 pub mod record;

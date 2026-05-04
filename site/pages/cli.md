@@ -36,14 +36,12 @@ qualifier emit     <type> <subject> --body JSON  Emit a raw record of any type
 qualifier show     <artifact>              Show annotations for an artifact
 qualifier ls       [--kind K]              List artifacts (optionally by kind)
 qualifier praise   <artifact>              Show who annotated and why (alias: blame)
-qualifier graph    [--format dot|json]     Visualize the dependency graph
 qualifier review   [subject]               Check freshness of span-bound annotations
 ```
 
-**Manage:**
+**Maintain:**
 
 ```
-qualifier init                             Initialize qualifier in a repo
 qualifier compact  <artifact> [options]    Compact a .qual file
 ```
 
@@ -153,26 +151,6 @@ qualifier compact src/parser.rs --snapshot
 qualifier compact --all
 ```
 
-### Visualize the dependency graph
-
-```bash
-# Output as Graphviz DOT
-qualifier graph --format dot | dot -Tpng -o graph.png
-
-# Output as JSON
-qualifier graph --format json
-```
-
-### Initialize qualifier in a repo
-
-```bash
-qualifier init
-
-  Created qualifier.graph.jsonl (empty — populate with your dependency graph)
-  Detected VCS: git
-  Added *.qual merge=union to .gitattributes
-```
-
 ### List artifacts
 
 ```bash
@@ -203,10 +181,10 @@ cat records.jsonl | qualifier emit --stdin
 
 Qualifier uses layered configuration (highest wins):
 
-| Priority | Source            | Example                               |
-| -------- | ----------------- | ------------------------------------- |
-| 1        | CLI flags         | `--graph path/to/graph.jsonl`         |
-| 2        | Environment       | `QUALIFIER_GRAPH`, `QUALIFIER_ISSUER` |
-| 3        | Project config    | `.qualifier.toml`                     |
-| 4        | User config       | `~/.config/qualifier/config.toml`     |
-| 5        | Built-in defaults |                                       |
+| Priority | Source            | Example                           |
+| -------- | ----------------- | --------------------------------- |
+| 1        | CLI flags         | `--issuer mailto:me@example.com`  |
+| 2        | Environment       | `QUALIFIER_ISSUER`                |
+| 3        | Project config    | `.qualifier.toml`                 |
+| 4        | User config       | `~/.config/qualifier/config.toml` |
+| 5        | Built-in defaults |                                   |

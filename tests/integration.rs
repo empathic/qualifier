@@ -1,6 +1,5 @@
 use qualifier::annotation::{self, Annotation, AnnotationBody, Kind, Record};
 use qualifier::compact::{self, filter_superseded};
-use qualifier::graph;
 use qualifier::qual_file::{self, QualFile};
 
 use chrono::Utc;
@@ -278,18 +277,6 @@ fn test_supersession_cycle_detected() {
     }));
 
     let result = annotation::check_supersession_cycles(&[a, b]);
-    assert!(result.is_err());
-}
-
-// --- Graph cycle detection ---
-
-#[test]
-fn test_graph_cycle_rejected() {
-    let graph_str = r#"{"subject":"a","depends_on":["b"]}
-{"subject":"b","depends_on":["c"]}
-{"subject":"c","depends_on":["a"]}
-"#;
-    let result = graph::parse_graph(graph_str);
     assert!(result.is_err());
 }
 

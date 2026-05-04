@@ -147,7 +147,7 @@ Try Qualifier in your browser above, or install locally:
 
 ```bash
 cargo install qualifier
-qualifier init
+qualifier record concern src/auth.rs:42 "SQL injection risk"
 ```
 
 See [CLI](/cli/) for the full command reference or [Format](/format/) for the file spec.

@@ -29,56 +29,6 @@ fn run_qualifier(dir: &Path, args: &[&str]) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
-// --- qualifier init ---
-
-#[test]
-fn test_init_creates_graph_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let (stdout, _, code) = run_qualifier(dir.path(), &["init"]);
-
-    assert_eq!(code, 0, "init should succeed");
-    assert!(stdout.contains("qualifier.graph.jsonl"));
-
-    let graph_path = dir.path().join("qualifier.graph.jsonl");
-    assert!(graph_path.exists(), "graph file should be created");
-}
-
-#[test]
-fn test_init_creates_gitattributes_in_git_repo() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Make it a git repo
-    Command::new("git")
-        .args(["init"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-
-    let (stdout, _, code) = run_qualifier(dir.path(), &["init"]);
-
-    assert_eq!(code, 0);
-    assert!(stdout.contains(".gitattributes") || stdout.contains("merge=union"));
-
-    let gitattributes = dir.path().join(".gitattributes");
-    assert!(gitattributes.exists(), ".gitattributes should be created");
-
-    let content = std::fs::read_to_string(&gitattributes).unwrap();
-    assert!(content.contains("*.qual merge=union"));
-}
-
-#[test]
-fn test_init_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Run init twice
-    let (_, _, code1) = run_qualifier(dir.path(), &["init"]);
-    let (stdout2, _, code2) = run_qualifier(dir.path(), &["init"]);
-
-    assert_eq!(code1, 0);
-    assert_eq!(code2, 0);
-    assert!(stdout2.contains("already exists"));
-}
-
 // --- qualifier record + show round-trip ---
 
 #[test]
@@ -480,51 +430,6 @@ fn test_praise_vcs_without_vcs() {
     assert!(
         stderr.contains("No VCS") || stderr.contains("--vcs"),
         "should mention VCS: {stderr}"
-    );
-}
-
-// --- qualifier graph ---
-
-#[test]
-fn test_graph_dot_output() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("qualifier.graph.jsonl"),
-        "{\"subject\":\"app\",\"depends_on\":[\"lib\"]}\n",
-    )
-    .unwrap();
-
-    let (stdout, _, code) = run_qualifier(dir.path(), &["graph", "--format", "dot"]);
-    assert_eq!(code, 0, "graph dot should succeed");
-    assert!(stdout.contains("digraph"), "should be DOT format");
-    assert!(stdout.contains("app"), "should contain app");
-    assert!(stdout.contains("lib"), "should contain lib");
-}
-
-#[test]
-fn test_graph_json_output() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("qualifier.graph.jsonl"),
-        "{\"subject\":\"app\",\"depends_on\":[\"lib\"]}\n",
-    )
-    .unwrap();
-
-    let (stdout, _, code) = run_qualifier(dir.path(), &["graph", "--format", "json"]);
-    assert_eq!(code, 0, "graph json should succeed");
-    assert!(stdout.contains("app"), "should contain app");
-    assert!(stdout.contains("lib"), "should contain lib");
-}
-
-#[test]
-fn test_graph_missing_file() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let (_, stderr, code) = run_qualifier(dir.path(), &["graph"]);
-    assert_ne!(code, 0, "graph should fail without graph file");
-    assert!(
-        stderr.contains("not found") || stderr.contains("Graph file"),
-        "should mention missing file: {stderr}"
     );
 }
 

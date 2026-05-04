@@ -154,11 +154,7 @@ export default function (eleventyConfig) {
   // Load example files for the interactive playground
   eleventyConfig.addGlobalData("playgroundFiles", () => {
     const dir = "examples";
-    const files = [
-      "src-parser.rs.qual",
-      "src-auth.rs.qual",
-      "qualifier.graph.jsonl",
-    ];
+    const files = ["src-parser.rs.qual", "src-auth.rs.qual"];
     const result = {};
     for (const f of files) result[f] = readFileSync(`${dir}/${f}`, "utf-8");
     return result;

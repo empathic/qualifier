@@ -634,24 +634,13 @@ Body fields:
 {"metabox":"1","type":"dependency","subject":"bin/server","issuer":"https://build.example.com","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d...","body":{"depends_on":["lib/auth","lib/http","lib/db"]}}
 ```
 
-The dependency graph MUST be a DAG. Implementations MUST detect and reject
-cycles.
+The dependency graph implied by these records MUST be a DAG.
 
-#### 3.4.1 Dependency Graph Sources
-
-Qualifier accepts dependency information from two sources:
-
-1. **Dependency records in `.qual` files** — as defined above.
-2. **Legacy graph file** — a standalone JSONL file (conventionally
-   `qualifier.graph.jsonl`) with simplified dependency declarations:
-
-```jsonl
-{"subject":"bin/server","depends_on":["lib/auth","lib/http","lib/db"]}
-{"subject":"lib/auth","depends_on":["lib/crypto"]}
-```
-
-Both sources are merged into a single dependency graph. When both declare
-edges for the same subject, the union of all `depends_on` arrays is used.
+Dependency records are wire-format-level: they declare edges that
+downstream tools can use to propagate signals across artifacts. The
+reference CLI does not consume them today (the `qualifier graph` command
+and built-in graph engine were yanked along with scoring), but they
+round-trip through `.qual` files unchanged.
 
 ### 3.5 License (`type: "license"`)
 
@@ -904,15 +893,13 @@ qualifier show <artifact>                 Show annotations for an artifact
 qualifier ls [--kind <k>]                 List subjects by kind
 qualifier praise <artifact>               Show who annotated an artifact and why
                                           (also available as the `blame` alias)
-qualifier graph [--format dot|json]       Visualize the dependency graph
 qualifier review [subject]                Check freshness of annotations
 ```
 
-**Manage commands:**
+**Maintain commands:**
 
 ```
 qualifier compact <artifact> [options]    Compact a .qual file (prune/snapshot)
-qualifier init                            Initialize qualifier in a repo
 ```
 
 ### 6.2 `qualifier record`
@@ -1114,16 +1101,7 @@ are checked. Annotations without spans or without `content_hash` are skipped.
 **JSON output** includes `status` (`fresh`, `drifted`, `missing`) and `detail`
 with expected/actual hashes for drifted annotations or a reason for missing ones.
 
-### 6.10 `qualifier init`
-
-```
-qualifier init
-  Created qualifier.graph.jsonl
-  Detected VCS: git
-  Added *.qual merge=union to .gitattributes
-```
-
-### 6.11 Configuration
+### 6.10 Configuration
 
 Qualifier uses layered configuration. Precedence (highest wins):
 
@@ -1139,11 +1117,10 @@ Qualifier uses layered configuration. Precedence (highest wins):
 
 | Key         | CLI flag       | Env var              | Default |
 |-------------|----------------|----------------------|---------|
-| `graph`     | `--graph`      | `QUALIFIER_GRAPH`    | `qualifier.graph.jsonl` |
 | `issuer`    | `--issuer`     | `QUALIFIER_ISSUER`   | VCS identity (see 8.4) |
 | `format`    | `--format`     | `QUALIFIER_FORMAT`   | `human` |
 
-### 6.12 `qualifier praise`
+### 6.11 `qualifier praise`
 
 Show who recorded annotations against an artifact and why. Available
 under the alias `qualifier blame`; the canonical name is `praise` (the
@@ -1290,15 +1267,16 @@ The library is the source of truth. The CLI is a thin wrapper around it.
 
 - Append-only JSONL minimizes merge conflicts.
 - Pre-compaction history is recoverable from VCS history.
-- `qualifier init` detects the active VCS and applies appropriate configuration.
+- For collaborative repositories, configure your VCS to use union merges
+  on `.qual` files so concurrent appends don't collide.
 
 ### 8.2 VCS-Specific Setup
 
-| VCS        | Action |
-|------------|--------|
-| Git        | Adds `*.qual merge=union` to `.gitattributes` |
-| Mercurial  | Adds `**.qual = union` merge pattern to `.hgrc` |
-| Other      | Prints guidance for manual merge configuration |
+| VCS        | Configuration |
+|------------|---------------|
+| Git        | Add `*.qual merge=union` to `.gitattributes` |
+| Mercurial  | Add `**.qual = union` to `.hgrc` merge patterns |
+| Other      | Configure equivalent union-merge behaviour for `*.qual` |
 
 ### 8.3 `qualifier blame`
 
@@ -1343,8 +1321,7 @@ project root. Each `.qual` file may contain records for multiple subjects
 and multiple record types.
 
 The project root is determined by searching upward for VCS markers (`.git`,
-`.hg`, `.jj`, `.pijul`, `_FOSSIL_`, `.svn`) or a `qualifier.graph.jsonl`
-file, whichever is found first.
+`.hg`, `.jj`, `.pijul`, `_FOSSIL_`, `.svn`).
 
 ### 10.1 Ignore Rules
 
@@ -1391,13 +1368,11 @@ qualifier/
 ├── Cargo.toml
 ├── SPEC.md                    # This document
 ├── METABOX.md                 # Metabox envelope specification
-├── qualifier.graph.jsonl      # Example / self-hosted graph
 └── src/
     ├── lib.rs                 # Public library API
     ├── annotation.rs         # Record types, body structs, Kind, IssuerType, validation
     ├── content_hash.rs        # Span content hashing and freshness checking
     ├── qual_file.rs           # .qual file parsing, appending, discovery
-    ├── graph.rs               # Dependency graph loading, cycle detection
     ├── compact.rs             # Compaction: prune and snapshot, supersession filtering
     ├── bin/
     │   └── qualifier.rs       # Binary entry point
@@ -1416,8 +1391,6 @@ qualifier/
             ├── show.rs
             ├── ls.rs
             ├── compact.rs
-            ├── graph_cmd.rs
-            ├── init.rs
             ├── praise.rs         # qualifier praise (alias: blame)
             └── haiku.rs
 ```
@@ -1435,6 +1408,13 @@ These are explicitly **not** part of v0.3 but are anticipated:
 - **First-class scoring layer:** A built-in implementation of the example
   scoring model in §4 (`qualifier score`, `qualifier check`, dependency
   propagation), gated behind a feature flag.
+- **Dependency graph engine:** A built-in graph (`qualifier graph` for
+  visualization, plus traversal helpers used by the scoring layer above).
+  Dependency *records* (§3.4) remain in the wire format today; the engine
+  was yanked alongside scoring.
+- **Project bootstrap (`qualifier init`):** Convenience scaffolding for
+  per-project setup (VCS merge config, ignore file). Works without it
+  today; reintroduced when there's a clear win.
 - **Policy records** (`type: "policy"`): Project-level rules, required kinds,
   and gate criteria — expressed as records in the same stream.
 - **Editor plugins:** LSP-based inline display of annotations, with
