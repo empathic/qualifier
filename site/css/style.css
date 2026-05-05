@@ -1,561 +1,982 @@
 /* ============================================================
    QUALIFIER — Design System
    Aesthetic: Inspector's logbook. Blueprint precision.
-   Dark, authoritative, utilitarian.
+   Cool dark grounds, indigo accent. Light theme is a cool
+   pencil-on-paper inversion. Cascade layered:
+     reset < base < layout < components.
    ============================================================ */
 
-/* --- Reset & base --- */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+/* --- Self-hosted fonts ---
+   Atkinson Hyperlegible Next, Instrument Sans, JetBrains Mono.
+   font-display: optional on the preloaded latin subset weights —
+   with <link rel="preload"> the woff2 lands inside the browser's
+   ~100ms initial block window, the web font is used, and no swap
+   is ever visible. Italic and ext subsets stay on swap (rare on
+   the critical path). */
+
+/* Atkinson Hyperlegible Next — body text */
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: normal;
+  font-weight: 400;
+  font-display: optional;
+  src: url(/fonts/atkinson-regular.woff2) format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
 }
-
-:root {
-  /* --- Palette --- */
-  --void: #0c0e11;
-  --slab: #141720;
-  --plate: #1b1f2a;
-  --ridge: #252a38;
-  --steel: #3a4158;
-  --flint: #6b7394;
-  --ash: #9ba3bf;
-  --chalk: #d0d5e3;
-  --white: #eef0f6;
-
-  /* Signal colors */
-  --pass: #34d399;
-  --pass-dim: #34d39920;
-  --warn: #fbbf24;
-  --warn-dim: #fbbf2420;
-  --fail: #f87171;
-  --fail-dim: #f8717120;
-  --info: #60a5fa;
-  --info-dim: #60a5fa20;
-
-  /* Accent */
-  --accent: #818cf8;
-  --accent-dim: #818cf815;
-  --accent-mid: #818cf840;
-
-  /* Typography */
-  --display: "Instrument Sans", "Inter", "Helvetica Neue", sans-serif;
-  --body:
-    "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, sans-serif;
-  --mono: "JetBrains Mono", "SF Mono", "Consolas", monospace;
-
-  /* Grid paper pattern */
-  --grid-line: #ffffff06;
-  --grid-line-major: #ffffff0a;
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/atkinson-regular-ext.woff2) format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
-
-html {
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--chalk);
-  background: var(--void);
-}
-
-body {
-  font-family: var(--body);
-  max-width: 68rem;
-  margin: 0 auto;
-  padding: 0 1.5rem;
-  background-image:
-    linear-gradient(var(--grid-line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
-  background-size: 24px 24px;
-  background-position: -1px -1px;
-}
-
-/* --- Typography --- */
-h1 {
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 1.5rem;
-  line-height: 1.2;
-  color: var(--white);
-  margin: 2.5rem 0 1rem;
-  letter-spacing: -0.01em;
-}
-h2 {
-  font-family: var(--display);
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: normal;
   font-weight: 600;
-  font-size: 1.15rem;
-  line-height: 1.3;
-  color: var(--white);
-  margin: 2.5rem 0 0.6rem;
-  letter-spacing: -0.005em;
-  border-bottom: 1px solid var(--ridge);
-  padding-bottom: 0.4rem;
+  font-display: optional;
+  src: url(/fonts/atkinson-regular.woff2) format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
 }
-h3 {
-  font-family: var(--display);
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: normal;
   font-weight: 600;
-  font-size: 0.95rem;
-  line-height: 1.3;
-  color: var(--ash);
-  margin: 1.5rem 0 0.4rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 0.82rem;
+  font-display: swap;
+  src: url(/fonts/atkinson-regular-ext.woff2) format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
-h4 {
-  font-family: var(--mono);
-  font-weight: 600;
-  font-size: 0.8rem;
-  line-height: 1.3;
-  color: var(--flint);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin: 1.25rem 0 0.4rem;
-}
-
-p {
-  margin: 0.75rem 0;
-}
-a {
-  color: var(--accent);
-  text-decoration: none;
-  transition: color 0.15s;
-}
-a:hover {
-  color: var(--white);
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-}
-
-ul,
-ol {
-  margin: 0.75rem 0 0.75rem 1.5rem;
-}
-li {
-  margin: 0.25rem 0;
-}
-strong {
-  font-weight: 600;
-  color: var(--white);
-}
-
-/* --- Heading anchors --- */
-h1 > a.header-anchor,
-h2 > a.header-anchor,
-h3 > a.header-anchor,
-h4 > a.header-anchor {
-  color: inherit;
-  text-decoration: none;
-}
-h1 > a.header-anchor:hover,
-h2 > a.header-anchor:hover,
-h3 > a.header-anchor:hover,
-h4 > a.header-anchor:hover {
-  text-decoration: underline;
-  text-decoration-color: var(--accent);
-  text-decoration-thickness: 2px;
-  text-underline-offset: 3px;
-}
-
-/* --- Syntax highlighting (Prism) --- */
-.token.property {
-  color: #c4b5fd;
-}
-.token.string,
-.token.url {
-  color: #6ee7b7;
-}
-.token.number {
-  color: #fcd34d;
-}
-.token.keyword,
-.token.selector {
-  color: #f0abfc;
-}
-.token.function,
-.token.class-name {
-  color: #93c5fd;
-}
-.token.operator {
-  color: var(--ash);
-}
-.token.punctuation {
-  color: var(--flint);
-}
-.token.comment {
-  color: var(--steel);
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
   font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/atkinson-italic.woff2) format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
 }
-.token.namespace {
-  opacity: 0.7;
-}
-
-/* --- Code --- */
-code {
-  font-family: var(--mono);
-  font-size: 0.84em;
-  background: var(--plate);
-  padding: 0.15em 0.4em;
-  border-radius: 3px;
-  color: var(--chalk);
-  border: 1px solid var(--ridge);
-}
-pre {
-  background: var(--slab);
-  border: 1px solid var(--ridge);
-  border-left: 3px solid var(--accent-mid);
-  padding: 1rem 1.25rem;
-  overflow-x: auto;
-  margin: 1rem 0;
-  line-height: 1.55;
-  border-radius: 2px;
-}
-pre code {
-  background: none;
-  padding: 0;
-  font-size: 0.82rem;
-  border: none;
-  border-radius: 0;
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/atkinson-italic-ext.woff2) format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* --- Tables --- */
-table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 1rem 0;
-  font-size: 0.92rem;
+/* Instrument Sans — display/headings (variable weight 400–700) */
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-stretch: 100%;
+  font-display: optional;
+  src: url(/fonts/instrument-sans.woff2) format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
 }
-th,
-td {
-  text-align: left;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--ridge);
-}
-th {
-  font-family: var(--mono);
-  font-weight: 600;
-  font-size: 0.72rem;
-  color: var(--flint);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-/* --- Navigation --- */
-.site-nav {
-  display: flex;
-  align-items: center;
-  gap: 2rem;
-  padding: 1rem 0;
-  border-bottom: 1px solid var(--ridge);
-  font-family: var(--mono);
-  font-size: 0.78rem;
-}
-.nav-logo {
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 0.9rem;
-  text-decoration: none;
-  color: var(--white);
-  letter-spacing: -0.02em;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.nav-logo::before {
-  content: "";
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  background: var(--accent);
-  border-radius: 1px;
-  flex-shrink: 0;
-}
-.nav-links {
-  display: flex;
-  gap: 1.25rem;
-}
-.nav-links a {
-  font-family: var(--mono);
-  font-weight: 500;
-  text-decoration: none;
-  font-size: 0.75rem;
-  color: var(--flint);
-  letter-spacing: 0.02em;
-  transition: color 0.15s;
-}
-.nav-links a:hover {
-  color: var(--white);
-  text-decoration: none;
-}
-.nav-links a[aria-current] {
-  color: var(--accent);
-}
-.nav-github {
-  opacity: 0.5;
-}
-.nav-github:hover {
-  opacity: 1;
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url(/fonts/instrument-sans-ext.woff2) format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* --- Divider --- */
-.divider {
-  height: 1px;
-  background: var(--ridge);
-  margin: 0;
-  position: relative;
+/* JetBrains Mono — code (variable weight 400–600) */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: optional;
+  src: url(/fonts/jetbrains-mono.woff2) format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
 }
-.divider::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 48px;
-  height: 1px;
-  background: var(--accent);
-}
-
-/* --- Footer --- */
-.site-footer {
-  margin-top: 4rem;
-  padding: 1.5rem 0;
-  border-top: 1px solid var(--ridge);
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--steel);
-  text-align: center;
-  letter-spacing: 0.01em;
-}
-.site-footer a {
-  color: var(--steel);
-}
-.site-footer a:hover {
-  color: var(--accent);
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url(/fonts/jetbrains-mono-ext.woff2) format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* --- Hero --- */
-.hero {
-  padding: 4rem 0 3rem;
-  border-bottom: none;
-  margin-bottom: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 3rem;
-}
-.hero-content {
-  flex: 1;
-  min-width: 0;
-}
-.hero h1 {
-  font-size: 2.8rem;
-  margin: 0 0 0.75rem;
-  line-height: 1.05;
-  letter-spacing: -0.03em;
-  color: var(--white);
-}
-.hero h1 .hero-mark {
-  color: var(--accent);
-}
-.hero .tagline {
-  font-family: var(--body);
-  font-size: 1.05rem;
-  color: var(--ash);
-  margin: 0 0 1.75rem;
-  max-width: 44rem;
-  line-height: 1.6;
-}
-.hero .tagline strong {
-  color: var(--white);
-  font-weight: 600;
-}
-.hero-install {
-  font-family: var(--mono);
-  font-size: 0.85rem;
-  background: var(--slab);
-  border: 1px solid var(--ridge);
-  border-left: 3px solid var(--accent-mid);
-  padding: 0.6rem 1rem;
-  display: inline-block;
-  border-radius: 2px;
-}
-.hero-install .prompt {
-  color: var(--flint);
-  user-select: none;
-}
-.try-it-btn {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--accent);
-  background: var(--accent-dim);
-  border: 1px solid var(--accent-mid);
-  padding: 0.3rem 0.75rem;
-  margin-left: 1rem;
-  cursor: pointer;
-  transition: all 0.15s;
-  vertical-align: middle;
-  border-radius: 2px;
-}
-.try-it-btn:hover {
-  background: var(--accent);
-  color: var(--void);
-  border-color: var(--accent);
-}
-.try-it-btn:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-.hero + .divider {
-  margin-bottom: 2rem;
+@layer reset, base, layout, components;
+
+@layer reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  img,
+  svg {
+    display: block;
+    max-width: 100%;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  button {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+  }
+  ul,
+  ol {
+    list-style: none;
+  }
 }
 
-/* --- Concept cards --- */
-.concepts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
-  gap: 1px;
-  margin: 1.5rem 0;
-  background: var(--ridge);
-}
-.concept-card {
-  background: var(--slab);
-  padding: 1.25rem 1.5rem;
-}
-.concept-card h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.78rem;
-  color: var(--accent);
-  letter-spacing: 0.06em;
-}
-.concept-card p {
-  margin: 0;
-  font-size: 0.9rem;
-  color: var(--ash);
-  line-height: 1.55;
-}
+@layer base {
+  :root {
+    /* --- Typography --- */
+    --display: "Instrument Sans", "Inter", "Helvetica Neue", sans-serif;
+    --body:
+      "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui,
+      sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", "Consolas", monospace;
 
-/* --- Score bar (inline) --- */
-.score-bar {
-  font-family: var(--mono);
-  font-size: 0.82rem;
-  letter-spacing: 0.02em;
-}
-.score-bar .filled {
-  color: var(--pass);
-}
-.score-bar .empty {
-  color: var(--ridge);
-}
-.score-bar .negative {
-  color: var(--fail);
-}
+    /* --- Spacing --- */
+    --space-xs: 0.25rem;
+    --space-sm: 0.5rem;
+    --space-md: 1rem;
+    --space-lg: 1.5rem;
+    --space-xl: 2.5rem;
+    --space-2xl: 4rem;
 
-/* --- Propagation diagram --- */
-.propagation-figure {
-  background: var(--slab);
-  border: 1px solid var(--ridge);
-  padding: 1.5rem 1.5rem 1rem;
-  margin: 1.25rem 0;
-  overflow-x: auto;
-  border-radius: 2px;
-}
-.propagation-svg {
-  display: block;
-  width: 100%;
-  max-width: 700px;
-  height: auto;
-  margin: 0 auto;
-}
+    /* --- Layout primitives --- */
+    --max-w: 56rem; /* ~896px — single content width; matches family rhythm */
+    --nav-h: 3.5rem; /* ~56px */
 
-/* --- Subtitle --- */
-.subtitle {
-  font-family: var(--body);
-  font-size: 1rem;
-  color: var(--ash);
-  margin-bottom: 2rem;
-  line-height: 1.6;
-}
+    /* --- Dark theme (canonical) --- */
+    /* Surfaces — the lift ramp */
+    --void: #0c0e11;
+    --slab: #141720;
+    --plate: #1b1f2a;
+    --ridge: #252a38;
 
-/* --- Blueprint illustrations --- */
-.topo {
-  display: block;
-  pointer-events: none;
-}
-.topo-hero {
-  width: clamp(200px, 35%, 340px);
-  height: auto;
-  flex-shrink: 0;
-}
-.topo-wide {
-  width: 100%;
-  height: auto;
-  margin: 1.5rem 0;
-}
+    /* Text — graphite to chalk */
+    --steel: #3a4158;
+    --flint: #6b7394;
+    --ash: #9ba3bf;
+    --chalk: #d0d5e3;
+    --white: #eef0f6;
 
-/* --- Page title --- */
-.page-title {
-  margin-top: 2rem;
-}
+    /* Accent — the inspector's mark (indigo) */
+    --accent: #818cf8;
+    --accent-dim: #818cf815;
+    --accent-mid: #818cf840;
 
-/* --- Kind badge --- */
-.kind-badge {
-  font-family: var(--mono);
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 0.15rem 0.5rem;
-  display: inline-block;
-  border-radius: 2px;
-}
-.kind-badge.positive {
-  background: var(--pass-dim);
-  color: var(--pass);
-  border: 1px solid #34d39940;
-}
-.kind-badge.negative {
-  background: var(--fail-dim);
-  color: var(--fail);
-  border: 1px solid #f8717140;
-}
-.kind-badge.neutral {
-  background: var(--accent-dim);
-  color: var(--accent);
-  border: 1px solid var(--accent-mid);
-}
+    /* Signal — verdict colors */
+    --pass: #34d399;
+    --pass-dim: #34d39920;
+    --warn: #fbbf24;
+    --warn-dim: #fbbf2420;
+    --fail: #f87171;
+    --fail-dim: #f8717120;
+    --info: #60a5fa;
+    --info-dim: #60a5fa20;
 
-/* --- Spec content --- */
-.spec-content h2 {
-  margin-top: 3rem;
-}
-.spec-content h3 {
-  margin-top: 2rem;
-}
+    /* Grid paper */
+    --grid-line: #ffffff06;
+    --grid-line-major: #ffffff0a;
 
-/* --- Responsive --- */
-@media (max-width: 640px) {
+    /* Prism token colors — dark theme */
+    --syn-property: #c4b5fd;
+    --syn-string: #6ee7b7;
+    --syn-number: #fcd34d;
+    --syn-keyword: #f0abfc;
+    --syn-function: #93c5fd;
+  }
+
+  /* --- Light theme — cool pencil-on-paper inversion ---
+     Cool off-white grounds (never warm beige), graphite text, an
+     indigo-600 accent that meets WCAG AA on the lifted grounds. The
+     surface ramp stays cool-cast so the grid paper still reads as
+     blueprint paper, not a kraft sheet. */
+  [data-theme="light"] {
+    /* Surfaces invert: lightest at the page ground, darker on lifts */
+    --void: #f5f7fa;
+    --slab: #eaeef4;
+    --plate: #dde2eb;
+    --ridge: #c8cdd9;
+
+    /* Text inverts: --white is now max-contrast graphite at the top.
+       --steel is the lightest hint tier on the light ground; we hold it
+       a touch darker than --ridge so the ramp doesn't collapse and so
+       footer / code comments stay readable (≈3.4:1 on --void — same
+       low-but-legible "hint" register as on the dark theme). */
+    --steel: #9098ad;
+    --flint: #6b7394;
+    --ash: #4a5168;
+    --chalk: #1a1d2a;
+    --white: #0a0c14;
+
+    /* Accent — indigo-600 for AA contrast on light grounds */
+    --accent: #4f46e5;
+    --accent-dim: #4f46e515;
+    --accent-mid: #4f46e540;
+
+    /* Signal — slightly desaturated for light bg */
+    --pass: #059669;
+    --pass-dim: #05966920;
+    --warn: #d97706;
+    --warn-dim: #d9770620;
+    --fail: #dc2626;
+    --fail-dim: #dc262620;
+    --info: #2563eb;
+    --info-dim: #2563eb20;
+
+    /* Grid lines — much fainter on light */
+    --grid-line: #00000008;
+    --grid-line-major: #0000000d;
+
+    /* Prism tokens — darker variants for AA contrast on light bg */
+    --syn-property: #6d28d9; /* violet-700 */
+    --syn-string: #047857; /* emerald-700 */
+    --syn-number: #b45309; /* amber-700 */
+    --syn-keyword: #a21caf; /* fuchsia-700 */
+    --syn-function: #1d4ed8; /* blue-700 */
+  }
+
   html {
-    font-size: 15px;
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--chalk);
+    background: var(--void);
+    scroll-behavior: smooth;
+    scroll-padding-top: var(--nav-h);
   }
-  .hero {
-    flex-direction: column;
-    padding: 2.5rem 0 2rem;
+
+  /* Font load coordination. The inline <head> script adds
+     `.fonts-loading` to <html> and removes it once every preloaded
+     weight has resolved (or a 1500ms timeout fires). Hiding the body
+     during that window collapses multi-stage FOUT into a single
+     render commit. The page still has its bg color from <html>, so
+     it doesn't flash white. */
+  html.fonts-loading body {
+    visibility: hidden;
   }
-  .hero h1 {
-    font-size: 1.8rem;
+
+  body {
+    font-family: var(--body);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
-  .topo-hero {
-    width: 80%;
-    max-width: 280px;
+
+  ::selection {
+    background: var(--accent);
+    color: var(--void);
   }
+
+  /* --- Typography --- */
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 1.5rem;
+    line-height: 1.2;
+    color: var(--white);
+    margin: 2.5rem 0 1rem;
+    letter-spacing: -0.01em;
+  }
+  h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 1.15rem;
+    line-height: 1.3;
+    color: var(--white);
+    margin: 2.5rem 0 0.6rem;
+    letter-spacing: -0.005em;
+    border-bottom: 1px solid var(--ridge);
+    padding-bottom: 0.4rem;
+  }
+  h3 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 0.82rem;
+    line-height: 1.3;
+    color: var(--ash);
+    margin: 1.5rem 0 0.4rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  h4 {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 0.8rem;
+    line-height: 1.3;
+    color: var(--flint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 1.25rem 0 0.4rem;
+  }
+
+  p {
+    margin: 0.75rem 0;
+  }
+  a {
+    color: var(--accent);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  a:hover {
+    color: var(--white);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+  }
+
+  ul,
+  ol {
+    margin: 0.75rem 0 0.75rem 1.5rem;
+  }
+  ul {
+    list-style: disc;
+  }
+  ol {
+    list-style: decimal;
+  }
+  li {
+    margin: 0.25rem 0;
+  }
+  strong {
+    font-weight: 600;
+    color: var(--white);
+  }
+
+  /* --- Heading anchors --- */
+  h1 > a.header-anchor,
+  h2 > a.header-anchor,
+  h3 > a.header-anchor,
+  h4 > a.header-anchor {
+    color: inherit;
+    text-decoration: none;
+  }
+  h1 > a.header-anchor:hover,
+  h2 > a.header-anchor:hover,
+  h3 > a.header-anchor:hover,
+  h4 > a.header-anchor:hover {
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+  }
+
+  /* --- Code --- */
+  code {
+    font-family: var(--mono);
+    font-size: 0.84em;
+    background: var(--plate);
+    padding: 0.15em 0.4em;
+    border-radius: 3px;
+    color: var(--chalk);
+    border: 1px solid var(--ridge);
+  }
+  pre {
+    background: var(--slab);
+    border: 1px solid var(--ridge);
+    border-left: 3px solid var(--accent-mid);
+    padding: 1rem 1.25rem;
+    overflow-x: auto;
+    margin: 1rem 0;
+    line-height: 1.55;
+    border-radius: 2px;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: 0.82rem;
+    border: none;
+    border-radius: 0;
+  }
+
+  /* --- Prism syntax tokens --- */
+  .token.property {
+    color: var(--syn-property);
+  }
+  .token.string,
+  .token.url {
+    color: var(--syn-string);
+  }
+  .token.number {
+    color: var(--syn-number);
+  }
+  .token.keyword,
+  .token.selector {
+    color: var(--syn-keyword);
+  }
+  .token.function,
+  .token.class-name {
+    color: var(--syn-function);
+  }
+  .token.operator {
+    color: var(--ash);
+  }
+  .token.punctuation {
+    color: var(--flint);
+  }
+  .token.comment {
+    color: var(--steel);
+    font-style: italic;
+  }
+  .token.namespace {
+    opacity: 0.7;
+  }
+
+  /* --- Tables --- */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.92rem;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--ridge);
+  }
+  th {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 0.72rem;
+    color: var(--flint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+}
+
+@layer layout {
+  body {
+    /* Push content below the fixed nav. */
+    padding: var(--nav-h) var(--space-lg) 0;
+  }
+
+  main {
+    max-width: var(--max-w);
+    margin: 0 auto;
+    padding: var(--space-lg) 0 var(--space-2xl);
+  }
+
+  /* --- Prose container ---
+     Long-form pages constrain prose-flow children to ~62ch for
+     comfortable reading. Wide elements (code blocks, tables,
+     code-compare, figures, headings) stay at the body's full width
+     so the spec's wide tables and anchored heading structure render
+     unchanged. */
+  /* Long-form pages share one content width with the rest of the site
+     (--max-w on main). The .prose class is kept as a hook for any
+     future prose-specific overrides but applies no layout constraint
+     of its own. */
+
+  @media (max-width: 600px) {
+    body {
+      padding-left: 1.25rem;
+      padding-right: 1.25rem;
+    }
+    main {
+      padding: var(--space-md) 0 var(--space-2xl);
+    }
+  }
+}
+
+@layer components {
+  /* --- Navigation --- */
   .site-nav {
-    flex-direction: column;
-    align-items: flex-start;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    height: var(--nav-h);
+    background: var(--void);
+    border-bottom: 1px solid var(--ridge);
+    display: flex;
+    align-items: center;
+    /* Nav is chrome — mono throughout, regardless of body type. */
+    font-family: var(--mono);
+    font-size: 0.78rem;
+  }
+  .site-nav-inner {
+    /* +2*space-lg matches the body's outer side padding so nav and main
+       share content edges on viewports wider than the container. */
+    max-width: calc(var(--max-w) + 2 * var(--space-lg));
+    margin: 0 auto;
+    width: 100%;
+    padding: 0 var(--space-lg);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-md);
+    height: 100%;
+  }
+  .nav-logo {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 0.9rem;
+    text-decoration: none;
+    color: var(--white);
+    letter-spacing: -0.02em;
+    display: flex;
+    align-items: center;
     gap: 0.5rem;
   }
+  .nav-logo::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: var(--accent);
+    border-radius: 1px;
+    flex-shrink: 0;
+  }
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+  }
+  .nav-links a {
+    font-family: var(--mono);
+    font-weight: 500;
+    text-decoration: none;
+    font-size: 0.75rem;
+    color: var(--flint);
+    letter-spacing: 0.02em;
+    padding: 6px 0;
+    transition: color 0.15s;
+  }
+  .nav-links a:hover {
+    color: var(--white);
+    text-decoration: none;
+  }
+  .nav-links a[aria-current] {
+    color: var(--accent);
+  }
+  .nav-github {
+    opacity: 0.5;
+  }
+  .nav-github:hover {
+    opacity: 1;
+  }
+
+  /* --- Theme toggle --- */
+  .theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 8px;
+    margin-left: var(--space-sm);
+    color: var(--flint);
+    line-height: 1;
+    transition: color 0.15s;
+  }
+  .theme-toggle:hover {
+    color: var(--accent);
+  }
+  .theme-toggle svg {
+    display: none;
+    width: 14px;
+    height: 14px;
+  }
+  /* Default: system pref shows the desktop (monitor) icon */
+  [data-theme-pref="system"] .theme-toggle .icon-system-desktop {
+    display: block;
+  }
+  /* Touch / coarse-pointer devices: show the phone icon for system pref */
+  @media (hover: none) and (pointer: coarse) {
+    [data-theme-pref="system"] .theme-toggle .icon-system-desktop {
+      display: none;
+    }
+    [data-theme-pref="system"] .theme-toggle .icon-system-mobile {
+      display: block;
+    }
+  }
+  [data-theme-pref="dark"] .theme-toggle .icon-dark {
+    display: block;
+  }
+  [data-theme-pref="light"] .theme-toggle .icon-light {
+    display: block;
+  }
+
+  /* --- Mobile menu --- */
+  .nav-menu-btn {
+    display: none;
+    font-size: 18px;
+    line-height: 1;
+    padding: 4px 6px;
+    color: var(--flint);
+  }
+  .nav-menu-btn:hover {
+    color: var(--white);
+  }
+  @media (max-width: 700px) {
+    .nav-links a:not(.nav-github):not(.theme-toggle) {
+      display: none;
+    }
+    .nav-menu-btn {
+      display: block;
+    }
+    [data-menu-open] .nav-links {
+      position: absolute;
+      top: var(--nav-h);
+      left: 0;
+      right: 0;
+      flex-direction: column;
+      align-items: stretch;
+      background: var(--void);
+      border-bottom: 1px solid var(--ridge);
+      padding: 0.5rem var(--space-lg) 0.75rem;
+      gap: 0;
+    }
+    [data-menu-open] .nav-links a:not(.nav-github):not(.theme-toggle) {
+      display: block;
+      padding: 0.5rem 0;
+    }
+  }
+  @media (max-width: 600px) {
+    .site-nav-inner {
+      padding: 0 1.25rem;
+    }
+  }
+
+  /* --- Divider --- */
+  .divider {
+    height: 1px;
+    background: var(--ridge);
+    margin: 0;
+    position: relative;
+  }
+  .divider::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 48px;
+    height: 1px;
+    background: var(--accent);
+  }
+
+  /* --- Footer ---
+     Family standard: a single centered paragraph, mono, --steel.
+     Copyright + GitHub + docs.rs + crates.io separated by middots. */
+  .site-footer {
+    margin-top: var(--space-2xl);
+    padding: var(--space-lg) 0;
+    border-top: 1px solid var(--ridge);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--steel);
+    text-align: center;
+    letter-spacing: 0.04em;
+  }
+  .site-footer a {
+    color: var(--steel);
+  }
+  .site-footer a:hover {
+    color: var(--accent);
+  }
+
+  /* --- Hero --- */
+  .hero {
+    padding: 4rem 0 3rem;
+    border-bottom: none;
+    margin-bottom: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 3rem;
+  }
+  .hero-content {
+    flex: 1;
+    min-width: 0;
+  }
+  .hero h1 {
+    font-size: clamp(1.8rem, 5vw, 2.6rem);
+    margin: 0 0 0.75rem;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    color: var(--white);
+  }
+  .hero h1 .hero-mark {
+    color: var(--accent);
+  }
+  .hero .tagline {
+    font-family: var(--body);
+    font-size: 1.05rem;
+    color: var(--ash);
+    margin: 0 0 1.75rem;
+    max-width: 44rem;
+    line-height: 1.6;
+  }
+  .hero .tagline strong {
+    color: var(--white);
+    font-weight: 600;
+  }
+  .hero-install {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    background: var(--slab);
+    border: 1px solid var(--ridge);
+    border-left: 3px solid var(--accent-mid);
+    padding: 0.6rem 1rem;
+    display: inline-block;
+    border-radius: 2px;
+  }
+  .hero-install .prompt {
+    color: var(--flint);
+    user-select: none;
+  }
+  .try-it-btn {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--accent);
+    padding: 0.6rem 1.25rem;
+    margin-left: var(--space-md);
+    cursor: pointer;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
+    vertical-align: middle;
+    border-radius: 2px;
+  }
+  .try-it-btn:hover {
+    background: var(--accent);
+    color: var(--void);
+  }
+  .try-it-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+  .hero + .divider {
+    margin-bottom: 2rem;
+  }
+
+  /* --- Stacked code comparison ---
+     Two records, each at full content width, stacked vertically with a
+     small uppercase label above each. Side-by-side at our measure
+     forced narrow panes that wrapped or scrolled pretty-printed JSON;
+     stacking trades vertical space for legibility. */
+  .code-compare {
+    margin: 1.25rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .code-compare .cc-section {
+    display: flex;
+    flex-direction: column;
+  }
+  .code-compare .cc-label {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--flint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.25rem 0;
+    margin-bottom: 0.4rem;
+    border-bottom: 1px solid var(--ridge);
+    user-select: none;
+  }
+  .code-compare .cc-pane > pre {
+    margin: 0;
+  }
+  /* Distinguish the record body from the envelope: heavier weight and
+     slightly brighter text. Stays inline so there's no layout disruption. */
+  .record-body .token {
+    font-weight: 600;
+  }
+  .record-body .token.property {
+    color: var(--white);
+  }
+
+  /* --- Concept cards --- */
   .concepts {
-    grid-template-columns: 1fr;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: 1px;
+    margin: 1.5rem 0;
+    background: var(--ridge);
+  }
+  .concept-card {
+    background: var(--slab);
+    padding: 1.25rem 1.5rem;
+  }
+  .concept-card h3 {
+    margin: 0 0 0.5rem;
+    font-size: 0.78rem;
+    color: var(--accent);
+    letter-spacing: 0.06em;
+  }
+  .concept-card p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--ash);
+    line-height: 1.55;
+  }
+
+  /* --- Score bar (inline) --- */
+  .score-bar {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    letter-spacing: 0.02em;
+  }
+  .score-bar .filled {
+    color: var(--pass);
+  }
+  .score-bar .empty {
+    color: var(--ridge);
+  }
+  .score-bar .negative {
+    color: var(--fail);
+  }
+
+  /* --- Propagation diagram --- */
+  .propagation-figure {
+    background: var(--slab);
+    border: 1px solid var(--ridge);
+    padding: 1.5rem 1.5rem 1rem;
+    margin: 1.25rem 0;
+    overflow-x: auto;
+    border-radius: 2px;
+  }
+  .propagation-svg {
+    display: block;
+    width: 100%;
+    max-width: 700px;
+    height: auto;
+    margin: 0 auto;
+  }
+
+  /* --- Subtitle --- */
+  .subtitle {
+    font-family: var(--body);
+    font-size: 1rem;
+    color: var(--ash);
+    margin-bottom: 2rem;
+    line-height: 1.6;
+  }
+
+  /* --- Blueprint illustrations --- */
+  .topo {
+    display: block;
+    pointer-events: none;
+  }
+  .topo-hero {
+    width: clamp(200px, 35%, 340px);
+    height: auto;
+    flex-shrink: 0;
+  }
+  .topo-wide {
+    width: 100%;
+    height: auto;
+    margin: 1.5rem 0;
+  }
+
+  /* --- Page title --- */
+  .page-title {
+    margin-top: 2rem;
+  }
+
+  /* --- Kind badge --- */
+  .kind-badge {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.5rem;
+    display: inline-block;
+    border-radius: 2px;
+  }
+  .kind-badge.positive {
+    background: var(--pass-dim);
+    color: var(--pass);
+    border: 1px solid var(--pass-dim);
+  }
+  .kind-badge.negative {
+    background: var(--fail-dim);
+    color: var(--fail);
+    border: 1px solid var(--fail-dim);
+  }
+  .kind-badge.neutral {
+    background: var(--accent-dim);
+    color: var(--accent);
+    border: 1px solid var(--accent-mid);
+  }
+
+  /* --- Spec content --- */
+  .spec-content h2 {
+    margin-top: 3rem;
+  }
+  .spec-content h3 {
+    margin-top: 2rem;
+  }
+
+  /* --- Responsive --- */
+  @media (max-width: 640px) {
+    html {
+      font-size: 15px;
+    }
+    .hero {
+      flex-direction: column;
+      padding: 2.5rem 0 2rem;
+    }
+    .topo-hero {
+      width: 80%;
+      max-width: 280px;
+    }
+    .concepts {
+      grid-template-columns: 1fr;
+    }
+    .try-it-btn {
+      margin-left: 0;
+      margin-top: var(--space-sm);
+    }
   }
 }

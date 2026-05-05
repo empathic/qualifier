@@ -2,202 +2,191 @@
 layout: base.njk
 title: Format
 nav: format
+prose: true
 permalink: /format/
 ---
 
 # The .qual format
 
 <p class="subtitle">
-Append-only JSONL. One record per line. VCS-native by design.
+A friendly tour of the .qual file format.
 </p>
 
-A `.qual` file is a UTF-8 encoded file where each line is a complete JSON object representing one record. This is JSONL (JSON Lines).
+A `.qual` file is how Qualifier records structured observations about code.
+Concerns, suggestions, anything worth keeping is stored in plain UTF-8 encoded
+JSONL. Append-only, merge friendly, one record per line, sitting next to your
+source. This page is the orientation: enough to read one fluently and write one
+by hand. The full reference is the [spec](/spec/).
+
+Files live next to your source. An annotation about `src/parser.rs`
+typically lives in `src/.qual` (one file per directory) or
+`src/parser.rs.qual` (one file per source file). Either works, and `git`
+treats them like any other text file. `git blame`, `git log`, `git diff` all
+do the right thing.
+
+A two-record `.qual` file looks like this:
 
 ```jsonl
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","issuer_type":"human","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent test coverage"}}
+{"metabox":"1","type":"annotation","subject":"src/auth.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2...","body":{"kind":"concern","summary":"SQL injection risk in login handler"}}
+{"metabox":"1","type":"annotation","subject":"src/auth.rs","issuer":"urn:anthropic:claude","issuer_type":"ai","created_at":"2026-02-24T11:00:00Z","id":"e5f6...","body":{"kind":"comment","references":"a1b2...","summary":"Switched the handler to parameterized queries in 8f3c2a1"}}
 ```
 
-## Record types
+A human reviewer flags a concern; an AI agent replies with a fix, threaded
+to the original via `references`.
 
-Every record has a `type` field that identifies its schema. Qualifier defines three record types:
+## Anatomy of a record
 
-| Type          | Description                         |
-| ------------- | ----------------------------------- |
-| `attestation` | A quality signal (the primary type) |
-| `epoch`       | A compaction snapshot               |
-| `dependency`  | A dependency edge between subjects  |
+Those two records, expanded side by side:
 
-When `type` is omitted, it defaults to `"attestation"`. Unknown types are preserved as opaque pass-through data.
-
-## Record envelope
-
-All record types share a common **Metabox envelope** — a fixed set of fields that answer "who said what about which subject, when", plus a type-specific `body` object. The record envelope is an instance of the [Metabox](/metabox/) envelope format.
-
-| Field         | Type   | Required | Description                                            |
-| ------------- | ------ | -------- | ------------------------------------------------------ |
-| `metabox`     | string | yes      | Envelope version (always `"1"`)                        |
-| `type`        | string | yes\*    | Record type identifier. \*Defaults to `"attestation"`. |
-| `subject`     | string | yes      | Qualified name of the target artifact                  |
-| `issuer`      | string | yes      | Who or what created this record (URI)                  |
-| `issuer_type` | string | no       | Issuer classification: human, ai, tool, unknown        |
-| `created_at`  | string | yes      | RFC 3339 timestamp                                     |
-| `id`          | string | yes      | Content-addressed BLAKE3 hash                          |
-| `body`        | object | yes      | Type-specific payload                                  |
-
-## Attestation schema
-
-Attestations are the primary record type. Envelope fields plus body:
-
-| Field           | Type     | Required | Description                                     |
-| --------------- | -------- | -------- | ----------------------------------------------- |
-| `detail`        | string   | no       | Extended description (markdown allowed)         |
-| `kind`          | enum     | yes      | Type of attestation (see below)                 |
-| `ref`           | string   | no       | VCS ref pin (e.g. "git:3aba500"), opaque string |
-| `score`         | integer  | yes      | Signed quality delta, -100..100                 |
-| `span`          | object   | no       | Sub-artifact range (line/col addressing)        |
-| `suggested_fix` | string   | no       | Actionable suggestion for improvement           |
-| `summary`       | string   | yes      | Human-readable one-liner                        |
-| `supersedes`    | string   | no       | ID of a prior attestation this replaces         |
-| `tags`          | string[] | no       | Freeform classification tags                    |
-
-Body fields are in alphabetical order (MCF canonical form).
-
-## Attestation kinds
-
-| Kind         | Default Score | Meaning                                         |
-| ------------ | ------------- | ----------------------------------------------- |
-| `pass`       | +20           | Meets a stated quality bar                      |
-| `fail`       | -20           | Does NOT meet a stated quality bar              |
-| `blocker`    | -50           | Blocking issue, must resolve before release     |
-| `concern`    | -10           | Non-blocking issue worth tracking               |
-| `praise`     | +30           | Positive recognition of quality                 |
-| `suggestion` | -5            | Proposed improvement (often with suggested_fix) |
-| `waiver`     | +10           | Acknowledged issue, explicitly accepted         |
-
-When `--score` is omitted from `qualifier attest`, the CLI uses the default score for the given kind.
-
-## Epoch schema
-
-An **epoch** is a compaction snapshot — a synthetic record that replaces a set of attestations with a single scored record preserving the net score. Envelope fields plus body:
-
-| Field     | Type     | Required | Description                  |
-| --------- | -------- | -------- | ---------------------------- |
-| `refs`    | string[] | yes      | IDs of the compacted records |
-| `score`   | integer  | yes      | Net score at compaction time |
-| `span`    | object   | no       | Sub-artifact range           |
-| `summary` | string   | yes      | `"Compacted from N records"` |
-
-Epoch `issuer` is always `"urn:qualifier:compact"`.
-
-```json
-{
+{% codecompare "json",
+  "Comment (Record 1)",
+'{
   "metabox": "1",
-  "type": "epoch",
-  "subject": "src/parser.rs",
-  "issuer": "urn:qualifier:compact",
-  "issuer_type": "tool",
-  "created_at": "2026-02-25T12:00:00Z",
-  "id": "f9e8d7c6...",
-  "body": {
-    "refs": ["a1b2...", "c3d4..."],
-    "score": 10,
-    "summary": "Compacted from 12 records"
-  }
-}
-```
-
-## Dependency schema
-
-A **dependency** record declares directed edges from one subject to others. Envelope fields plus body:
-
-| Field        | Type     | Required | Description                           |
-| ------------ | -------- | -------- | ------------------------------------- |
-| `depends_on` | string[] | yes      | Subject names this subject depends on |
-
-```json
-{
-  "metabox": "1",
-  "type": "dependency",
-  "subject": "bin/server",
-  "issuer": "https://build.example.com",
-  "created_at": "2026-02-25T10:00:00Z",
-  "id": "1a2b3c4d...",
-  "body": { "depends_on": ["lib/auth", "lib/http"] }
-}
-```
-
-Dependency records don't carry scores. They feed the propagation engine that computes effective scores.
-
-## Supersession
-
-Attestations are immutable. To "update" a signal, write a new attestation with `body.supersedes` pointing to the prior ID. Only the latest in a chain contributes to scoring.
-
-## Content-addressed IDs
-
-Record IDs are BLAKE3 hashes of the **Metabox Canonical Form (MCF)** — a deterministic JSON serialization with fixed envelope field order, alphabetical body field order, no whitespace, and `id` set to `""` during hashing.
-
-```json
-{
-  "metabox": "1",
-  "type": "attestation",
-  "subject": "src/parser.rs",
+  "type": "annotation",
+  "subject": "src/auth.rs",
   "issuer": "mailto:alice@example.com",
+  "issuer_type": "human",
   "created_at": "2026-02-24T10:00:00Z",
-  "id": "",
+  "id": "a1b2...",
   "body": {
     "kind": "concern",
-    "score": -30,
-    "summary": "Panics on malformed input"
+    "summary": "SQL injection risk in login handler"
+  }
+}',
+  "Response (Record 2)",
+'{
+  "metabox": "1",
+  "type": "annotation",
+  "subject": "src/auth.rs",
+  "issuer": "urn:anthropic:claude",
+  "issuer_type": "ai",
+  "created_at": "2026-02-24T11:00:00Z",
+  "id": "e5f6...",
+  "body": {
+    "kind": "comment",
+    "references": "a1b2...",
+    "summary": "Switched the handler to parameterized queries in 8f3c2a1"
+  }
+}'
+%}
+
+There are two halves. The **envelope** (everything outside `body`) is
+who-said-what-about-which-subject-when. The **body** is what they actually
+said. Every record in a `.qual` file has the same envelope shape — that's
+why the two records above look nearly identical at the top. The body varies
+by record type.
+
+That split is intentional: tools that don't understand a particular body
+schema can still read the envelope and route the record sensibly.
+
+## The envelope
+
+Every record carries the same eight fields. One sentence each:
+
+- `metabox` — envelope version, always `"1"` for now.
+- `type` — what kind of record this is (`annotation`, `epoch`, `dependency`, ...). Defaults to `"annotation"` when absent.
+- `subject` — the artifact this record is about, usually a path like `src/parser.rs`.
+- `issuer` — who or what wrote it, as a URI (`mailto:`, `https:`, or `urn:`).
+- `issuer_type` — optional; `human`, `ai`, `tool`, or `unknown`.
+- `created_at` — RFC 3339 timestamp.
+- `id` — a BLAKE3 hash of the record itself, so identical records always get identical IDs.
+- `body` — the type-specific payload.
+
+That's the [Metabox envelope](/metabox/), specced separately so other tools
+can adopt the same shape. If you want field-level depth (validation rules,
+URI schemes, canonical ordering), the [spec](/spec/#22-metabox-envelope)
+has it.
+
+## What kinds of records?
+
+Annotations are the primary record type, but `.qual` is a substrate. The
+format supports any structured record type that fits the envelope, and
+tools are required to preserve records they don't understand. That means
+a `.qual` file can carry ecosystem signals from many sources without
+the format itself needing to grow.
+
+The types defined in the spec today:
+
+- `annotation` — a quality signal (concern, praise, blocker, comment, ...). The one you'll write most often.
+- `epoch` — a compaction snapshot. Synthesizes a chunk of history into one summary record.
+- `dependency` — declares that one subject depends on others, so layered tools can propagate signals across edges.
+- `license` — a license declaration for a subject.
+- `security-advisory` — a known vulnerability or weakness.
+- `perf-measurement` — a performance measurement against a baseline.
+
+The first three ship in the CLI today. The rest are spec-level: the format
+defines them so adopters can produce them, and any tool that round-trips a
+`.qual` file will preserve them whether or not it knows how to interpret them.
+
+For full schemas, see [section 3 of the spec](/spec/#3-record-type-specifications).
+
+## Threads and resolution
+
+Two body fields turn a flat list of records into a conversation.
+
+`references` is a lightweight "re:" link. Bob sees Alice's concern, replies
+with a comment, and points `body.references` at Alice's record ID. Both
+records stay active; the link is purely for threading.
+
+`supersedes` is stronger. A new record with `body.supersedes` set to a prior
+record's ID withdraws the prior record from the active set. That's how you
+"edit" something in an immutable, append-only file: write a new record that
+replaces the old one. The `resolve` annotation kind is the canonical way to
+close something out, retiring whatever it supersedes.
+
+```jsonl
+{
+  "metabox": "1",
+  "type": "annotation",
+  "subject": "src/parser.rs",
+  "issuer": "mailto:bob@example.com",
+  "created_at": "2026-03-01T10:00:00Z",
+  "id": "b2c3...",
+  "body": {
+    "kind": "comment",
+    "references": "a1b2...",
+    "summary": "Good catch, fixed in 8f3c2a1"
   }
 }
 ```
 
-Optional body fields (`span`, `detail`, `suggested_fix`, `tags`, `ref`, `supersedes`) and the optional envelope field `issuer_type` are omitted from the canonical form when absent — the hash changes only when a field is actually present.
+Tools render threads with tree-drawing characters so the conversation reads
+naturally in a terminal.
 
-This ensures identical records always produce identical IDs, regardless of implementation language.
+## Custom body fields
 
-## Compaction
+The annotation body has a small set of well-known fields (`kind`, `summary`,
+`detail`, `references`, `supersedes`, `span`, `tags`, `suggested_fix`), but
+the format doesn't constrain what else you put there. A team that wants
+numeric scoring can attach a `score` field to each annotation; a tool that
+imports SARIF can stash the original `ruleId`. Records that round-trip
+through tooling preserve unknown body fields verbatim.
 
-Append-only files grow. Compaction reclaims space:
+This is one example of how an ecosystem can layer quality signals on top
+of the substrate. The spec sketches a numeric `score` field as an
+[abstract example](/spec/#4-layering-quality-signals-on-top); the
+`qualifier` CLI itself doesn't compute or gate on scores.
 
-```bash
-qualifier compact src/parser.rs              # prune superseded
-qualifier compact src/parser.rs --snapshot   # collapse to epoch
-qualifier compact src/parser.rs --dry-run    # preview first
-```
+## Why JSONL?
 
-Compaction MUST NOT change the raw score. If it does, the implementation has a bug.
+Three reasons, all about the format being boring on purpose.
 
-## File placement
+**Append-only means clean merges.** Two people writing annotations to the
+same file at the same time produce two new lines at the end. Git merges them
+trivially because there's no editing in place. You can push straight to main.
 
-| Strategy      | Example              | Tradeoff                        |
-| ------------- | -------------------- | ------------------------------- |
-| Per-directory | `src/.qual`          | Clean tree, good merge behavior |
-| Per-file      | `src/parser.rs.qual` | Maximum merge isolation         |
-| Per-project   | `.qual` at root      | Simplest setup, more contention |
+**Content-addressed IDs are stable.** Each record's `id` is a hash of its
+canonical form. Identical records produce identical IDs across machines,
+languages, and time. That's what makes `references` and `supersedes` work
+without a coordinating server.
 
-The recommended layout is one `.qual` file per directory. `qualifier attest` defaults to this.
+**Human-writable means anyone can produce it.** A reviewer with a text editor,
+a CI script with `jq`, an AI agent with a function call. Same format, same
+file, no special tooling required to participate. The CLI is a convenience,
+not a gatekeeper.
 
-<svg class="topo topo-wide" viewBox="0 0 900 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <line x1="0" y1="20" x2="900" y2="20" stroke="#818cf8" stroke-width="0.5" opacity="0.1"/>
-  <line x1="0" y1="0" x2="0" y2="40" stroke="#818cf8" stroke-width="0.5" opacity="0.06"/>
-  <line x1="150" y1="10" x2="150" y2="30" stroke="#818cf8" stroke-width="0.5" opacity="0.06"/>
-  <line x1="300" y1="0" x2="300" y2="40" stroke="#818cf8" stroke-width="0.5" opacity="0.06"/>
-  <line x1="450" y1="10" x2="450" y2="30" stroke="#818cf8" stroke-width="0.5" opacity="0.06"/>
-  <line x1="600" y1="0" x2="600" y2="40" stroke="#818cf8" stroke-width="0.5" opacity="0.06"/>
-  <line x1="750" y1="10" x2="750" y2="30" stroke="#818cf8" stroke-width="0.5" opacity="0.06"/>
-  <line x1="900" y1="0" x2="900" y2="40" stroke="#818cf8" stroke-width="0.5" opacity="0.06"/>
-</svg>
+## Where next?
 
-## Dependency graph
-
-Qualifier consumes a dependency graph as `qualifier.graph.jsonl`:
-
-```jsonl
-{"subject":"bin/server","depends_on":["lib/auth","lib/http","lib/db"]}
-{"subject":"lib/auth","depends_on":["lib/crypto"]}
-{"subject":"lib/http","depends_on":[]}
-```
-
-The graph MUST be a DAG. Cycles are rejected.
+- [Spec](/spec/) — the canonical reference, including every field, every kind, and every rule.
+- [CLI](/cli/) — the command reference for the `qualifier` binary.
+- [Metabox](/metabox/) — the envelope format on its own, in case you want to use it elsewhere.

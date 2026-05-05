@@ -1,6 +1,6 @@
 # Qualifier Specification
 
-**Version:** 0.3.0-draft
+**Version:** 0.4.0
 **Status:** Draft
 **Authors:** Alex Kesling
 
@@ -12,13 +12,61 @@ Qualifier is a deterministic system for recording, propagating, and querying
 typed metadata records against software artifacts. It provides a VCS-friendly
 file format (`.qual`), a Rust library (`libqualifier`), and a CLI binary
 (`qualifier`) that together enable humans and agents to annotate code with
-structured quality signals — and to compute aggregate quality scores that
-propagate through dependency graphs.
+structured quality signals without waiting for a formal process. Each
+annotation carries a `kind` (concern, comment, suggestion, pass, fail,
+blocker, praise, waiver, resolve, or any custom string), letting tools
+filter, thread, and aggregate however they need. Records thread, persist,
+and compose through a single content-addressed model.
 
 Records use the [Metabox](METABOX.md) envelope format: a fixed envelope
 (`metabox`, `type`, `subject`, `issuer`, `issuer_type`, `created_at`, `id`)
 wrapping a type-specific `body` object. Records are content-addressed, append-only, and
 human-writable. No server, no database, no PKI required.
+
+## 0. Why Qualifier
+
+Software is full of structured observations that have no good home. A reviewer
+notices that a function panics on malformed input. A scanner reports a CVE in a
+transitive dependency. A profiler measures a regression on a hot path. A
+licensing audit confirms that a vendored file is MIT. Today, each of these
+observations lands in a different system — a PR comment, a SARIF report, a
+spreadsheet, a wiki page — and none of those systems talks to the others. The
+observations decay because they live somewhere code does not. Structured
+knowledge about code deserves the same rigor we apply to the code itself.
+
+Consider the alternatives we currently reach for. **GitHub PR comments** are
+tied to a diff window and disappear from view the moment the PR merges; the URL
+still resolves, but nothing in the working tree points at it, no tool can query
+it, and a refactor that touches the same lines a year later has no idea the
+conversation ever happened. **SARIF reports** are produced once by a tool, then
+either ignored or archived; they have no notion of human reply, threading, or
+follow-up. **`// TODO:` comments** are unstructured prose hidden in code, with
+no type, no severity, no author beyond `git blame`, and no way to thread a
+discussion. **Issue trackers** are separate from the code they describe; they
+collect bit-rot, can't address a specific span, and require context-switching
+to a different application to learn anything about the file in front of you.
+
+Each of these tools fails the same way: the observation is not a first-class,
+addressable, durable artifact alongside the code. Qualifier's wager is that if
+you make structured observations look like code — files in the repo, version
+controlled, content-addressed, append-only, threadable — they stop evaporating.
+A concern raised in February is still queryable in October. A reply written by
+an agent threads to the human comment that prompted it. A resolution
+supersedes the original signal without erasing it. Merges are clean under
+normal workflows because the file format is designed for it. Tooling can read
+every record because the envelope is uniform.
+
+The same skeleton that holds a human concern also holds a license declaration,
+a security advisory, or a performance measurement. The format is a substrate;
+annotations are simply its first and most-developed application. The cost of
+adoption is one JSONL file per directory and a CLI; the payoff is that the
+structured knowledge you produce — by hand, by review, by tool, by agent —
+finally has somewhere to live where it accumulates instead of decays.
+
+If you are forwarding this document to convince a teammate: the pitch is that
+your team already produces this metadata. It is currently scattered across
+five systems and lost on every merge. Qualifier gives it a single home, in
+files, that survives.
 
 ## 1. Design Principles
 
@@ -30,27 +78,45 @@ human-writable. No server, no database, no PKI required.
    diff readably, and blame usefully. Conflicts are structurally impossible
    under normal workflows (append-only + file-per-artifact).
 
-3. **Deterministic scoring.** Given identical `.qual` files and an identical
-   dependency graph, every implementation MUST produce identical quality scores.
-   No floating point, no random weights — just deterministic integer arithmetic.
+3. **Open record types.** The format is a substrate, not a single application.
+   The Metabox envelope is fixed; record bodies are typed and extensible. New
+   record types extend the system without changing the envelope, and
+   unrecognized types pass through harmlessly. Annotations are the primary
+   record type and the reason qualifier exists, but the same skeleton supports
+   license declarations, security advisories, performance measurements, build
+   provenance, or any other structured observation about a software artifact.
+   Choosing the format does not lock you into a single domain.
 
-4. **Propagation through the graph.** Quality is more than local. Software has
+4. **Ambient annotation.** Record observations the moment you see them. No PR
+   required, no review window, no formal ceremony. A human reading code can
+   leave a `concern` in five seconds; an agent finishing a task can leave a
+   `comment` to flag a follow-up; a scanner can drop a `security-advisory`
+   into the same file. The practice is structurally enabled by append-only
+   JSONL plus content-addressed records — adding a record never conflicts with
+   another, and every record has a stable, addressable identity from the
+   moment it is written.
+
+5. **Deterministic record IDs.** A record's `id` is the BLAKE3 hash of its
+   Metabox Canonical Form (§2.8). Identical inputs produce identical IDs
+   on every implementation — no language-specific or library-specific drift.
+
+6. **Propagation through the graph.** Quality is more than local. Software has
    dependencies. An artifact's *effective* quality is a function of its own
-   attestations AND the effective quality of everything it depends on. A
+   annotations AND the effective quality of everything it depends on. A
    pristine binary that links a cursed library inherits the curse.
 
-5. **Human-first, agent-friendly.** The CLI is designed for humans at a
+7. **Human-first, agent-friendly.** The CLI is designed for humans at a
    terminal. The JSONL format and library API are designed for agents and
    tooling. Both are first-class.
 
-6. **Composable.** The record format uses the Metabox envelope — a uniform
+8. **Composable.** The record format uses the Metabox envelope — a uniform
    frame (who said something about which subject) wrapping typed payloads
-   (what they said). New record types extend the system without changing the
-   envelope. Unknown types pass through harmlessly.
+   (what they said). Records compose into threads via `references`, into
+   chains via `supersedes`, and into graphs via `dependency` records.
 
-7. **Interoperable.** Qualifier records project losslessly into in-toto
-   attestation predicates. SARIF results import into qualifier attestations.
-   The format bridges the gap between supply-chain attestation frameworks and
+9. **Interoperable.** Qualifier records project losslessly into in-toto
+   annotation predicates. SARIF results import into qualifier annotations.
+   The format bridges the gap between supply-chain annotation frameworks and
    human-scale quality tracking.
 
 ## 2. Record Model
@@ -71,13 +137,13 @@ Every record uses the [Metabox](METABOX.md) envelope format with these fields:
 | Field          | Type     | Required | Description |
 |----------------|----------|----------|-------------|
 | `metabox`      | string   | yes      | Envelope version. MUST be `"1"`. |
-| `type`         | string   | yes*     | Record type identifier (see 2.5). *May be omitted in `.qual` files; defaults to `"attestation"`. |
+| `type`         | string   | yes*     | Record type identifier (see 2.5). *May be omitted in `.qual` files; defaults to `"annotation"`. |
 | `subject`      | string   | yes      | Qualified name of the target artifact |
 | `issuer`       | string   | yes      | Who or what created this record (URI) |
 | `issuer_type`  | string   | no       | Issuer classification: `human`, `ai`, `tool`, `unknown` |
 | `created_at`   | string   | yes      | RFC 3339 timestamp |
 | `id`           | string   | yes      | Content-addressed BLAKE3 hash (see 2.8) |
-| `body`         | object   | yes      | Type-specific payload (see 2.6, 3.2, 3.4) |
+| `body`         | object   | yes      | Type-specific payload — see §3 for body schemas by type |
 
 These eight fields form the **uniform interface**. They are the same for every
 record type, they are stable across spec revisions, and they are sufficient
@@ -130,12 +196,13 @@ the record addresses a specific region rather than the whole artifact.
 }
 ```
 
-A span is an object with two position fields:
+A span is an object with these fields:
 
-| Field   | Type   | Required | Description |
-|---------|--------|----------|-------------|
-| `start` | object | yes      | Start of the range (inclusive) |
-| `end`   | object | no       | End of the range (inclusive). Defaults to `start`. |
+| Field          | Type   | Required | Description |
+|----------------|--------|----------|-------------|
+| `start`        | object | yes      | Start of the range (inclusive) |
+| `end`          | object | no       | End of the range (inclusive). Defaults to `start`. |
+| `content_hash` | string | no       | BLAKE3 hash of the spanned lines (see 2.4.3) |
 
 Each position has:
 
@@ -166,47 +233,85 @@ Before hashing (see 2.8), spans are normalized:
 
 - If `end` is absent, it is set equal to `start`.
 - If `col` is absent from a position, it remains absent (not defaulted).
+- `content_hash` is not modified during normalization. It passes through
+  unchanged and participates in the record ID computation when present.
 
 After normalization, `{"start":{"line":42}}` and
 `{"start":{"line":42},"end":{"line":42}}` produce identical canonical forms
 and therefore identical record IDs.
 
-#### 2.4.3 Span Scoring
+#### 2.4.3 Content Hashing
 
-Span-addressed records contribute to the score of their parent **subject**.
-An attestation about `src/parser.rs` at span `{start: {line: 42}, end: {line: 58}}`
-contributes to the raw score of `src/parser.rs`, not to a separate span-level
-score.
+When `content_hash` is present, it records a BLAKE3 hash of the source lines
+covered by the span at the time the annotation was created. This enables
+**freshness checking** — detecting whether the annotated code has changed
+since the annotation was written.
 
-Spans are addressing granularity, not scoring granularity. They tell you
-*where* within the subject a signal applies but do not create separate scoring
-targets.
+**Hash computation:**
 
-> **Rationale.** Span-level scoring would be extremely noisy for most
-> workflows. Subject-level aggregation is the right default. Future
-> extensions MAY introduce opt-in span-level scoring.
+1. Read the file identified by the record's `subject`.
+2. Extract lines `start.line` through `end.line` (inclusive, 1-indexed).
+   Columns are ignored — full lines are always hashed.
+3. Join the extracted lines with `\n` (no trailing newline).
+4. Compute the BLAKE3 hash of the resulting byte string.
+5. Encode as lowercase hex.
+
+**When computed:** The CLI auto-computes `content_hash` when creating span-
+addressed annotations (via `flag`, `suggest`, `comment`, `approve`, `reject`,
+`attest --span`, etc.) if the subject file exists and the span is within
+bounds. If the file does not exist or the span extends beyond EOF, `content_hash`
+is omitted.
+
+**Relationship to `ref`:** The `ref` field pins an annotation to a VCS
+revision (e.g., `git:3aba500`). `content_hash` pins the annotation to
+specific file content. They are complementary: `ref` answers "which commit?"
+while `content_hash` answers "has the code changed?"
+
+**Freshness states:**
+
+| State     | Meaning |
+|-----------|---------|
+| Fresh     | `content_hash` matches current file content |
+| Drifted   | `content_hash` differs from current file content |
+| Missing   | File not found or span beyond EOF |
+| No hash   | Annotation has no `content_hash` (older or whole-file annotations) |
+
+#### 2.4.4 Spans Address Subjects
+
+Span-addressed records attach to their parent **subject**. An annotation
+about `src/parser.rs` at span `{start: {line: 42}, end: {line: 58}}` is a
+record about `src/parser.rs` that happens to point at lines 42–58.
+
+Spans are addressing granularity. They tell you *where* within the subject
+a signal applies but do not create separate addressing targets.
 
 ### 2.5 Record Types
 
 The `type` field is a string that identifies the body schema. Implementations
-MUST support the following types:
+MUST support the `annotation`, `epoch`, and `dependency` types. Additional
+types defined in this spec are RECOMMENDED but not strictly required —
+implementations that don't understand them MUST still preserve them (forward
+compatibility).
 
-| Type            | Description |
-|-----------------|-------------|
-| `attestation`   | A quality signal (see 2.6) |
-| `epoch`         | A compaction snapshot (see 3.2) |
-| `dependency`    | A dependency edge (see 3.4) |
+| Type                 | Description |
+|----------------------|-------------|
+| `annotation`         | A quality signal (see 2.6) |
+| `epoch`              | A compaction snapshot (see 3.2) |
+| `dependency`         | A dependency edge (see 3.4) |
+| `license`            | A license declaration (see 3.5) |
+| `security-advisory`  | A known vulnerability or weakness (see 3.6) |
+| `perf-measurement`   | A performance measurement (see 3.7) |
 
 Implementations MUST ignore records with unrecognized types (forward
 compatibility). Unrecognized records MUST be preserved during file operations
 (compaction, rewriting) — they are opaque pass-through data.
 
-When `type` is omitted in a `.qual` file, it defaults to `"attestation"`.
+When `type` is omitted in a `.qual` file, it defaults to `"annotation"`.
 In canonical form (for hashing), `type` is always materialized.
 
-### 2.6 Attestation Records
+### 2.6 Annotation Records
 
-An **attestation** is a quality signal about a subject. It is the primary
+An **annotation** is a quality signal about a subject. It is the primary
 record type and the reason qualifier exists.
 
 Metabox envelope fields (section 2.2) plus body fields:
@@ -214,9 +319,9 @@ Metabox envelope fields (section 2.2) plus body fields:
 | Field           | Type     | Required | Description |
 |-----------------|----------|----------|-------------|
 | `detail`        | string   | no       | Extended description, markdown allowed |
-| `kind`          | string   | yes      | The type of attestation (see 2.7) |
+| `kind`          | string   | yes      | The type of annotation (see 2.7) |
 | `ref`           | string   | no       | VCS reference pin (e.g., `"git:3aba500"`). Opaque to qualifier. |
-| `score`         | integer  | yes      | Signed quality delta, -100..100 |
+| `references`    | string   | no       | ID of a related record (see 2.11) |
 | `span`          | object   | no       | Sub-artifact range (see 2.4) |
 | `suggested_fix` | string   | no       | Actionable suggestion for improvement |
 | `summary`       | string   | yes      | Human-readable one-liner |
@@ -229,17 +334,17 @@ Canonical Form (MCF) serialization order.
 **Example:**
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-25T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","ref":"git:3aba500","score":-10,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Use the ? operator instead of unwrap()","summary":"Panics on malformed input","tags":["robustness"]}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-25T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","ref":"git:3aba500","span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Use the ? operator instead of unwrap()","summary":"Panics on malformed input","tags":["robustness"]}}
 ```
 
-**Shorthand (equivalent):** Since `type` defaults to `"attestation"`, it may
+**Shorthand (equivalent):** Since `type` defaults to `"annotation"`, it may
 be omitted:
 
 ```json
-{"metabox":"1","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-25T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","score":-10,"summary":"Panics on malformed input"}}
+{"metabox":"1","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-25T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","summary":"Panics on malformed input"}}
 ```
 
-### 2.7 Attestation Kinds
+### 2.7 Annotation Kinds
 
 The `kind` field is an open enum. The following kinds are defined by the spec;
 implementations MUST support them and MAY define additional kinds.
@@ -250,32 +355,34 @@ implementations MUST support them and MAY define additional kinds.
 | `fail`        | The artifact does NOT meet a stated quality bar |
 | `blocker`     | A blocking issue that must be resolved before release |
 | `concern`     | A non-blocking issue worth tracking |
+| `comment`     | An observation or discussion point with no scoring impact |
 | `praise`      | Positive recognition of quality |
+| `resolve`     | Closes a prior record via supersession |
 | `suggestion`  | A proposed improvement (typically paired with `suggested_fix`) |
 | `waiver`      | An acknowledged issue explicitly accepted (with rationale) |
 
-#### 2.7.1 Recommended Score Ranges
+#### 2.7.1 Sign Conventions
 
-The following table provides RECOMMENDED default scores for each kind.
-Implementations and users MAY deviate, but SHOULD maintain sign consistency:
-positive kinds SHOULD have positive scores, and negative kinds SHOULD have
-negative scores.
+The kinds carry an implicit polarity that downstream tools (scoring,
+filtering, gating) can use. Implementations layering numeric signals on
+top SHOULD respect these signs:
 
-| Kind          | Default Score | Recommended Range | Sign |
-|---------------|---------------|-------------------|------|
-| `pass`        | +20           | +10 to +50        | positive |
-| `fail`        | -20           | -10 to -50        | negative |
-| `blocker`     | -50           | -30 to -100       | negative |
-| `concern`     | -10           | -5 to -30         | negative |
-| `praise`      | +30           | +10 to +50        | positive |
-| `suggestion`  | -5            | -5 to -15         | negative |
-| `waiver`      | +10           | 0 to +30          | positive |
+| Kind          | Polarity |
+|---------------|----------|
+| `pass`        | positive |
+| `praise`      | positive |
+| `waiver`      | positive |
+| `comment`     | neutral  |
+| `resolve`     | neutral  |
+| `concern`     | negative |
+| `suggestion`  | negative |
+| `fail`        | negative |
+| `blocker`     | negative |
 
-When `--score` is omitted from `qualifier attest`, the CLI SHOULD use the
-default score for the given kind. `--score` always takes precedence.
-
-These are guidance, not constraints. Implementations MUST NOT reject an
-attestation solely because its score falls outside the recommended range.
+The format itself does not carry a numeric score. Tools MAY add custom
+body fields (e.g., a `score` integer) and define their own evaluation
+semantics on top of the kind polarity — see Appendix A for one possible
+shape.
 
 #### 2.7.2 Custom Kinds
 
@@ -296,7 +403,7 @@ produces identical bytes for the same record, the canonical serialization MUST
 obey the following rules:
 
 1. **Normalization.** Before serialization:
-   - `type` MUST be materialized. If absent, set to `"attestation"`.
+   - `type` MUST be materialized. If absent, set to `"annotation"`.
    - `metabox` MUST be materialized. If absent, set to `"1"`.
    - `span.end` MUST be materialized (in body). If absent, set equal to
      `span.start`.
@@ -330,16 +437,16 @@ See the [Metabox specification](METABOX.md) for the full MCF definition.
 
 #### 2.8.2 Example
 
-Given an attestation with no optional body fields, the MCF is:
+Given an annotation with no optional body fields, the MCF is:
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-30,"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","summary":"Panics on malformed input"}}
 ```
 
 With a span and issuer_type:
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-30,"span":{"start":{"line":42},"end":{"line":42}},"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","span":{"start":{"line":42},"end":{"line":42}},"summary":"Panics on malformed input"}}
 ```
 
 Note that `span.end` has been materialized (it was omitted in the input,
@@ -354,7 +461,7 @@ defaulting to `start`), body fields appear in alphabetical order, and
 ### 2.9 Supersession
 
 Records are immutable once written. To "update" a signal, you write a new
-attestation with a `supersedes` field (in the body) pointing to the prior
+annotation with a `supersedes` field (in the body) pointing to the prior
 record's `id`.
 
 **Constraints:**
@@ -365,10 +472,15 @@ record's `id`.
   problematic code may have moved.)
 - Supersession chains MUST be acyclic. Implementations MUST detect and reject
   cycles.
-- When computing scores, a superseded record MUST be excluded. Only the tip
-  of each chain contributes.
+- When evaluating active records, a superseded record MUST be excluded.
+  Only the tip of each chain is active.
 - Dangling `supersedes` references (pointing to IDs not present in the current
   file set) are allowed. The referencing record remains active.
+
+**Resolve pattern:** A `resolve`-kind annotation supersedes its target,
+withdrawing the target from the active set. This is the canonical way to
+close an issue — the superseded record is no longer surfaced and the
+resolve record stands as the visible tombstone.
 
 ### 2.10 The `.qual` File Format
 
@@ -403,28 +515,72 @@ All layouts are backwards-compatible and can coexist in the same project.
 **Example (mixed record types):**
 
 ```jsonl
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","ref":"git:3aba500","score":-30,"span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Replace .unwrap() with proper error propagation","summary":"Panics on malformed UTF-8 input","tags":["robustness","error-handling"]}}
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","issuer_type":"human","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","score":40,"summary":"Excellent property-based test coverage","tags":["testing"]}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","ref":"git:3aba500","span":{"start":{"line":42},"end":{"line":58}},"suggested_fix":"Replace .unwrap() with proper error propagation","summary":"Panics on malformed UTF-8 input","tags":["robustness","error-handling"]}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","issuer_type":"human","created_at":"2026-02-24T11:00:00Z","id":"e5f6a7b8...","body":{"kind":"praise","summary":"Excellent property-based test coverage","tags":["testing"]}}
 ```
+
+### 2.11 References
+
+The `references` body field provides a lightweight "re:" pointer from one
+annotation to another. Unlike `supersedes` (which removes the referenced
+record from the active set), `references` is purely informational — both
+the original and the referencing record remain active.
+
+**Semantics:**
+
+- A `references` value is a single record ID string.
+- The referenced record is NOT filtered out. Both records remain active.
+- Cross-subject references are allowed. An annotation on `src/lexer.rs`
+  MAY reference a record on `src/parser.rs` ("see also").
+- Dangling references are allowed (same policy as `supersedes`). The
+  referenced record may live in a different file or not be loaded.
+- Self-references are forbidden. An annotation MUST NOT reference its own
+  ID. Implementations MUST reject this at write time.
+
+**Use cases:**
+
+- Reply threads: an AI follow-up to a human observation.
+- Resolution chains: "this addresses the concern raised in <id>".
+- Cross-file commentary: "see also the related concern on lexer.rs".
+
+**Threading semantics:** Records referencing the same parent form a thread.
+Implementations SHOULD display these as threaded conversations with
+tree-drawing characters (`├──`, `└──`). Reply depth is unbounded — a reply
+to a reply is a valid thread.
+
+**Example:**
+
+```json
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-03-01T10:00:00Z","id":"b2c3d4e5...","body":{"kind":"comment","references":"a1b2c3d4...","summary":"This was addressed in the latest refactor"}}
+```
+
+**Full lifecycle example (flag → reply → resolve):**
+
+```jsonl
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-03-01T09:00:00Z","id":"a1b2c3d4...","body":{"kind":"concern","span":{"start":{"line":42}},"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:bob@example.com","created_at":"2026-03-01T10:00:00Z","id":"b2c3d4e5...","body":{"kind":"comment","references":"a1b2c3d4...","summary":"Good catch — fixed in latest commit"}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-03-01T11:00:00Z","id":"c3d4e5f6...","body":{"kind":"resolve","summary":"Resolved","supersedes":"a1b2c3d4..."}}
+```
+
+After the resolve, the original concern's `-10` is withdrawn from scoring.
+The reply remains visible in the thread for context.
 
 ## 3. Record Type Specifications
 
-### 3.1 Attestation (`type: "attestation"`)
+### 3.1 Annotation (`type: "annotation"`)
 
 Defined in section 2.6. This is the primary record type.
 
 ### 3.2 Epoch (`type: "epoch"`)
 
 An **epoch** is a synthetic compaction summary produced by the compactor. It
-replaces a set of attestations with a single record that preserves the net
-score.
+replaces a set of records with a single record that preserves their refs.
 
 Body fields (alphabetical):
 
 | Field         | Type     | Required | Description |
 |---------------|----------|----------|-------------|
 | `refs`        | string[] | yes      | IDs of the compacted records |
-| `score`       | integer  | yes      | Raw score at compaction time |
 | `span`        | object   | no       | Sub-artifact range |
 | `summary`     | string   | yes      | `"Compacted from N records"` |
 
@@ -434,17 +590,16 @@ Epoch records MUST set `issuer` to `"urn:qualifier:compact"` and
 **Example:**
 
 ```json
-{"metabox":"1","type":"epoch","subject":"src/parser.rs","issuer":"urn:qualifier:compact","issuer_type":"tool","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6...","body":{"refs":["a1b2...","c3d4..."],"score":10,"summary":"Compacted from 12 records"}}
+{"metabox":"1","type":"epoch","subject":"src/parser.rs","issuer":"urn:qualifier:compact","issuer_type":"tool","created_at":"2026-02-25T12:00:00Z","id":"f9e8d7c6...","body":{"refs":["a1b2...","c3d4..."],"summary":"Compacted from 12 records"}}
 ```
 
-Epoch records are treated as normal scored records by the scoring engine. The
-`refs` field exists solely for auditability — it lets you trace back (via VCS
+The `refs` field exists for auditability — it lets you trace back (via VCS
 history) to the individual records that were folded in.
 
 ### 3.3 Compaction
 
 Append-only files grow without bound. **Compaction** is the mechanism for
-reclaiming space while preserving scoring correctness.
+reclaiming space.
 
 A compaction rewrites a `.qual` file by:
 
@@ -455,8 +610,6 @@ A compaction rewrites a `.qual` file by:
 
 #### 3.3.1 Compaction Rules
 
-- Compaction MUST NOT change the raw score of any subject. This is the
-  invariant. If compaction changes a score, the implementation has a bug.
 - Compaction MUST be explicit and user-initiated — never automatic or silent.
 - Compaction MUST preserve records of unrecognized types (they are opaque
   pass-through).
@@ -481,117 +634,176 @@ Body fields:
 {"metabox":"1","type":"dependency","subject":"bin/server","issuer":"https://build.example.com","created_at":"2026-02-25T10:00:00Z","id":"1a2b3c4d...","body":{"depends_on":["lib/auth","lib/http","lib/db"]}}
 ```
 
-The dependency graph MUST be a DAG. Implementations MUST detect and reject
-cycles.
+The dependency graph implied by these records MUST be a DAG.
 
-#### 3.4.1 Dependency Graph Sources
+Dependency records are wire-format-level: they declare edges that
+downstream tools can use to propagate signals across artifacts. The
+reference CLI does not consume them today (the `qualifier graph` command
+and built-in graph engine were yanked along with scoring), but they
+round-trip through `.qual` files unchanged.
 
-Qualifier accepts dependency information from two sources:
+### 3.5 License (`type: "license"`)
 
-1. **Dependency records in `.qual` files** — as defined above.
-2. **Legacy graph file** — a standalone JSONL file (conventionally
-   `qualifier.graph.jsonl`) with simplified dependency declarations:
+A **license** record declares the licensing terms that apply to a subject.
+License records are typically produced by a license scanner or written by
+hand during a licensing audit.
 
-```jsonl
-{"subject":"bin/server","depends_on":["lib/auth","lib/http","lib/db"]}
-{"subject":"lib/auth","depends_on":["lib/crypto"]}
-```
+Body fields:
 
-Both sources are merged when computing effective scores. When both declare
-edges for the same subject, the union of all `depends_on` arrays is used.
+| Field        | Type    | Required | Description |
+|--------------|---------|----------|-------------|
+| `confidence` | number  | no       | Detector confidence in `[0.0, 1.0]`. Omit for hand-asserted records. |
+| `evidence`   | string  | no       | Free-form provenance for the assertion (e.g., `"LICENSE file SHA256:abc..."`, `"package.json#license"`). |
+| `spdx_id`    | string  | yes      | SPDX license identifier (e.g., `"MIT"`, `"Apache-2.0"`, `"GPL-3.0-or-later"`). |
 
-### 3.5 Defining New Record Types
-
-New record types are identified by a string value in the `type` field. Types
-defined outside this spec SHOULD use a URI to avoid collisions:
+**Example:**
 
 ```json
-{"metabox":"1","type":"https://example.com/qualifier/license/v1","subject":"src/parser.rs","issuer":"https://license-scanner.example.com","created_at":"...","id":"...","body":{"license":"MIT"}}
+{"metabox":"1","type":"license","subject":"vendor/lodash","issuer":"https://license-scanner.example.com","issuer_type":"tool","created_at":"2026-03-01T10:00:00Z","id":"...","body":{"confidence":0.98,"evidence":"LICENSE file SHA256:9f86d081...","spdx_id":"MIT"}}
 ```
 
-Types defined in this spec use short aliases (`attestation`, `epoch`,
-`dependency`). The spec reserves all unqualified type names (strings that
-do not contain `:` or `/`) for future standardization.
+A license record documents an attribute of the subject; if a licensing
+problem warrants a quality signal, write a separate `annotation` (e.g.,
+`kind: "blocker"`) and optionally `references` the license record.
 
-A record type specification MUST define:
+### 3.6 Security Advisory (`type: "security-advisory"`)
 
-1. The body fields, their types, and which are required.
-2. How the type interacts with scoring (if at all).
+A **security-advisory** record records a known vulnerability or weakness
+affecting a subject. Records of this type are typically produced by a
+vulnerability scanner, an SBOM tool, or written by hand when triaging a CVE.
 
-Body fields are always serialized in lexicographic order per MCF.
+Body fields:
 
-## 4. Scoring
+| Field               | Type   | Required | Description |
+|---------------------|--------|----------|-------------|
+| `affected_versions` | string | no       | Version range expression (e.g., `"<1.4.2"`, `">=2.0.0,<2.3.1"`). |
+| `cve_id`            | string | no       | CVE identifier (e.g., `"CVE-2024-1234"`). |
+| `cwe_id`            | string | no       | CWE identifier (e.g., `"CWE-79"`). |
+| `severity`          | string | yes      | One of `critical`, `high`, `medium`, `low`, `info`. |
+| `summary`           | string | yes      | Human-readable one-line description of the issue. |
 
-### 4.1 Raw Score
+At least one of `cve_id` or `cwe_id` SHOULD be present, but neither is
+strictly required (some advisories predate CVE assignment or describe
+project-specific issues).
 
-The **raw score** of a subject is the sum of the `score` fields of all
-non-superseded attestation and epoch records for that subject, clamped to
-`[-100, 100]`.
+**Example:**
 
-```
-raw_score(A) = clamp(-100, 100, sum(record.body.score for active scored records of A))
-```
-
-A subject with no scored records has a raw score of **0** (unqualified).
-
-Only records of types that carry a `score` field (`attestation`, `epoch`)
-contribute to scoring. Dependency records and unknown types do not.
-
-### 4.2 Effective Score
-
-The **effective score** of a subject is a function of its raw score and the
-effective scores of its dependencies:
-
-```
-effective_score(A) = min(raw_score(A), min(effective_score(D) for D in deps(A)))
+```json
+{"metabox":"1","type":"security-advisory","subject":"vendor/openssl","issuer":"https://osv.dev","issuer_type":"tool","created_at":"2026-03-01T10:00:00Z","id":"...","body":{"affected_versions":"<3.0.8","cve_id":"CVE-2023-0286","severity":"high","summary":"X.400 address type confusion in X.509 GeneralName"}}
 ```
 
-Your effective score can never be higher than your worst dependency's effective
-score. Quality flows downhill.
+To turn a security advisory into a quality signal, write an `annotation`
+(e.g., `kind: "blocker"`) on the same subject that `references` the advisory.
 
-If a subject has no dependencies, its effective score equals its raw score.
+### 3.7 Performance Measurement (`type: "perf-measurement"`)
 
-If a subject has no scored records but has dependencies, its effective score
-is the minimum effective score of its dependencies (the "inherited floor").
+A **perf-measurement** record captures a single performance measurement for
+a subject. Records of this type are typically produced by a benchmark
+harness, a profiler, or a CI job that records production telemetry.
 
-### 4.3 Span Scoring
+Body fields:
 
-Span-addressed records contribute to the raw score of their `subject`. The
-span is informational — it identifies where a signal applies within the
-subject, but scoring aggregates at the subject level.
+| Field      | Type   | Required | Description |
+|------------|--------|----------|-------------|
+| `baseline` | number | no       | Reference value to compare against (e.g., the previous measurement). |
+| `metric`   | string | yes      | Metric identifier (e.g., `"latency_p99_ms"`, `"throughput_rps"`, `"binary_size_bytes"`). |
+| `unit`     | string | no       | Unit of measure (e.g., `"ms"`, `"req/s"`, `"bytes"`). May be embedded in the metric name; this field is for explicit cases. |
+| `value`    | number | yes      | The measured value. |
 
-This means `qualifier score src/parser.rs` reports one score for the file,
-even if individual attestations target different line ranges.
+**Example:**
 
-Implementations MAY offer span-level filtering for display (e.g.,
-`qualifier show src/parser.rs --line 42` shows only attestations whose spans
-overlap line 42), but this is a presentation concern, not a scoring concern.
+```json
+{"metabox":"1","type":"perf-measurement","subject":"bin/server","issuer":"https://ci.example.com","issuer_type":"tool","created_at":"2026-03-01T10:00:00Z","id":"...","body":{"baseline":42.0,"metric":"latency_p99_ms","unit":"ms","value":47.3}}
+```
 
-### 4.4 Score Status
+A regression worth flagging should be expressed as an `annotation` (e.g.,
+`kind: "concern"` or `kind: "blocker"`) that may `references` the underlying
+measurement record.
 
-Implementations SHOULD report a human-readable status for each subject:
+### 3.8 Defining New Record Types
 
-| Condition | Status |
-|-----------|--------|
-| effective < 0 | `blocker` |
-| effective = 0, limited by dependency | `unqualified (limited)` |
-| effective = 0 | `unqualified` |
-| effective >= 60, limited by dependency | `healthy (limited)` |
-| effective >= 60 | `healthy` |
-| limited by dependency | `ok (limited)` |
-| otherwise | `ok` |
+Per design principle 3 (Open record types), implementations and integrations
+MAY define new record types. New record types are identified by a string
+value in the `type` field. Types defined outside this spec SHOULD use a URI
+to avoid collisions:
 
-A subject is "limited" when its effective score is lower than its raw score
-due to a dependency constraint.
+```json
+{"metabox":"1","type":"https://example.com/qualifier/build-provenance/v1","subject":"bin/server","issuer":"https://build.example.com","created_at":"...","id":"...","body":{"builder":"github-actions","commit":"abc123"}}
+```
+
+Types defined in this spec use short unqualified names (`annotation`,
+`epoch`, `dependency`, `license`, `security-advisory`, `perf-measurement`).
+The spec reserves all unqualified type names (strings that do not contain
+`:` or `/`) for future standardization.
+
+A record type specification MUST define the body fields, their types, and
+which are required. Body fields are always serialized in lexicographic
+order per MCF.
+
+## 4. Layering Quality Signals on Top
+
+The format itself does not prescribe a numeric model. Annotations carry a
+`kind` (with implicit polarity, see §2.7.1) and a free-form body; tools
+that want to compute aggregate quality signals layer on top by adding
+custom body fields and defining their own evaluation semantics.
+
+This section is an **example** of one such layer. Nothing here is required
+of conforming implementations.
+
+### 4.1 Example: A `score` body field
+
+A tool MAY add a `score: integer` field to annotation bodies. Treat
+`score` as a signed quality delta — negative for problems, positive for
+positives, absent for neutral observations. A reasonable default mapping
+follows the polarity table in §2.7.1:
+
+| Kind          | Example default |
+|---------------|-----------------|
+| `pass`        | +20             |
+| `fail`        | -20             |
+| `blocker`     | -50             |
+| `concern`     | -10             |
+| `comment`     | absent          |
+| `praise`      | +30             |
+| `resolve`     | absent          |
+| `suggestion`  | -5              |
+| `waiver`      | +10             |
+
+These are illustrative. A tool may pick any range or mapping that suits
+its aggregation strategy.
+
+### 4.2 Example: Aggregating across a subject
+
+A tool that defines a `score` body field as above might define a **raw
+score** for a subject as the sum of `score` fields of its active
+(non-superseded) annotation records, clamped to a chosen range.
+
+When a dependency graph (§3.4) is present, the tool might further define
+an **effective score** that propagates negative signals along edges
+(e.g., `effective(A) = min(raw(A), min(effective(D) for D in deps(A)))`),
+so a problem in a leaf subject lowers the score of everything that
+depends on it.
+
+These are choices the tool makes, not invariants of the format. A
+different tool might weight by `kind`, decay by age, or ignore signed
+deltas entirely in favour of a categorical bar (e.g., "any active
+`blocker` fails the build").
+
+### 4.3 Span behaviour
+
+Span-addressed records (§2.4) attach to their `subject`. Whatever
+aggregation a tool defines, the span identifies where the signal applies
+within the subject; the tool may surface span-level views for display,
+but the canonical addressing unit is the subject.
 
 ## 5. Interoperability
 
 ### 5.1 in-toto Predicate Projection
 
-Qualifier records project losslessly into [in-toto v1 Statement](https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md)
+Qualifier records project losslessly into [in-toto v1 Statement](https://github.com/in-toto/annotation/blob/main/spec/v1/statement.md)
 predicates for use with DSSE signing and Sigstore distribution.
 
-**Mapping (attestation):**
+**Mapping (annotation):**
 
 ```json
 {
@@ -602,11 +814,10 @@ predicates for use with DSSE signing and Sigstore distribution.
       "digest": {"blake3": "<artifact-content-hash>"}
     }
   ],
-  "predicateType": "https://qualifier.dev/attestation/v1",
+  "predicateType": "https://qualifier.dev/annotation/v1",
   "predicate": {
     "qualifier_id": "a1b2c3d4...",
     "kind": "concern",
-    "score": -10,
     "span": {"start": {"line": 42}, "end": {"line": 58}},
     "summary": "Panics on malformed input",
     "tags": ["robustness"],
@@ -638,13 +849,13 @@ Qualifier's `id` is the hash of the *record*, not the *artifact*.
 
 | Qualifier type | Predicate type URI |
 |---------------|-------------------|
-| `attestation` | `https://qualifier.dev/attestation/v1` |
+| `annotation` | `https://qualifier.dev/annotation/v1` |
 | `epoch` | `https://qualifier.dev/epoch/v1` |
 | `dependency` | `https://qualifier.dev/dependency/v1` |
 
 ### 5.2 SARIF Import
 
-SARIF v2.1.0 results can be converted to qualifier attestations:
+SARIF v2.1.0 results can be converted to qualifier annotations:
 
 | SARIF field | Qualifier field |
 |-------------|----------------|
@@ -654,60 +865,89 @@ SARIF v2.1.0 results can be converted to qualifier attestations:
 | `result.locations[0].physicalLocation.region.endLine` | `body.span.end.line` |
 | `result.locations[0].physicalLocation.region.endColumn` | `body.span.end.col` |
 | `result.ruleId` | `body.kind` (as custom kind) |
-| `result.level` | `body.score` (see mapping below) |
+| `result.level` | `body.kind` (`error` → `fail`, `warning` → `concern`, `note` → `comment`) |
 | `result.message.text` | `body.summary` |
 | `run.tool.driver.name` | `issuer` |
 | (constant) | `issuer_type: "tool"` (envelope) |
 
-**Level-to-score mapping:**
-
-| SARIF level | Default score |
-|-------------|---------------|
-| `error` | -20 |
-| `warning` | -10 |
-| `note` | -5 |
-| `none` | 0 |
-
-Implementations providing SARIF import SHOULD allow users to override these
-defaults.
-
 ## 6. CLI Interface
 
-The CLI binary is named `qualifier`.
+The CLI binary is named `qualifier`. Writes go through four verbs:
+`record`, `reply`, `resolve`, and `emit`.
 
 ### 6.1 Core Commands
 
-```
-qualifier attest <artifact> [options]     Add an attestation
-qualifier show <artifact>                 Show attestations and scores
-qualifier score [artifact...]             Compute and display scores
-qualifier ls [--below <n>] [--kind <k>]   List subjects by score/kind
-qualifier graph [--format dot|json]        Visualize the dependency graph
-qualifier check [--min-score <n>]          CI gate: exit non-zero if below threshold
-qualifier compact <artifact> [options]     Compact a .qual file (prune/snapshot)
-qualifier init                             Initialize qualifier in a repo
-qualifier blame <artifact>                 Per-line VCS attribution for a .qual file
-```
-
-### 6.2 `qualifier attest`
-
-Interactive and non-interactive attestation creation.
+**Write commands:**
 
 ```
-qualifier attest src/parser.rs \
-  --kind concern \
-  --score -30 \
-  --summary "Panics on malformed input" \
+qualifier record <kind> <location> [message]    Record an annotation
+qualifier reply <target> <message>              Reply to an existing record
+qualifier resolve <target> [message]            Resolve (close) an existing record
+qualifier emit <type> <subject> --body '<JSON>' Emit a raw record of any type
+```
+
+**Inspect commands:**
+
+```
+qualifier show <artifact>                 Show annotations for an artifact
+qualifier ls [--kind <k>]                 List subjects by kind
+qualifier praise <artifact>               Show who annotated an artifact and why
+                                          (also available as the `blame` alias)
+qualifier review [subject]                Check freshness of annotations
+```
+
+**Maintain commands:**
+
+```
+qualifier compact <artifact> [options]    Compact a .qual file (prune/snapshot)
+```
+
+### 6.2 `qualifier record`
+
+The unified annotation-write verb. Replaces the old `attest`, `flag`,
+`comment`, `suggest`, `approve`, and `reject` commands with a single
+shape: `qualifier record <kind> <location> [message] [flags]`.
+
+```
+qualifier record concern src/parser.rs:42:58 "Panics on malformed input" \
   --suggested-fix "Use proper error propagation" \
   --tag robustness \
   --tag error-handling \
-  --issuer "mailto:alice@example.com" \
-  --span 42:58
+  --issuer "mailto:alice@example.com"
 ```
 
-#### 6.2.1 Span Syntax
+**Arguments:**
 
-The `--span` flag accepts the following forms:
+| Argument | Meaning |
+|----------|---------|
+| `<kind>` | One of `concern`, `comment`, `suggestion`, `pass`, `fail`, `blocker`, `praise`, `waiver`, `resolve`. Custom strings are allowed (per spec §2.7.2). |
+| `<location>` | Subject path with optional span — see §6.2.1. |
+| `[message]` | One-line summary. Becomes `body.summary`. Required in non-interactive mode unless `--stdin` is set. |
+
+**Flags:** `--detail TEXT`, `--ref REF`, `--tag T1 --tag T2 ...`,
+`--suggested-fix TEXT`, `--issuer URI`, `--issuer-type {human|ai|tool|unknown}`,
+`--file PATH`, `--span SPEC` (overrides any span in `<location>`),
+`--supersedes ID`, `--references ID`, `--stdin` (batch JSONL).
+
+**Defaults:**
+
+- When `--issuer` is omitted, defaults to the VCS user identity (see §8.4).
+- When a span is given, `content_hash` is auto-computed if the source file
+  is readable.
+
+#### 6.2.1 Location and Span Syntax
+
+The `<location>` argument folds the subject and an optional span into a
+single string:
+
+| Form | Meaning |
+|------|---------|
+| `src/parser.rs` | Whole file |
+| `src/parser.rs:42` | Line 42 |
+| `src/parser.rs:15:28` | Lines 15 through 28 |
+
+The `--span` flag overrides any span parsed from `<location>` and accepts
+the same forms plus column granularity:
 
 | Form | Meaning | Equivalent `span` object |
 |------|---------|--------------------------|
@@ -715,67 +955,116 @@ The `--span` flag accepts the following forms:
 | `42:58` | Lines 42 through 58 | `{"start":{"line":42},"end":{"line":58}}` |
 | `42.5:58.80` | Line 42 col 5 through line 58 col 80 | `{"start":{"line":42,"col":5},"end":{"line":58,"col":80}}` |
 
-When `--span` is omitted, no span is set (the attestation addresses the whole
-subject).
+#### 6.2.2 Batch Mode
 
-#### 6.2.2 Other Flags
+`qualifier record --stdin` reads JSONL from stdin. Each line is one of:
 
-`--summary` is required in non-interactive mode.
+- An overrides object: `{"kind":"...","location":"...","message":"...", ...}`
+  with optional `detail`, `ref`, `tags`, `issuer`, `issuer_type`,
+  `span`, `supersedes`, `references`, `suggested_fix`.
+- A complete record (envelope + body), accepted for forward-compat.
 
-When `--score` is omitted, the CLI uses the recommended default score for the
-given kind (see section 2.7.1).
+### 6.3 `qualifier reply`
 
-`--file <path>` writes the attestation to a specific `.qual` file instead
-of using the default layout resolution.
+```
+qualifier reply <target> <message>
+```
 
-When `--issuer` is omitted, defaults to the VCS user identity (see 8.4).
+Sugar over "kind=comment + references=`<target-id>`". The default kind is
+`comment`; override with `--kind`.
 
-### 6.3 `qualifier show`
+`<target>` is either:
+
+- An **id-prefix** (≥ 4 characters), or
+- A **`<location>`** (e.g., `src/auth.rs:42`). A location resolves to the
+  most-recent active record at that subject and span. If multiple active
+  records share the most-recent timestamp, exit non-zero with a
+  disambiguation list of `[id-prefix] kind L<line> "summary"`.
+
+Same body flags as `qualifier record`.
+
+### 6.4 `qualifier resolve`
+
+```
+qualifier resolve <target> [message]
+```
+
+Sugar over "kind=resolve + supersedes=`<target-id>`". `<target>` follows
+the same id-prefix-or-location rules as `qualifier reply`. The default
+summary is "Resolved" when `[message]` is omitted.
+
+### 6.5 `qualifier emit`
+
+```
+qualifier emit <type> <subject> --body '<JSON>'
+```
+
+A raw, script-oriented write for novel or uncommon record types. The body
+is passed through unchanged into the record's `body` field. For unknown
+types the record round-trips via `Record::Unknown` (preserving the body
+verbatim). For `--type annotation`, the body is validated against
+`AnnotationBody`.
+
+```
+qualifier emit license src/lib.rs --body '{"spdx":"MIT"}' \
+  --issuer "https://ci.example.com"
+
+qualifier emit https://example.com/lint/v1 src/parser.rs \
+  --body '{"rule":"no-panic","matches":3}'
+```
+
+`--stdin` reads JSONL where each line is a complete record. The
+positional `<type>` and `<subject>`, when supplied, become defaults
+applied to lines missing those fields.
+
+#### 6.5.1 Example Workflow
+
+```bash
+# Record a concern at line 42
+qualifier record concern src/parser.rs:42 "Panics on malformed input"
+
+# See the concern
+qualifier show src/parser.rs
+
+# Reply to it (using ID prefix or location)
+qualifier reply a1b2 "Good catch, fixed in latest commit"
+qualifier reply src/parser.rs:42 "Good catch, fixed in latest commit"
+
+# Close it
+qualifier resolve a1b2
+
+# The original concern is no longer surfaced
+qualifier show src/parser.rs
+```
+
+### 6.6 `qualifier show`
 
 ```
 qualifier show src/parser.rs
 
   src/parser.rs
-  Raw score:       10
-  Effective score: -20 (limited by lib/crypto)
 
-  Records (2):
-    [-30] concern  L42–58 "Panics on malformed input"    alice  2026-02-24
-    [+40] praise          "Excellent property test coverage"  bob  2026-02-24
+  Records (4):
+    concern  "Panics on malformed input"    alice  2026-02-24  a1b2c3d4
+    ├── comment  "Good catch, fixed"        bob    2026-02-25  b2c3d4e5
+    └── resolve  "Resolved"                 alice  2026-02-25  c3d4e5f6
+    praise   "Excellent property test coverage"  bob  2026-02-24  e5f6a7b8
 ```
 
-When attestations have spans, the line range is displayed. Use
-`--line <n>` to filter to attestations overlapping a specific line.
+When annotations have spans, the line range is displayed. Use
+`--line <n>` to filter to annotations overlapping a specific line.
 
-### 6.4 `qualifier score`
+`--all` shows all records including resolved/superseded ones (default hides
+them). `--pretty` forces colored output when piped.
 
-```
-qualifier score
-
-  SUBJECT               RAW    EFF   STATUS
-  lib/crypto            -20    -20   ██░░░░░░░░  blocker
-  lib/auth               60    -20   ██░░░░░░░░  blocker
-  lib/http               80     80   ████████░░  healthy
-  bin/server             45    -20   ██░░░░░░░░  blocker
-```
-
-### 6.5 `qualifier check`
-
-Returns exit code 0 if all subjects meet the threshold, non-zero otherwise.
+### 6.7 `qualifier ls`
 
 ```
-qualifier check --min-score 0
-```
-
-### 6.6 `qualifier ls`
-
-```
-qualifier ls --below 0
 qualifier ls --kind blocker
 qualifier ls --unqualified
 ```
 
-### 6.7 `qualifier compact`
+### 6.8 `qualifier compact`
 
 ```
 qualifier compact src/parser.rs              # prune superseded records
@@ -785,16 +1074,34 @@ qualifier compact --all                      # compact every .qual file
 qualifier compact --all --dry-run            # preview repo-wide compaction
 ```
 
-### 6.8 `qualifier init`
+### 6.9 `qualifier review`
+
+Check the freshness of span-addressed annotations against current file content.
 
 ```
-qualifier init
-  Created qualifier.graph.jsonl
-  Detected VCS: git
-  Added *.qual merge=union to .gitattributes
+qualifier review                          # check all annotations
+qualifier review src/parser.rs            # check annotations for one subject
+qualifier review --format json            # machine-readable output
+qualifier review --no-ignore              # bypass ignore rules
 ```
 
-### 6.9 Configuration
+**Human output:**
+
+```
+  FRESH    src/parser.rs:42    concern  "Panics on malformed input"
+  DRIFTED  src/auth.rs:10:25   suggestion  "Consider using Result"
+  MISSING  src/old.rs:1:20     blocker  "Memory leak"
+
+3 annotations checked: 1 fresh, 1 drifted, 1 missing
+```
+
+Only active (non-superseded) annotations with spans that have a `content_hash`
+are checked. Annotations without spans or without `content_hash` are skipped.
+
+**JSON output** includes `status` (`fresh`, `drifted`, `missing`) and `detail`
+with expected/actual hashes for drifted annotations or a reason for missing ones.
+
+### 6.10 Configuration
 
 Qualifier uses layered configuration. Precedence (highest wins):
 
@@ -810,31 +1117,33 @@ Qualifier uses layered configuration. Precedence (highest wins):
 
 | Key         | CLI flag       | Env var              | Default |
 |-------------|----------------|----------------------|---------|
-| `graph`     | `--graph`      | `QUALIFIER_GRAPH`    | `qualifier.graph.jsonl` |
 | `issuer`    | `--issuer`     | `QUALIFIER_ISSUER`   | VCS identity (see 8.4) |
 | `format`    | `--format`     | `QUALIFIER_FORMAT`   | `human` |
-| `min_score` | `--min-score`  | `QUALIFIER_MIN_SCORE`| `0` |
 
-### 6.10 `qualifier blame`
+### 6.11 `qualifier praise`
 
-Delegates to the underlying VCS blame command for the subject's `.qual` file.
+Show who recorded annotations against an artifact and why. Available
+under the alias `qualifier blame`; the canonical name is `praise` (the
+tool tracks who helped, not who to blame). With `--vcs`, delegates to
+the underlying VCS blame command for the subject's `.qual` file.
 
 ```
-qualifier blame src/parser.rs
+qualifier praise src/parser.rs
+qualifier praise src/parser.rs --vcs
 ```
 
 ## 7. Library API
 
 The `qualifier` crate exposes its library API from `src/lib.rs`. Library
-consumers add `qualifier = { version = "0.3", default-features = false }` to
+consumers add `qualifier = { version = "0.4", default-features = false }` to
 avoid pulling in CLI dependencies.
 
 ```rust
-// qualifier::attestation — record types and core logic
+// qualifier::annotation — record types and core logic
 
 /// A typed qualifier record. Dispatches on the `type` field in JSON.
 pub enum Record {
-    Attestation(Box<Attestation>),
+    Annotation(Box<Annotation>),
     Epoch(Epoch),
     Dependency(DependencyRecord),
     Unknown(serde_json::Value),  // forward compatibility
@@ -843,31 +1152,30 @@ pub enum Record {
 impl Record {
     pub fn subject(&self) -> &str;
     pub fn id(&self) -> &str;
-    pub fn score(&self) -> Option<i32>;         // Attestation | Epoch
-    pub fn supersedes(&self) -> Option<&str>;   // Attestation only
-    pub fn kind(&self) -> Option<&Kind>;        // Attestation only
+    pub fn supersedes(&self) -> Option<&str>;   // Annotation only
+    pub fn references(&self) -> Option<&str>;   // Annotation only
+    pub fn kind(&self) -> Option<&Kind>;        // Annotation only
     pub fn issuer_type(&self) -> Option<&IssuerType>;
-    pub fn as_attestation(&self) -> Option<&Attestation>;
+    pub fn as_annotation(&self) -> Option<&Annotation>;
     pub fn as_epoch(&self) -> Option<&Epoch>;
-    pub fn is_scored(&self) -> bool;            // Attestation | Epoch
 }
 
-pub struct Attestation {
+pub struct Annotation {
     pub metabox: String,                    // always "1"
-    pub record_type: String,                // "attestation"
+    pub record_type: String,                // "annotation"
     pub subject: String,
     pub issuer: String,
     pub issuer_type: Option<IssuerType>,
     pub created_at: DateTime<Utc>,
     pub id: String,
-    pub body: AttestationBody,
+    pub body: AnnotationBody,
 }
 
-pub struct AttestationBody {
+pub struct AnnotationBody {
     pub detail: Option<String>,
     pub kind: Kind,
     pub r#ref: Option<String>,
-    pub score: i32,
+    pub references: Option<String>,
     pub span: Option<Span>,
     pub suggested_fix: Option<String>,
     pub summary: String,
@@ -888,7 +1196,6 @@ pub struct Epoch {
 
 pub struct EpochBody {
     pub refs: Vec<String>,
-    pub score: i32,
     pub span: Option<Span>,
     pub summary: String,
 }
@@ -910,7 +1217,8 @@ pub struct DependencyBody {
 
 pub struct Span {
     pub start: Position,
-    pub end: Option<Position>,   // normalized to Some(start) before hashing
+    pub end: Option<Position>,          // normalized to Some(start) before hashing
+    pub content_hash: Option<String>,   // BLAKE3 of spanned lines
 }
 
 pub struct Position {
@@ -918,15 +1226,15 @@ pub struct Position {
     pub col: Option<u32>,        // 1-indexed, optional
 }
 
-pub enum Kind { Pass, Fail, Blocker, Concern, Praise, Suggestion, Waiver, Custom(String) }
+pub enum Kind { Pass, Fail, Blocker, Concern, Comment, Resolve, Praise, Suggestion, Waiver, Custom(String) }
 pub enum IssuerType { Human, Ai, Tool, Unknown }
 
-pub fn generate_id(attestation: &Attestation) -> String;
+pub fn generate_id(annotation: &Annotation) -> String;
 pub fn generate_epoch_id(epoch: &Epoch) -> String;
 pub fn generate_dependency_id(dep: &DependencyRecord) -> String;
 pub fn generate_record_id(record: &Record) -> String;
-pub fn validate(attestation: &Attestation) -> Vec<String>;
-pub fn finalize(attestation: Attestation) -> Attestation;
+pub fn validate(annotation: &Annotation) -> Vec<String>;
+pub fn finalize(annotation: Annotation) -> Annotation;
 pub fn finalize_epoch(epoch: Epoch) -> Epoch;
 pub fn finalize_record(record: Record) -> Record;
 
@@ -936,13 +1244,14 @@ pub fn parse(path: &Path) -> Result<QualFile>;
 pub fn append(path: &Path, record: &Record) -> Result<()>;
 pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>;
 
-// qualifier::scoring
-pub struct ScoreReport { pub raw: i32, pub effective: i32, pub limiting_path: Option<Vec<String>> }
-pub fn raw_score(records: &[Record]) -> i32;
-pub fn effective_scores(graph: &DependencyGraph, qual_files: &[QualFile]) -> HashMap<String, ScoreReport>;
+// qualifier::content_hash — span freshness checking
+pub fn compute_span_hash(file_path: &Path, span: &Span) -> Option<String>;
+pub enum FreshnessStatus { Fresh, Drifted { expected, actual }, Missing { reason }, NoHash }
+pub fn check_freshness(file_path: &Path, span: &Span) -> FreshnessStatus;
 
 // qualifier::compact
 pub struct CompactResult { pub before: usize, pub after: usize, pub pruned: usize }
+pub fn filter_superseded(records: &[Record]) -> Vec<&Record>;
 pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult);
 pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult);
 ```
@@ -958,15 +1267,16 @@ The library is the source of truth. The CLI is a thin wrapper around it.
 
 - Append-only JSONL minimizes merge conflicts.
 - Pre-compaction history is recoverable from VCS history.
-- `qualifier init` detects the active VCS and applies appropriate configuration.
+- For collaborative repositories, configure your VCS to use union merges
+  on `.qual` files so concurrent appends don't collide.
 
 ### 8.2 VCS-Specific Setup
 
-| VCS        | Action |
-|------------|--------|
-| Git        | Adds `*.qual merge=union` to `.gitattributes` |
-| Mercurial  | Adds `**.qual = union` merge pattern to `.hgrc` |
-| Other      | Prints guidance for manual merge configuration |
+| VCS        | Configuration |
+|------------|---------------|
+| Git        | Add `*.qual merge=union` to `.gitattributes` |
+| Mercurial  | Add `**.qual = union` to `.hgrc` merge patterns |
+| Other      | Configure equivalent union-merge behaviour for `*.qual` |
 
 ### 8.3 `qualifier blame`
 
@@ -988,14 +1298,21 @@ When `--issuer` is omitted:
 
 Qualifier is designed to be used by AI coding agents. Key affordances:
 
-- **Structured output:** `--format json` on `score`, `show`, and `ls` commands.
-- **Batch attestation:** `qualifier attest --stdin` reads JSONL from stdin.
+- **Structured output:** `--format json` on `show` and `ls` commands.
+- **Batch annotation:** `qualifier record --stdin` reads JSONL from stdin
+  (overrides objects or full records). For non-annotation record types,
+  `qualifier emit --stdin` accepts complete records.
 - **Suggested fixes:** The `suggested_fix` body field gives agents a concrete
   action to take.
 - **Span precision:** The `span` body field lets agents target specific line
-  ranges, making attestations actionable without hunting for the relevant code.
-- **Priority ordering:** `qualifier ls --below 0 --format json` gives agents a
-  prioritized worklist.
+  ranges, making annotations actionable without hunting for the relevant code.
+- **Filtering by kind:** `qualifier ls --kind blocker --format json` gives
+  agents a worklist of issues to address.
+- **Continuous interaction:** `qualifier reply <id> <message>` lets agents
+  respond to human signals with threaded follow-ups. `qualifier resolve <id>`
+  lets agents close issues after fixes are applied.
+- **Threading:** The `references` field enables agents to thread follow-up
+  observations to prior signals, creating navigable conversation histories.
 
 ## 10. File Discovery
 
@@ -1004,8 +1321,7 @@ project root. Each `.qual` file may contain records for multiple subjects
 and multiple record types.
 
 The project root is determined by searching upward for VCS markers (`.git`,
-`.hg`, `.jj`, `.pijul`, `_FOSSIL_`, `.svn`) or a `qualifier.graph.jsonl`
-file, whichever is found first.
+`.hg`, `.jj`, `.pijul`, `_FOSSIL_`, `.svn`).
 
 ### 10.1 Ignore Rules
 
@@ -1026,7 +1342,7 @@ discovery:
    files you want qualifier to skip without affecting Git.
 
 Paths matched by either source are excluded from all discovery commands:
-`score`, `show`, `check`, `ls`, `compact`, and `praise`/`blame`.
+`show`, `ls`, `compact`, `review`, and `praise`/`blame`.
 
 ### 10.2 `--no-ignore`
 
@@ -1052,31 +1368,31 @@ qualifier/
 ├── Cargo.toml
 ├── SPEC.md                    # This document
 ├── METABOX.md                 # Metabox envelope specification
-├── qualifier.graph.jsonl      # Example / self-hosted graph
 └── src/
     ├── lib.rs                 # Public library API
-    ├── attestation.rs         # Record types, body structs, Kind, IssuerType, validation
+    ├── annotation.rs         # Record types, body structs, Kind, IssuerType, validation
+    ├── content_hash.rs        # Span content hashing and freshness checking
     ├── qual_file.rs           # .qual file parsing, appending, discovery
-    ├── graph.rs               # Dependency graph loading, cycle detection
-    ├── scoring.rs             # Raw + effective score computation
-    ├── compact.rs             # Compaction: prune and snapshot
+    ├── compact.rs             # Compaction: prune and snapshot, supersession filtering
     ├── bin/
     │   └── qualifier.rs       # Binary entry point
     └── cli/                   # CLI module (behind "cli" feature)
         ├── mod.rs
         ├── config.rs
         ├── output.rs
+        ├── span_context.rs
         └── commands/
             ├── mod.rs
-            ├── attest.rs
+            ├── record.rs         # qualifier record (unified annotation write)
+            ├── reply.rs          # qualifier reply (id-prefix or location)
+            ├── resolve.rs        # qualifier resolve (id-prefix or location)
+            ├── emit.rs           # qualifier emit (raw record write)
+            ├── freshness.rs      # qualifier review (freshness checking)
             ├── show.rs
-            ├── score.rs
             ├── ls.rs
-            ├── check.rs
             ├── compact.rs
-            ├── graph_cmd.rs
-            ├── init.rs
-            └── blame.rs
+            ├── praise.rs         # qualifier praise (alias: blame)
+            └── haiku.rs
 ```
 
 ```toml
@@ -1089,14 +1405,22 @@ cli = ["dep:clap", "dep:comfy-table", "dep:figment"]
 
 These are explicitly **not** part of v0.3 but are anticipated:
 
-- **Policy records** (`type: "policy"`): Project-level scoring rules, required
-  kinds, and gate criteria — expressed as records in the same stream.
-- **Span-level scoring:** Opt-in scoring at sub-artifact granularity.
-- **Editor plugins:** LSP-based inline display of scores and attestations,
-  with span-aware gutter annotations.
+- **First-class scoring layer:** A built-in implementation of the example
+  scoring model in §4 (`qualifier score`, `qualifier check`, dependency
+  propagation), gated behind a feature flag.
+- **Dependency graph engine:** A built-in graph (`qualifier graph` for
+  visualization, plus traversal helpers used by the scoring layer above).
+  Dependency *records* (§3.4) remain in the wire format today; the engine
+  was yanked alongside scoring.
+- **Project bootstrap (`qualifier init`):** Convenience scaffolding for
+  per-project setup (VCS merge config, ignore file). Works without it
+  today; reintroduced when there's a clear win.
+- **Policy records** (`type: "policy"`): Project-level rules, required kinds,
+  and gate criteria — expressed as records in the same stream.
+- **Editor plugins:** LSP-based inline display of annotations, with
+  span-aware gutter annotations.
 - **DSSE signing:** `qualifier sign` to wrap records in DSSE envelopes for
   supply-chain distribution via Sigstore.
-- **Decay:** Time-based score decay to encourage re-qualification.
 - **`qualifier import-sarif`:** First-class SARIF import command.
 - **`qualifier rename`:** Automated subject rename with `.qual` file and
   dependency migration.

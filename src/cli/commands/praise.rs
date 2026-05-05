@@ -1,9 +1,8 @@
 use clap::Args as ClapArgs;
 use std::path::Path;
 
-use crate::cli::output;
+use crate::compact::filter_superseded;
 use crate::qual_file::{self, find_project_root};
-use crate::scoring;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -39,7 +38,7 @@ fn run_records(args: Args) -> crate::Result<()> {
     let discover_root = root.as_deref().unwrap_or(Path::new("."));
     let all_qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
 
-    let records: Vec<&crate::attestation::Record> =
+    let records: Vec<&crate::annotation::Record> =
         qual_file::find_records_for(&args.artifact, &all_qual_files);
 
     if records.is_empty() {
@@ -49,8 +48,8 @@ fn run_records(args: Args) -> crate::Result<()> {
         )));
     }
 
-    let owned: Vec<crate::attestation::Record> = records.iter().map(|r| (*r).clone()).collect();
-    let active = scoring::filter_superseded(&owned);
+    let owned: Vec<crate::annotation::Record> = records.iter().map(|r| (*r).clone()).collect();
+    let active = filter_superseded(&owned);
 
     if args.format == "json" {
         let entries: Vec<serde_json::Value> =
@@ -72,7 +71,7 @@ fn run_records(args: Args) -> crate::Result<()> {
     println!();
 
     for record in &active {
-        if let Some(att) = record.as_attestation() {
+        if let Some(att) = record.as_annotation() {
             let date = att.created_at.format("%Y-%m-%d");
             let id_short = if att.id.len() >= 8 {
                 format!("{}\u{2026}", &att.id[..8])
@@ -80,17 +79,16 @@ fn run_records(args: Args) -> crate::Result<()> {
                 att.id.clone()
             };
 
-            // Line 1: score + kind + summary
+            // Line 1: kind + summary
             println!(
-                "    {} {:<10} {:?}",
-                output::format_score(att.body.score),
+                "    {:<10} {:?}",
                 att.body.kind.to_string(),
                 att.body.summary,
             );
 
             // Line 2: issuer + date + truncated ID + (issuer_type)
             let issuer_type_suffix = match &att.issuer_type {
-                Some(at) if *at != crate::attestation::IssuerType::Human => {
+                Some(at) if *at != crate::annotation::IssuerType::Human => {
                     format!("  ({})", at)
                 }
                 _ => String::new(),
@@ -126,14 +124,9 @@ fn run_records(args: Args) -> crate::Result<()> {
             } else {
                 epoch.id.clone()
             };
-            println!(
-                "    {} {:<10} {:?}",
-                output::format_score(epoch.body.score),
-                "epoch",
-                epoch.body.summary,
-            );
+            println!("    {:<10} {:?}", "epoch", epoch.body.summary,);
             let issuer_type_suffix = match &epoch.issuer_type {
-                Some(at) if *at != crate::attestation::IssuerType::Human => {
+                Some(at) if *at != crate::annotation::IssuerType::Human => {
                     format!("  ({})", at)
                 }
                 _ => String::new(),
@@ -149,19 +142,18 @@ fn run_records(args: Args) -> crate::Result<()> {
     Ok(())
 }
 
-fn format_position(pos: &crate::attestation::Position) -> String {
+fn format_position(pos: &crate::annotation::Position) -> String {
     match pos.col {
         Some(col) => format!("{}.{}", pos.line, col),
         None => format!("{}", pos.line),
     }
 }
 
-fn record_to_json(record: &crate::attestation::Record) -> Option<serde_json::Value> {
-    if let Some(att) = record.as_attestation() {
+fn record_to_json(record: &crate::annotation::Record) -> Option<serde_json::Value> {
+    if let Some(att) = record.as_annotation() {
         let mut entry = serde_json::json!({
             "id": att.id,
             "kind": att.body.kind.to_string(),
-            "score": att.body.score,
             "summary": att.body.summary,
             "issuer": att.issuer,
             "created_at": att.created_at.to_rfc3339(),
@@ -183,7 +175,6 @@ fn record_to_json(record: &crate::attestation::Record) -> Option<serde_json::Val
         let mut entry = serde_json::json!({
             "id": epoch.id,
             "type": "epoch",
-            "score": epoch.body.score,
             "summary": epoch.body.summary,
             "issuer": epoch.issuer,
             "created_at": epoch.created_at.to_rfc3339(),
@@ -203,7 +194,7 @@ fn run_vcs(artifact: &str) -> crate::Result<()> {
 
     let qual_path = qual_file::find_qual_file_for(artifact).ok_or_else(|| {
         crate::Error::Validation(format!(
-            "No .qual file found containing attestations for '{}'",
+            "No .qual file found containing annotations for '{}'",
             artifact
         ))
     })?;

@@ -261,23 +261,13 @@
     lines.push(bold("CLI commands:"));
     lines.push(
       "  " +
-        copperBold(pad("qualifier score", 38, true)) +
-        "Compute and display all scores",
-    );
-    lines.push(
-      "  " +
         copperBold(pad("qualifier show <artifact>", 38, true)) +
-        "Show attestations for an artifact",
+        "Show annotations for an artifact",
     );
     lines.push(
       "  " +
-        copperBold(pad("qualifier check [--min-score N]", 38, true)) +
-        "CI gate check",
-    );
-    lines.push(
-      "  " +
-        copperBold(pad("qualifier ls [--below N]", 38, true)) +
-        "List artifacts by score",
+        copperBold(pad("qualifier ls [--kind K]", 38, true)) +
+        "List artifacts (optionally by kind)",
     );
     lines.push(
       "  " + copperBold(pad("qualifier --help", 38, true)) + "Full CLI usage",
@@ -1287,7 +1277,7 @@
     loadWasm(fileMap)
       .then(function () {
         shell.prompt();
-        shell.autoType("qualifier score", function () {
+        shell.autoType("qualifier show src/parser.rs", function () {
           shell.prompt();
         });
       })

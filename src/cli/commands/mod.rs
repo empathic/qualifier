@@ -1,10 +1,10 @@
-pub mod attest;
-pub mod check;
 pub mod compact;
-pub mod graph_cmd;
+pub mod emit;
+pub mod freshness;
 pub mod haiku;
-pub mod init;
 pub mod ls;
 pub mod praise;
-pub mod score;
+pub mod record;
+pub mod reply;
+pub mod resolve;
 pub mod show;

@@ -1,12 +1,12 @@
 [package]
 name = "qualifier"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
-description = "Deterministic quality attestations for software artifacts"
+description = "Deterministic quality annotations for software artifacts"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/empathic/qualifier"
 readme = "README.md"
-keywords = ["quality", "attestation", "code-review", "ci"]
+keywords = ["quality", "annotation", "code-review", "ci"]
 categories = ["command-line-utilities", "development-tools"]
 
 [features]

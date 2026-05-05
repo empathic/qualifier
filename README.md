@@ -1,92 +1,125 @@
 # Qualifier
 
-**Know where the bodies are buried.** Structured quality signals for code, with scores that propagate through your dependency graph.
+**Continuous Annotation, stored as files.** Record concerns, suggestions, and
+feedback against code the moment you see them — humans and bots writing the
+same format. No server, no database, just `.qual` files next to your source.
 
-## The Problem
-
-Someone dropped 30,000 lines of slopcode in your lap. The test suite passes (mostly), the docs are "coming soon," and the last meaningful code review was three sprints ago. You need to know what's safe and what's not — and your tools give you nothing but green checkmarks or silence.
-
-Qualifier records what you actually know about code quality and computes aggregate scores that tell you where to look first. Everything lives in VCS-friendly JSONL files alongside your source code. No server, no database, no lock-in.
-
-## What Qualifier Adds
-
-| What                     | Without Qualifier             | With Qualifier                                      |
-| ------------------------ | ----------------------------- | --------------------------------------------------- |
-| Quality tracking         | Spreadsheets, tickets, memory | Structured `.qual` files in your repo                |
-| Score propagation        | Manual dependency analysis    | Automatic through the dependency graph               |
-| CI gating                | Custom scripts                | `qualifier check --min-score 0`                      |
-| Agent integration        | None                          | JSON output, batch attestation, suggested fixes      |
-| Merge conflicts          | Guaranteed with shared files  | Structurally impossible (append-only JSONL)           |
-| History                  | Lost in ticket graveyards     | VCS-native — blame, diff, bisect all work            |
-
-## Quick Start
-
-```sh
-# Install
+```bash
 cargo install qualifier
-
-# Initialize in your repo
-qualifier init
-
-# Record a quality concern
-qualifier attest src/parser.rs \
-  --kind concern \
-  --score -30 \
-  --summary "Panics on malformed input"
-
-# View scores
-qualifier score
-
-# Show details for one artifact
-qualifier show src/parser.rs
-
-# CI gate (exits non-zero if any artifact is below threshold)
-qualifier check --min-score 0
+qualifier record concern src/auth.rs:42 "SQL injection risk in login handler"
 ```
 
-## Core Concepts
+The annotation is pinned to that file and line, stored as a content-addressed
+JSONL record in `src/.qual`, and `git blame`/`git log`/`git diff` all work on
+it. Append-only, so concurrent edits don't conflict structurally.
 
-**Attestations** are immutable quality signals: pass, fail, blocker, concern, praise, suggestion, waiver. Each carries a score delta (-100 to +100) and is content-addressed via BLAKE3. Attestations are append-only — updates use supersession chains rather than mutation.
+## What it's for
 
-**Raw score** is the clamped sum of active (non-superseded) attestation scores for an artifact, bounded to [-100, 100].
+Quality work is batched behind PRs and gates. You notice a problem on Tuesday
+but the PR isn't until Friday. Inline comments disappear into merged PRs.
+Three sprints later nobody remembers what was flagged, what was fixed, and
+what was quietly ignored.
 
-**Effective score** is the minimum of an artifact's raw score and the effective scores of all its dependencies. A low-quality dependency pulls down everything that depends on it.
+Qualifier is **ambient review**: annotate any file, any time, whether it
+changed today or three years ago. Annotations thread into conversations,
+survive merges and rebases, and surface drift automatically when the code
+underneath them changes.
 
-**Compaction** prunes superseded attestations or collapses history into epoch records, preserving scores while reducing file size.
+## Quick tour
 
-**.qual files** are JSONL files containing records. The recommended layout is one `.qual` file per directory. See [SPEC.md](SPEC.md) for layout options and trade-offs.
+```bash
+# Record a concern at a specific line
+qualifier record concern src/parser.rs:42 "Panics on malformed input"
 
-**File discovery** respects `.gitignore` and `.qualignore` (gitignore-compatible syntax) by default, so vendored or generated `.qual` files can be excluded from scoring. Pass `--no-ignore` to bypass all ignore rules. See [SPEC.md §10](SPEC.md#10-file-discovery) for details.
+# See it
+qualifier show src/parser.rs
 
-## CLI Commands
+# Reply (id-prefix or location)
+qualifier reply a1b2 "Good catch — fixed in 8f3c2a1"
+
+# Close it
+qualifier resolve a1b2
+
+# Find drift in span-bound annotations after the source changed
+qualifier review src/parser.rs
+```
+
+## CLI
+
+**Record observations**
 
 | Command | Description |
 |---------|-------------|
-| `qualifier attest <artifact>` | Record an attestation |
-| `qualifier show <artifact>` | Show attestations and scores for an artifact |
-| `qualifier score` | Display scores for all qualified artifacts |
-| `qualifier ls` | List artifacts, filterable by score or kind |
-| `qualifier check` | CI gate: exit non-zero if scores below threshold |
-| `qualifier compact <artifact>` | Prune or snapshot a .qual file |
-| `qualifier graph` | Visualize the dependency graph |
-| `qualifier blame <artifact>` | VCS attribution for a .qual file |
-| `qualifier init` | Initialize qualifier in a repository |
+| `qualifier record <kind> <location> [message]` | Record an annotation |
+| `qualifier reply <target> <message>` | Reply to an existing record |
+| `qualifier resolve <target> [message]` | Resolve (close) a record |
+| `qualifier emit <type> <subject> --body '<JSON>'` | Emit a raw record of any type |
 
-All read commands support `--format json` for machine-readable output.
+`<kind>` is one of `concern`, `comment`, `suggestion`, `pass`, `fail`,
+`blocker`, `praise`, `waiver`, `resolve`, or any custom string. `<location>`
+is a path with an optional span (`src/foo.rs:42`, `src/foo.rs:42:58`).
+`<target>` is an id-prefix (≥4 chars) or a `<location>`.
 
-## Agent Integration
+**Inspect annotations**
 
-Qualifier is built for both humans and coding agents:
+| Command | Description |
+|---------|-------------|
+| `qualifier show <artifact>` | Show annotations for an artifact (threaded) |
+| `qualifier ls [--kind K]` | List artifacts (optionally by kind) |
+| `qualifier praise <artifact>` | Show who annotated and why (alias: `blame`) |
+| `qualifier review [subject]` | Check freshness of span-bound annotations |
 
-- `--format json` on `score`, `show`, and `ls` for structured output
-- `--stdin` batch mode reads JSONL records for bulk qualification
-- `suggested_fix` field carries actionable remediation advice
-- `span` field targets specific line ranges for precise attestations
-- `--graph` flag accepts dependency graphs from build tools
+**Maintain**
 
-## Specification
+| Command | Description |
+|---------|-------------|
+| `qualifier compact <artifact>` | Prune superseded records or snapshot to an epoch |
 
-See [SPEC.md](SPEC.md) for the full format specification, scoring algorithm, and design rationale.
+All read commands accept `--format json` for machine-readable output.
+
+## Records
+
+Annotations are the primary record type, but `.qual` is a substrate. The
+[Metabox](METABOX.md) envelope wraps any type-specific body — annotations,
+epochs (compaction snapshots), dependencies, licenses, security advisories,
+performance measurements, or any custom URI-typed record. Tools that don't
+understand a body type still round-trip the record unchanged.
+
+A two-record `.qual` file:
+
+```jsonl
+{"metabox":"1","type":"annotation","subject":"src/auth.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2…","body":{"kind":"concern","summary":"SQL injection risk in login handler"}}
+{"metabox":"1","type":"annotation","subject":"src/auth.rs","issuer":"urn:anthropic:claude","issuer_type":"ai","created_at":"2026-02-24T11:00:00Z","id":"e5f6…","body":{"kind":"comment","references":"a1b2…","summary":"Switched to parameterized queries in 8f3c2a1"}}
+```
+
+Records are immutable and content-addressed (BLAKE3). Updates use
+supersession chains rather than mutation. Compaction prunes superseded
+records or collapses history into epoch records.
+
+## File layout
+
+`.qual` files can sit per-directory (`src/.qual` — recommended), per-file
+(`src/parser.rs.qual`), or per-project (`.qual` at the root). All layouts
+coexist. Discovery respects `.gitignore` and `.qualignore`; pass
+`--no-ignore` to bypass.
+
+For collaborative repos, configure your VCS to use union merges on `.qual`
+files (e.g. `*.qual merge=union` in `.gitattributes` for git) so concurrent
+appends don't collide.
+
+## Agent integration
+
+- `--format json` on `show` and `ls` for structured output
+- `qualifier record --stdin` and `qualifier emit --stdin` accept JSONL on stdin
+- `body.suggested_fix` carries actionable remediation
+- `body.span` targets specific line ranges
+- `--issuer-type ai` distinguishes agent-authored records in display
+
+## Documentation
+
+- [SPEC.md](SPEC.md) — full format specification
+- [METABOX.md](METABOX.md) — the envelope format
+- [CHANGELOG.md](CHANGELOG.md) — release notes
 
 ## License
 

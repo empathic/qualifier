@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/` holds the Rust library plus CLI entry at `src/bin/qualifier.rs`; key modules include `attestation`, `qual_file`, `scoring`, and `graph`.
+- `src/` holds the Rust library plus CLI entry at `src/bin/qualifier.rs`; key modules include `annotation`, `qual_file`, `scoring`, and `graph`.
 - `tests/` contains integration coverage (`integration.rs`) and CLI/system tests (`cli_integration.rs`).
 - `scripts/` offers helpers: `dev.sh` (serve docs site with pnpm + Eleventy) and `release.sh` (test, lint, and publish flow).
 - `site/` is the marketing/docs site; `README.md` and `SPEC.md` describe concepts and the format.
@@ -39,8 +39,8 @@ When making changes, verify that all affected surfaces stay consistent:
 - **README.md** — Core Concepts and CLI Commands table should reflect current behavior.
 - **site/** — `site/js/playground.js` contains a JavaScript scoring engine for the web playground. If scoring logic, record format, or field names change, update it to match.
 - **Cargo.toml** — Bump the crate version for any user-visible change (new feature, behavior change, bug fix). Coordinate with `SPEC.md` version when the spec itself changes.
-- **Tests** — Many test files have local `make_att()`/`make_record()` helpers that construct records by hand. When adding or renaming fields on `Attestation`, `Epoch`, or `DependencyRecord`, update all helpers (~6 locations across `src/` and `tests/`). Run `cargo test --all-features` to catch any you miss.
-- **Golden IDs** — `tests/integration.rs` pins BLAKE3 IDs for attestation, epoch, and dependency records. Any change to canonical form (field order, new envelope fields, MCF rules) will break these. Update the expected hashes after confirming the new values are correct.
+- **Tests** — Many test files have local `make_att()`/`make_record()` helpers that construct records by hand. When adding or renaming fields on `Annotation`, `Epoch`, or `DependencyRecord`, update all helpers (~6 locations across `src/` and `tests/`). Run `cargo test --all-features` to catch any you miss.
+- **Golden IDs** — `tests/integration.rs` pins BLAKE3 IDs for annotation, epoch, and dependency records. Any change to canonical form (field order, new envelope fields, MCF rules) will break these. Update the expected hashes after confirming the new values are correct.
 
 ## Slash Command Discovery
 - Unrecognized slash commands should be looked up as files under `.claude/commands/` (e.g., `/foo` looks for `.claude/commands/foo.md`).

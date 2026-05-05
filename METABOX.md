@@ -14,7 +14,7 @@ domain-specific payload. Records are JSONL, IDs are BLAKE3 hashes of a
 canonical form.
 
 The format is designed for append-only, VCS-friendly record streams — quality
-attestations, dependency declarations, audit logs, or any structured signal
+annotations, dependency declarations, audit logs, or any structured signal
 that benefits from content addressing and a uniform envelope.
 
 ## 1. Envelope Fields
@@ -51,10 +51,10 @@ schemes and to avoid ambiguity with other version fields (like Qualifier's
 A string that identifies the schema of the `body` object. Metabox itself does
 not define any types — they are the domain of consuming projects.
 
-- **Short strings** for project-local types: `"attestation"`, `"epoch"`,
+- **Short strings** for project-local types: `"annotation"`, `"epoch"`,
   `"dependency"`, `"ping"`.
 - **URIs** for cross-project interoperability:
-  `"https://qualifier.dev/attestation"`, `"https://example.com/audit/v1"`.
+  `"https://qualifier.dev/annotation"`, `"https://example.com/audit/v1"`.
 
 The `type` field is opaque to Metabox. It carries no semantics at the envelope
 level beyond identifying which body fields to expect.
@@ -184,10 +184,10 @@ projects.
 
 **Conventions:**
 
-- Short strings for project-local types: `"attestation"`, `"epoch"`,
+- Short strings for project-local types: `"annotation"`, `"epoch"`,
   `"ping"`, `"audit"`.
 - URIs for cross-project interoperability:
-  `"https://qualifier.dev/attestation"`,
+  `"https://qualifier.dev/annotation"`,
   `"https://example.com/audit/v1"`.
 
 **Forward compatibility:** Implementations MUST preserve records with
@@ -202,10 +202,10 @@ define:
 
 ## 6. Examples
 
-A Qualifier attestation in Metabox format:
+A Qualifier annotation in Metabox format:
 
 ```json
-{"metabox":"1","type":"attestation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8","body":{"kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
+{"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","issuer_type":"human","created_at":"2026-02-24T10:00:00Z","id":"a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8","body":{"kind":"concern","ref":"git:3aba500","score":-30,"summary":"Panics on malformed input"}}
 ```
 
 Note that body fields are sorted lexicographically: `kind`, `ref`, `score`,
@@ -243,7 +243,7 @@ Qualifier v3 records map to Metabox as follows:
 
 All non-frame fields move into the `body` object:
 
-**Attestation** (`type: "attestation"`):
+**Annotation** (`type: "annotation"`):
 
 `span`, `kind`, `score`, `summary`, `detail`, `suggested_fix`, `tags`,
 `ref`, `supersedes` → `body.*`

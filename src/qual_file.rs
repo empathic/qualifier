@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::attestation::{Attestation, Record};
+use crate::annotation::{Annotation, Record};
 
 /// A parsed `.qual` file.
 #[derive(Debug, Clone)]
@@ -80,7 +80,7 @@ pub fn write_all(path: &Path, records: &[Record]) -> crate::Result<()> {
     Ok(())
 }
 
-/// Resolve which `.qual` file should receive an attestation for the given subject.
+/// Resolve which `.qual` file should receive an annotation for the given subject.
 ///
 /// Resolution order:
 /// 1. If `explicit_path` is provided, use it unconditionally (`--file` override).
@@ -134,17 +134,14 @@ pub fn find_records_for<'a>(subject: &str, qual_files: &'a [QualFile]) -> Vec<&'
         .collect()
 }
 
-/// Find all attestations for a given subject across all discovered `.qual` files.
+/// Find all annotations for a given subject across all discovered `.qual` files.
 ///
-/// Filters to attestation records only (excludes epochs, dependencies, etc.).
-pub fn find_attestations_for<'a>(
-    subject: &str,
-    qual_files: &'a [QualFile],
-) -> Vec<&'a Attestation> {
+/// Filters to annotation records only (excludes epochs, dependencies, etc.).
+pub fn find_annotations_for<'a>(subject: &str, qual_files: &'a [QualFile]) -> Vec<&'a Annotation> {
     qual_files
         .iter()
         .flat_map(|qf| qf.records.iter())
-        .filter_map(|r| r.as_attestation())
+        .filter_map(|r| r.as_annotation())
         .filter(|att| att.subject == subject)
         .collect()
 }
@@ -247,10 +244,9 @@ pub fn subject_name(qual_path: &Path) -> String {
     }
 }
 
-/// Find the project root by searching upward for VCS markers or qualifier.graph.jsonl.
+/// Find the project root by searching upward for VCS markers.
 pub fn find_project_root(start: &Path) -> Option<PathBuf> {
     const VCS_MARKERS: &[&str] = &[".git", ".hg", ".jj", ".pijul", "_FOSSIL_", ".svn"];
-    const QUALIFIER_MARKER: &str = "qualifier.graph.jsonl";
 
     let mut current = if start.is_file() {
         start.parent()?.to_path_buf()
@@ -259,17 +255,11 @@ pub fn find_project_root(start: &Path) -> Option<PathBuf> {
     };
 
     loop {
-        // Check for qualifier marker first
-        if current.join(QUALIFIER_MARKER).exists() {
-            return Some(current);
-        }
-        // Then VCS markers
         for marker in VCS_MARKERS {
             if current.join(marker).exists() {
                 return Some(current);
             }
         }
-        // Move up
         match current.parent() {
             Some(parent) if parent != current => current = parent.to_path_buf(),
             _ => return None,
@@ -299,14 +289,14 @@ pub fn detect_vcs(root: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attestation::{self, AttestationBody, Kind};
+    use crate::annotation::{self, AnnotationBody, Kind};
     use chrono::Utc;
     use std::fs;
 
-    fn make_attestation(subject: &str, kind: Kind, score: i32, summary: &str) -> Attestation {
-        attestation::finalize(Attestation {
+    fn make_annotation(subject: &str, kind: Kind, summary: &str) -> Annotation {
+        annotation::finalize(Annotation {
             metabox: "1".into(),
-            record_type: "attestation".into(),
+            record_type: "annotation".into(),
             subject: subject.into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
@@ -314,11 +304,11 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc),
             id: String::new(),
-            body: AttestationBody {
+            body: AnnotationBody {
                 detail: None,
                 kind,
                 r#ref: None,
-                score,
+                references: None,
                 span: None,
                 suggested_fix: None,
                 summary: summary.into(),
@@ -328,8 +318,8 @@ mod tests {
         })
     }
 
-    fn make_record(subject: &str, kind: Kind, score: i32, summary: &str) -> Record {
-        Record::Attestation(Box::new(make_attestation(subject, kind, score, summary)))
+    fn make_record(subject: &str, kind: Kind, summary: &str) -> Record {
+        Record::Annotation(Box::new(make_annotation(subject, kind, summary)))
     }
 
     #[test]
@@ -349,8 +339,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let qual_path = dir.path().join("test.rs.qual");
 
-        let r1 = make_record("test.rs", Kind::Praise, 40, "Good tests");
-        let r2 = make_record("test.rs", Kind::Concern, -20, "Missing docs");
+        let r1 = make_record("test.rs", Kind::Praise, "Good tests");
+        let r2 = make_record("test.rs", Kind::Concern, "Missing docs");
 
         append(&qual_path, &r1).unwrap();
         append(&qual_path, &r2).unwrap();
@@ -358,11 +348,11 @@ mod tests {
         let parsed = parse(&qual_path).unwrap();
         assert_eq!(parsed.records.len(), 2);
         assert_eq!(
-            parsed.records[0].as_attestation().unwrap().body.summary,
+            parsed.records[0].as_annotation().unwrap().body.summary,
             "Good tests"
         );
         assert_eq!(
-            parsed.records[1].as_attestation().unwrap().body.summary,
+            parsed.records[1].as_annotation().unwrap().body.summary,
             "Missing docs"
         );
         assert_eq!(
@@ -376,7 +366,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let qual_path = dir.path().join("test.rs.qual");
 
-        let att = make_attestation("test.rs", Kind::Pass, 10, "ok");
+        let att = make_annotation("test.rs", Kind::Pass, "ok");
         let json = serde_json::to_string(&att).unwrap();
 
         fs::write(
@@ -395,8 +385,8 @@ mod tests {
         let src = dir.path().join("src");
         fs::create_dir_all(&src).unwrap();
 
-        let r1 = make_record("src/a.rs", Kind::Pass, 10, "ok");
-        let r2 = make_record("src/b.rs", Kind::Fail, -10, "bad");
+        let r1 = make_record("src/a.rs", Kind::Pass, "ok");
+        let r2 = make_record("src/b.rs", Kind::Fail, "bad");
 
         append(&src.join("a.rs.qual"), &r1).unwrap();
         append(&src.join("b.rs.qual"), &r2).unwrap();
@@ -414,7 +404,7 @@ mod tests {
         let hidden = dir.path().join(".git");
         fs::create_dir_all(&hidden).unwrap();
 
-        let r = make_record("x", Kind::Pass, 10, "ok");
+        let r = make_record("x", Kind::Pass, "ok");
         append(&hidden.join("x.qual"), &r).unwrap();
 
         let found = discover(dir.path(), true).unwrap();
@@ -429,8 +419,8 @@ mod tests {
         fs::create_dir_all(&src).unwrap();
         fs::create_dir_all(&examples).unwrap();
 
-        let r1 = make_record("src/a.rs", Kind::Pass, 10, "ok");
-        let r2 = make_record("examples/demo.rs", Kind::Pass, 10, "ok");
+        let r1 = make_record("src/a.rs", Kind::Pass, "ok");
+        let r2 = make_record("examples/demo.rs", Kind::Pass, "ok");
 
         append(&src.join("a.rs.qual"), &r1).unwrap();
         append(&examples.join("demo.rs.qual"), &r2).unwrap();
@@ -456,8 +446,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let qual_path = dir.path().join("test.rs.qual");
 
-        let r1 = make_record("test.rs", Kind::Praise, 40, "Good");
-        let r2 = make_record("test.rs", Kind::Concern, -20, "Bad");
+        let r1 = make_record("test.rs", Kind::Praise, "Good");
+        let r2 = make_record("test.rs", Kind::Concern, "Bad");
         let id1 = r1.id().to_string();
         let id2 = r2.id().to_string();
 
@@ -544,37 +534,37 @@ mod tests {
     }
 
     #[test]
-    fn test_find_attestations_for_across_files() {
-        let att_a1 = make_attestation("src/a.rs", Kind::Praise, 40, "good");
-        let att_a2 = make_attestation("src/a.rs", Kind::Concern, -10, "meh");
-        let att_b = make_attestation("src/b.rs", Kind::Pass, 20, "ok");
+    fn test_find_annotations_for_across_files() {
+        let att_a1 = make_annotation("src/a.rs", Kind::Praise, "good");
+        let att_a2 = make_annotation("src/a.rs", Kind::Concern, "meh");
+        let att_b = make_annotation("src/b.rs", Kind::Pass, "ok");
 
         let qfs = vec![
             QualFile {
                 path: PathBuf::from("src/.qual"),
                 subject: "src/".into(),
                 records: vec![
-                    Record::Attestation(Box::new(att_a1.clone())),
-                    Record::Attestation(Box::new(att_b.clone())),
+                    Record::Annotation(Box::new(att_a1.clone())),
+                    Record::Annotation(Box::new(att_b.clone())),
                 ],
             },
             QualFile {
                 path: PathBuf::from("src/a.rs.qual"),
                 subject: "src/a.rs".into(),
-                records: vec![Record::Attestation(Box::new(att_a2.clone()))],
+                records: vec![Record::Annotation(Box::new(att_a2.clone()))],
             },
         ];
 
-        let found = find_attestations_for("src/a.rs", &qfs);
+        let found = find_annotations_for("src/a.rs", &qfs);
         assert_eq!(found.len(), 2);
         assert!(found.iter().any(|a| a.id == att_a1.id));
         assert!(found.iter().any(|a| a.id == att_a2.id));
 
-        let found_b = find_attestations_for("src/b.rs", &qfs);
+        let found_b = find_annotations_for("src/b.rs", &qfs);
         assert_eq!(found_b.len(), 1);
         assert_eq!(found_b[0].id, att_b.id);
 
-        let found_none = find_attestations_for("src/c.rs", &qfs);
+        let found_none = find_annotations_for("src/c.rs", &qfs);
         assert!(found_none.is_empty());
     }
 
