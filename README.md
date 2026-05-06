@@ -44,6 +44,8 @@ qualifier resolve a1b2
 qualifier review src/parser.rs
 ```
 
+> **For AI coding agents:** qualifier implements [AGENTS-CLI 0.1](AGENTS-CLI.md). Run `qualifier agents` for a self-contained guide.
+
 ## CLI
 
 ### For AI agents
