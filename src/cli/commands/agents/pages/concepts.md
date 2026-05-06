@@ -5,6 +5,8 @@
 Every qualifier record is a single-line JSON object using the **Metabox envelope**.
 The envelope fields appear in a fixed order and are identical for every record type:
 
+(formatted for readability; each record is a single line in the .qual file)
+
 ```json
 {
   "metabox":    "1",
@@ -21,7 +23,7 @@ The envelope fields appear in a fixed order and are identical for every record t
 Field notes:
 
 - `metabox` — always `"1"`. Validation rejects any other value.
-- `type` — `"annotation"` (default, may be omitted in files), `"epoch"`, `"dependency"`, or any URI string for custom types.
+- `type` — `"annotation"` (default, may be omitted in files), `"epoch"`, `"dependency"`, or any non-empty string for custom types (URI recommended).
 - `subject` — the artifact being annotated. A path (`src/auth.rs`), module, build target, or package name. Opaque to qualifier.
 - `issuer` — who or what wrote the record. Must be a URI (see §Issuer URIs below).
 - `issuer_type` — optional; one of `human`, `ai`, `tool`, `unknown`.
@@ -66,7 +68,7 @@ Rules the system enforces:
   Cross-subject supersession is rejected.
 - Supersession chains must be **acyclic**. A → B → A is detected and rejected.
 - Only the **tip** of a supersession chain is active. Superseded records are
-  hidden by `qualifier show`, `qualifier ls`, and `qualifier review`.
+  hidden by `qualifier show` and `qualifier ls`.
 - Dangling `supersedes` references (pointing to IDs not present in the
   current file set) are allowed — the referencing record stays active.
 

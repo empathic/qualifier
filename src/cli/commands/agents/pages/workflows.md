@@ -43,7 +43,7 @@ qualifier reply src/auth.rs:42 \
   --issuer-type ai
 ```
 
-Both forms resolve to the most-recent active record at that location.
+The id-prefix form matches by prefix. The location form resolves to the most-recent active record at that location.
 If multiple records share the newest timestamp, the CLI exits non-zero with
 a disambiguation list showing id-prefix, kind, line, and summary.
 
@@ -101,6 +101,8 @@ this category.
 Append-only files accumulate superseded records over time. `qualifier compact`
 prunes them. With `--snapshot`, it goes further and collapses all surviving
 records for each subject into a single epoch record, making the file minimal.
+
+Pass the artifact (subject) name — typically the same path you used when recording — not the path to a .qual file.
 
 ```bash
 # Preview without writing
