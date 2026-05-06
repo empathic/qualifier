@@ -2324,3 +2324,18 @@ fn test_agents_bare_invocation_succeeds() {
     assert_eq!(code, 0, "agents should succeed: stderr={stderr}");
     assert!(!stdout.is_empty(), "agents should print something");
 }
+
+#[test]
+fn test_agents_unknown_topic_exits_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_stdout, stderr, code) = run_qualifier(dir.path(), &["agents", "bogus-topic"]);
+    assert_eq!(code, 2, "unknown topic should exit 2: stderr={stderr}");
+    assert!(
+        stderr.contains("no such topic"),
+        "stderr should explain: {stderr}"
+    );
+    assert!(
+        stderr.contains("bogus-topic"),
+        "stderr should name the bad topic: {stderr}"
+    );
+}
