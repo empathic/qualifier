@@ -2345,9 +2345,18 @@ fn test_agents_all_registered_topics_render() {
     // Each topic in the registry must produce non-empty stdout with exit 0.
     // If you add a topic, add it here too.
     let topics = [
-        "concepts", "workflows", "pitfalls",
-        "record", "reply", "resolve", "emit",
-        "show", "ls", "praise", "review", "compact",
+        "concepts",
+        "workflows",
+        "pitfalls",
+        "record",
+        "reply",
+        "resolve",
+        "emit",
+        "show",
+        "ls",
+        "praise",
+        "review",
+        "compact",
     ];
     let dir = tempfile::tempdir().unwrap();
     for topic in topics {
@@ -2364,9 +2373,18 @@ fn test_agents_overview_renders_topics_index() {
     assert_eq!(code, 0);
     // Every registered topic name should appear in the rendered overview.
     for topic in [
-        "concepts", "workflows", "pitfalls",
-        "record", "reply", "resolve", "emit",
-        "show", "ls", "praise", "review", "compact",
+        "concepts",
+        "workflows",
+        "pitfalls",
+        "record",
+        "reply",
+        "resolve",
+        "emit",
+        "show",
+        "ls",
+        "praise",
+        "review",
+        "compact",
     ] {
         assert!(
             stdout.contains(topic),

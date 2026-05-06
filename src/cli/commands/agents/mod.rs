@@ -78,11 +78,7 @@ const PAGES: &[Page] = &[
 ];
 
 fn topic_names() -> String {
-    PAGES
-        .iter()
-        .map(|p| p.name)
-        .collect::<Vec<_>>()
-        .join(", ")
+    PAGES.iter().map(|p| p.name).collect::<Vec<_>>().join(", ")
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
