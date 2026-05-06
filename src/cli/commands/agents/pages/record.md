@@ -32,8 +32,8 @@ qualifier record concern src/auth.rs:42 "Null check missing" \
   --detail "The function returns early but does not reset the session token." \
   --suggested-fix "Add session.reset() before the return."
 
-# Approve an artifact, marking yourself as an AI issuer
-qualifier record pass src/auth.rs "Auth logic reviewed" \
+# Record a suggestion with explicit AI issuer identity
+qualifier record suggestion src/auth.rs "Replace inline regex with a named constant" \
   --issuer "mailto:agent@ci.example.com" \
   --issuer-type ai
 

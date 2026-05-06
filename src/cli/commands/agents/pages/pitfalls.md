@@ -39,6 +39,16 @@ since = "0.5.0"
   Prefer `concern` for non-blocking bugs and `blocker` for must-fix issues;
   reserve custom kinds for genuinely domain-specific signals.
 
+- **Adding positive annotations the user did not ask for.**
+  An agent volunteering `praise`, `pass`, or other positive-polarity
+  annotations without explicit user direction creates review noise the
+  user has to triage. Annotations exist to surface things the user needs
+  to act on; reflexively recording approval of code you happen to be
+  reading does the opposite. Record a positive annotation only when the
+  user explicitly asks for it, or when documenting an intentional
+  non-obvious design choice that future readers would otherwise mistake
+  for a bug.
+
 - **Using a non-URI issuer (must contain `:`).**
   Validation rejects any `issuer` value that does not contain a colon. A bare
   email address like `agent@example.com` will fail. Wrap it:

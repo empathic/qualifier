@@ -20,8 +20,6 @@ attached to specific places in the codebase.
 
 - You found a bug, smell, risk, or stylistic concern that survives this
   edit and is worth surfacing for whoever touches the code next. Record it.
-- You want to praise a piece of code so future readers know it was
-  intentional, not accidental. Record it.
 - An earlier annotation no longer applies (the code changed, the concern
   was addressed). Resolve it.
 
@@ -57,7 +55,3 @@ Run `qualifier agents <topic>` for any of:
 For exact flag tables on any subcommand, run `qualifier <subcommand> --help`.
 For the JSONL wire format and library API, see `SPEC.md` in this repo (if
 present) or the published spec.
-
-## Protocol
-
-qualifier implements [AGENTS-CLI 0.1](https://github.com/empathic/qualifier/blob/main/AGENTS-CLI.md). The protocol defines the `agents` subcommand contract that this page satisfies.
