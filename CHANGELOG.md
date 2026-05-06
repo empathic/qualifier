@@ -5,6 +5,25 @@ All notable changes to this project are documented here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (with
 the pre-1.0 caveat that any breaking change bumps the minor version).
 
+## [0.5.1] — unreleased
+
+### Added
+
+- **AGENTS-CLI 0.1 protocol document** (`AGENTS-CLI.md`) — a draft
+  cross-tool convention for CLI tools that self-describe to AI coding
+  agents. qualifier is named as the reference implementation. The
+  protocol defines five MUST rules (`agents` subcommand, bare
+  orientation, topic dispatch, exit-2 unknown-topic, `--help`
+  discoverability) and four SHOULD recommendations.
+
+### Changed
+
+- **Internal:** the `qualifier agents` page registry is now generated
+  at build time from TOML frontmatter on each `pages/*.md` file
+  instead of being a hand-coded `&[Page]` array in `mod.rs`. New
+  per-page fields: `name`, `summary`, `sees_also`, `since`.
+  User-visible CLI behavior is unchanged.
+
 ## [0.5.0] — unreleased
 
 ### Added
