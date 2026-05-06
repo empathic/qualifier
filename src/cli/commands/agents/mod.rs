@@ -65,4 +65,15 @@ mod tests {
         // anchor and the rendered overview will no longer list children.
         assert!(super::OVERVIEW.contains("{{TOPICS}}"));
     }
+
+    #[test]
+    fn all_pages_have_non_empty_summaries() {
+        for page in super::PAGES {
+            assert!(
+                !page.summary.is_empty(),
+                "page '{}' has empty summary",
+                page.name
+            );
+        }
+    }
 }
