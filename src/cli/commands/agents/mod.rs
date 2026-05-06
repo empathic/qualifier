@@ -115,3 +115,13 @@ fn render_overview() -> String {
         .join("\n");
     OVERVIEW.replace("{{TOPICS}}", &topics_block)
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn overview_contains_topics_sentinel() {
+        // If this fails, the orientation page lost the {{TOPICS}} substitution
+        // anchor and the rendered overview will no longer list children.
+        assert!(super::OVERVIEW.contains("{{TOPICS}}"));
+    }
+}

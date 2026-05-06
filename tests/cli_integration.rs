@@ -2356,3 +2356,26 @@ fn test_agents_all_registered_topics_render() {
         assert!(!stdout.is_empty(), "agents {topic} should print body");
     }
 }
+
+#[test]
+fn test_agents_overview_renders_topics_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _stderr, code) = run_qualifier(dir.path(), &["agents"]);
+    assert_eq!(code, 0);
+    // Every registered topic name should appear in the rendered overview.
+    for topic in [
+        "concepts", "workflows", "pitfalls",
+        "record", "reply", "resolve", "emit",
+        "show", "ls", "praise", "review", "compact",
+    ] {
+        assert!(
+            stdout.contains(topic),
+            "overview should mention topic '{topic}': {stdout}"
+        );
+    }
+    // The literal sentinel must not leak through.
+    assert!(
+        !stdout.contains("{{TOPICS}}"),
+        "sentinel should be substituted: {stdout}"
+    );
+}
