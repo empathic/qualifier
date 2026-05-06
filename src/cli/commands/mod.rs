@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod compact;
 pub mod emit;
 pub mod freshness;

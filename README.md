@@ -44,9 +44,17 @@ qualifier resolve a1b2
 qualifier review src/parser.rs
 ```
 
+> **For AI coding agents:** qualifier implements [AGENTS-CLI 0.1](AGENTS-CLI.md). Run `qualifier agents` for a self-contained guide.
+
 ## CLI
 
-**Record observations**
+### For AI agents
+
+| Command | Description |
+|---------|-------------|
+| `qualifier agents [topic]` | Self-contained guide for AI coding agents (start here) |
+
+### Record observations
 
 | Command | Description |
 |---------|-------------|
@@ -60,7 +68,7 @@ qualifier review src/parser.rs
 is a path with an optional span (`src/foo.rs:42`, `src/foo.rs:42:58`).
 `<target>` is an id-prefix (≥4 chars) or a `<location>`.
 
-**Inspect annotations**
+### Inspect annotations
 
 | Command | Description |
 |---------|-------------|
@@ -69,7 +77,7 @@ is a path with an optional span (`src/foo.rs:42`, `src/foo.rs:42:58`).
 | `qualifier praise <artifact>` | Show who annotated and why (alias: `blame`) |
 | `qualifier review [subject]` | Check freshness of span-bound annotations |
 
-**Maintain**
+### Maintain
 
 | Command | Description |
 |---------|-------------|

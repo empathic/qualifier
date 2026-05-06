@@ -2314,3 +2314,123 @@ fn test_compact_preserves_unknown_record_type() {
         "snapshot should produce an epoch record:\n{after_snapshot}"
     );
 }
+
+// --- qualifier agents ---
+
+#[test]
+fn test_agents_bare_invocation_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["agents"]);
+    assert_eq!(code, 0, "agents should succeed: stderr={stderr}");
+    assert!(!stdout.is_empty(), "agents should print something");
+}
+
+#[test]
+fn test_agents_unknown_topic_exits_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_stdout, stderr, code) = run_qualifier(dir.path(), &["agents", "bogus-topic"]);
+    assert_eq!(code, 2, "unknown topic should exit 2: stderr={stderr}");
+    assert!(
+        stderr.contains("no such topic"),
+        "stderr should explain: {stderr}"
+    );
+    assert!(
+        stderr.contains("bogus-topic"),
+        "stderr should name the bad topic: {stderr}"
+    );
+}
+
+#[test]
+fn test_agents_all_registered_topics_render() {
+    // Each topic in the registry must produce non-empty stdout with exit 0.
+    // If you add a topic, add it here too.
+    let topics = [
+        "concepts",
+        "workflows",
+        "pitfalls",
+        "record",
+        "reply",
+        "resolve",
+        "emit",
+        "show",
+        "ls",
+        "praise",
+        "review",
+        "compact",
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    for topic in topics {
+        let (stdout, stderr, code) = run_qualifier(dir.path(), &["agents", topic]);
+        assert_eq!(code, 0, "agents {topic} should succeed: stderr={stderr}");
+        assert!(!stdout.is_empty(), "agents {topic} should print body");
+    }
+}
+
+#[test]
+fn test_agents_overview_renders_topics_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _stderr, code) = run_qualifier(dir.path(), &["agents"]);
+    assert_eq!(code, 0);
+    // Every registered topic name should appear in the rendered overview.
+    for topic in [
+        "concepts",
+        "workflows",
+        "pitfalls",
+        "record",
+        "reply",
+        "resolve",
+        "emit",
+        "show",
+        "ls",
+        "praise",
+        "review",
+        "compact",
+    ] {
+        assert!(
+            stdout.contains(topic),
+            "overview should mention topic '{topic}': {stdout}"
+        );
+    }
+    // The literal sentinel must not leak through.
+    assert!(
+        !stdout.contains("{{TOPICS}}"),
+        "sentinel should be substituted: {stdout}"
+    );
+}
+
+#[test]
+fn test_agents_orientation_summaries_match_pages() {
+    // Lock in the contract that the orientation page renders the topic
+    // index from frontmatter summaries (rather than hard-coded ones in
+    // mod.rs). Each topic's summary must appear in bare-agents output.
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _stderr, code) = run_qualifier(dir.path(), &["agents"]);
+    assert_eq!(code, 0);
+    for needle in [
+        "Annotation model, kinds, supersession",      // concepts
+        "Worked recipes for common tasks",            // workflows
+        "Common mistakes agents make with qualifier", // pitfalls
+        "Record a new annotation",                    // record
+    ] {
+        assert!(
+            stdout.contains(needle),
+            "orientation should include summary '{needle}': {stdout}"
+        );
+    }
+}
+
+#[test]
+fn test_top_level_help_shows_agents_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _stderr, code) = run_qualifier(dir.path(), &["--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("For AI agents:"),
+        "help should show the agents group header: {stdout}"
+    );
+    // The agents row should appear under that header, with the "start here" nudge.
+    assert!(
+        stdout.contains("agents") && stdout.contains("start here"),
+        "help should mention the agents subcommand: {stdout}"
+    );
+}
