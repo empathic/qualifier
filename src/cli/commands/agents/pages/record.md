@@ -45,8 +45,9 @@ drift.
 **`--supersedes <ID>`** marks this record as superseding a prior annotation.
 Use this to update or correct an existing annotation rather than leaving both
 visible — the superseded record is filtered out by `show`, `praise`, and
-`review`. The value is an ID string (full or prefix of 4+ chars is not
-accepted here; the full ID is expected).
+`review`. The value is stored verbatim — no prefix expansion is performed
+here. Pass the full 64-character ID. (Short prefixes are only resolved by
+`reply` and `resolve`, not `record`.)
 
 **`--issuer-type <TYPE>`** takes `human`, `ai`, `tool`, or `unknown`. Always
 set `--issuer-type ai` when writing from an agent; this lets human reviewers
