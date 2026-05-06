@@ -2379,3 +2379,19 @@ fn test_agents_overview_renders_topics_index() {
         "sentinel should be substituted: {stdout}"
     );
 }
+
+#[test]
+fn test_top_level_help_shows_agents_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _stderr, code) = run_qualifier(dir.path(), &["--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("For AI agents:"),
+        "help should show the agents group header: {stdout}"
+    );
+    // The agents row should appear under that header, with the "start here" nudge.
+    assert!(
+        stdout.contains("agents") && stdout.contains("start here"),
+        "help should mention the agents subcommand: {stdout}"
+    );
+}

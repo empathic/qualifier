@@ -14,6 +14,9 @@ const HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
 
+For AI agents:
+  agents     Self-contained guide for AI coding agents (start here)
+
 Record observations:
   record     Record an annotation: `qualifier record <kind> <location> [message]`
   reply      Reply to an existing record (id-prefix or location)
