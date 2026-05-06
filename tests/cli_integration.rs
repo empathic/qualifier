@@ -2399,6 +2399,27 @@ fn test_agents_overview_renders_topics_index() {
 }
 
 #[test]
+fn test_agents_orientation_summaries_match_pages() {
+    // Lock in the contract that the orientation page renders the topic
+    // index from frontmatter summaries (rather than hard-coded ones in
+    // mod.rs). Each topic's summary must appear in bare-agents output.
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _stderr, code) = run_qualifier(dir.path(), &["agents"]);
+    assert_eq!(code, 0);
+    for needle in [
+        "Annotation model, kinds, supersession",      // concepts
+        "Worked recipes for common tasks",            // workflows
+        "Common mistakes agents make with qualifier", // pitfalls
+        "Record a new annotation",                    // record
+    ] {
+        assert!(
+            stdout.contains(needle),
+            "orientation should include summary '{needle}': {stdout}"
+        );
+    }
+}
+
+#[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
     let (stdout, _stderr, code) = run_qualifier(dir.path(), &["--help"]);

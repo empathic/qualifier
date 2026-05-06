@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "qualifier"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "blake3",
  "chrono",
@@ -688,6 +688,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

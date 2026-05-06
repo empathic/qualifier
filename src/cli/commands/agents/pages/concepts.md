@@ -1,3 +1,9 @@
++++
+name = "concepts"
+summary = "Annotation model, kinds, supersession, IDs, .qual layout"
+since = "0.5.0"
++++
+
 # qualifier — key concepts
 
 ## The annotation envelope

@@ -1,3 +1,9 @@
++++
+name = "pitfalls"
+summary = "Common mistakes agents make with qualifier"
+since = "0.5.0"
++++
+
 # qualifier — common pitfalls
 
 - **Recording without `--span` when the concern is about specific lines.**

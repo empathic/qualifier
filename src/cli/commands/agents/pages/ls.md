@@ -1,3 +1,10 @@
++++
+name = "ls"
+summary = "List artifacts by kind"
+sees_also = ["show"]
+since = "0.5.0"
++++
+
 # qualifier ls
 
 ## Purpose

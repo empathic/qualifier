@@ -1,3 +1,10 @@
++++
+name = "record"
+summary = "Record a new annotation"
+sees_also = ["reply", "resolve", "emit"]
+since = "0.5.0"
++++
+
 # qualifier record
 
 ## Purpose

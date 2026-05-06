@@ -1,3 +1,10 @@
++++
+name = "emit"
+summary = "Emit a raw record of any type"
+sees_also = ["record"]
+since = "0.5.0"
++++
+
 # qualifier emit
 
 ## Purpose

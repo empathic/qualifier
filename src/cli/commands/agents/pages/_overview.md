@@ -1,3 +1,7 @@
++++
+name = "_overview"
++++
+
 # qualifier — guide for AI coding agents
 
 You are an AI coding agent in a user's repository. The `qualifier` CLI is

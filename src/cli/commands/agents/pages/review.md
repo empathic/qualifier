@@ -1,3 +1,10 @@
++++
+name = "review"
+summary = "Check freshness of annotations against current code"
+sees_also = ["show", "compact"]
+since = "0.5.0"
++++
+
 # qualifier review
 
 ## Purpose

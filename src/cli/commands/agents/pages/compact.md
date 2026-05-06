@@ -1,3 +1,10 @@
++++
+name = "compact"
+summary = "Compact a .qual file"
+sees_also = ["review"]
+since = "0.5.0"
++++
+
 # qualifier compact
 
 ## Purpose

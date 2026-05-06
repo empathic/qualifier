@@ -1,3 +1,10 @@
++++
+name = "reply"
+summary = "Reply to an existing record"
+sees_also = ["resolve", "record"]
+since = "0.5.0"
++++
+
 # qualifier reply
 
 ## Purpose

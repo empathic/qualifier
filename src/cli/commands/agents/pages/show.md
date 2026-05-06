@@ -1,3 +1,10 @@
++++
+name = "show"
+summary = "Show annotations for an artifact"
+sees_also = ["ls", "praise", "review"]
+since = "0.5.0"
++++
+
 # qualifier show
 
 ## Purpose

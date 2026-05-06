@@ -1,3 +1,10 @@
++++
+name = "resolve"
+summary = "Resolve (close) a record"
+sees_also = ["reply", "record"]
+since = "0.5.0"
++++
+
 # qualifier resolve
 
 ## Purpose

@@ -1,3 +1,9 @@
++++
+name = "workflows"
+summary = "Worked recipes for common tasks"
+since = "0.5.0"
++++
+
 # qualifier — common workflows
 
 ## Record a finding during code review
