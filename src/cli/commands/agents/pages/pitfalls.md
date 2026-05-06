@@ -39,6 +39,14 @@ since = "0.5.0"
   Prefer `concern` for non-blocking bugs and `blocker` for must-fix issues;
   reserve custom kinds for genuinely domain-specific signals.
 
+- **Resolving annotations the user has not directed you to close.**
+  `qualifier resolve` *closes* a record — the original concern is hidden
+  from `qualifier show`, `qualifier ls`, and other active views. An agent
+  resolving an annotation it does not fully understand silently buries a
+  concern the user may still want to act on. Resolution is a user
+  decision: surface the annotation (e.g., with `qualifier show`) and let
+  the user decide whether it is addressed.
+
 - **Adding positive annotations the user did not ask for.**
   An agent volunteering `praise`, `pass`, or other positive-polarity
   annotations without explicit user direction creates review noise the

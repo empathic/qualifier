@@ -14,13 +14,21 @@ supersedes it.
 
 ## When to use it
 
-Use `resolve` after you have fixed the issue described in an annotation and
-want it removed from active annotation lists. Under the hood, `resolve` writes
-a new annotation with `kind: resolve` and `body.supersedes` pointing at the
-target — there is no deletion; the full history is preserved in the `.qual`
-file. This is the right command when an issue is actually done. If you just
-want to add context, a comment, or acknowledge that work remains, use `reply`
-instead; `reply` does not close anything.
+`resolve` is a user-directed action. As an agent, do not invoke `resolve`
+unless the user has explicitly told you to close a specific annotation.
+Closing a record hides it from `qualifier show`, `qualifier ls`, and other
+active views; if you close a concern you do not fully understand, you
+silently bury something the user may still want to act on. When you
+encounter an annotation that *might* be addressable, surface it to the
+user (e.g., quote it, or print `qualifier show <artifact>` for them) and
+let them decide.
+
+When the user does direct you to resolve, this is what the command does:
+it writes a new annotation with `kind: resolve` and `body.supersedes`
+pointing at the target. There is no deletion; the full history is
+preserved in the `.qual` file. If you instead want to *add context* to a
+record (a comment, a status update, an acknowledgment that work remains),
+use `reply` — `reply` does not close anything.
 
 ## Common invocations
 
@@ -54,8 +62,9 @@ useful context — the message ends up in the annotation history visible to
 the resolution record. This is useful when you want reviewers to be able to
 jump to the exact commit that addressed the issue.
 
-**`--issuer-type ai`** should be set whenever an agent is the one closing a
-record, so the resolution is attributable to a machine rather than a human.
+**`--issuer-type ai`** should be set whenever you do close a record on
+behalf of the user, so the resolution is attributable to a machine rather
+than a human and the user can review what their agent closed.
 
 ## Gotchas
 

@@ -20,8 +20,6 @@ attached to specific places in the codebase.
 
 - You found a bug, smell, risk, or stylistic concern that survives this
   edit and is worth surfacing for whoever touches the code next. Record it.
-- An earlier annotation no longer applies (the code changed, the concern
-  was addressed). Resolve it.
 
 ## When NOT to use it
 

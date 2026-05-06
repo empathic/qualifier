@@ -53,31 +53,15 @@ The id-prefix form matches by prefix. The location form resolves to the most-rec
 If multiple records share the newest timestamp, the CLI exits non-zero with
 a disambiguation list showing id-prefix, kind, line, and summary.
 
-## Resolve a finding once it's addressed
-
-When the code has been fixed, close the annotation so it no longer appears
-in active views. `qualifier resolve` writes a `resolve`-kind record that
-supersedes the target; the original concern is removed from `qualifier show`
-output but the full history remains in VCS.
-
-```bash
-qualifier resolve a1b2 "Fixed in commit abc1234 — expiry check now unconditional" \
-  --issuer "mailto:review-agent@example.com" \
-  --issuer-type ai
-```
-
-The message is optional; it defaults to `"Resolved"`. Prefer a meaningful
-message so the tombstone is useful to future readers.
-
-After resolving, confirm with `qualifier show src/auth.rs` — the original
-concern should no longer appear (unless you pass `--all`).
-
-## Triage stale annotations after a refactor
+## Surface drifted annotations after a refactor
 
 Span-addressed annotations include a `content_hash` (BLAKE3 of the spanned
 lines at write time). After a refactor, those hashes may no longer match the
 current file content. `qualifier review` checks this and reports each
-annotation's freshness status.
+annotation's freshness status. As an agent, your job here is to surface
+the results to the user. Closing or rewriting a drifted annotation
+requires understanding the original concern; the user is better
+positioned to make that call.
 
 ```bash
 # Check all annotations in the project
@@ -93,10 +77,10 @@ qualifier review --format json
 Possible statuses:
 
 - `FRESH` — the spanned lines are unchanged. No action needed.
-- `DRIFTED` — the lines changed. Review whether the annotation still applies;
-  resolve it if addressed, or record a new annotation at the updated span.
-- `MISSING` — the file or span no longer exists. The annotation is likely stale;
-  resolve it.
+- `DRIFTED` — the lines changed. Surface the annotation to the user and
+  let them decide whether it still applies and what to do about it.
+- `MISSING` — the file or span no longer exists. Surface this to the
+  user; do not assume the annotation is stale.
 
 Annotations without a span or without a `content_hash` are not checked.
 Whole-file annotations and older records written without `--span` fall into
