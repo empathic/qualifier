@@ -23,6 +23,10 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   instead of being a hand-coded `&[Page]` array in `mod.rs`. New
   per-page fields: `name`, `summary`, `sees_also`, `since`.
   User-visible CLI behavior is unchanged.
+- **Topic display order:** the topic index in `qualifier agents` and the
+  available-topics list in unknown-topic errors are now in lexicographic
+  order (file-sorted), where they were previously hand-ordered. This is
+  cosmetic; the same set of topics is exposed.
 
 ## [0.5.0] — unreleased
 

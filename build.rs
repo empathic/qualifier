@@ -4,8 +4,8 @@
 //! delimited by `+++` lines, and emits `$OUT_DIR/agents_pages.rs`
 //! containing:
 //!
-//! - `pub const OVERVIEW: &str = "...";`
-//! - `pub const PAGES: &[Page] = &[...];`
+//! - `const OVERVIEW: &str = "...";`
+//! - `const PAGES: &[Page] = &[...];`
 //!
 //! `Page` is defined in `src/cli/commands/agents/mod.rs`. The generated
 //! file is `include!`d there.
