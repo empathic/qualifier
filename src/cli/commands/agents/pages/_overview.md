@@ -53,3 +53,7 @@ Run `qualifier agents <topic>` for any of:
 For exact flag tables on any subcommand, run `qualifier <subcommand> --help`.
 For the JSONL wire format and library API, see `SPEC.md` in this repo (if
 present) or the published spec.
+
+## Protocol
+
+qualifier implements [AGENTS-CLI 0.1](https://github.com/empathic/qualifier/blob/main/AGENTS-CLI.md). The protocol defines the `agents` subcommand contract that this page satisfies.
