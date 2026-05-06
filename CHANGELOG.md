@@ -5,6 +5,17 @@ All notable changes to this project are documented here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (with
 the pre-1.0 caveat that any breaking change bumps the minor version).
 
+## [0.5.0] — unreleased
+
+### Added
+
+- **`qualifier agents`** — self-contained guide for AI coding agents.
+  Bare `qualifier agents` prints an orientation page with an index of
+  topics; `qualifier agents <topic>` (e.g. `concepts`, `workflows`,
+  `record`) drills into per-topic detail. The agent group also appears
+  at the top of `qualifier --help` so models reading the help text
+  discover the entry point on their own.
+
 ## [0.4.0] — unreleased
 
 This release is a substantial reshape: the CLI surface narrowed, scoring
