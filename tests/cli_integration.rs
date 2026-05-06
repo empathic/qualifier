@@ -2314,3 +2314,13 @@ fn test_compact_preserves_unknown_record_type() {
         "snapshot should produce an epoch record:\n{after_snapshot}"
     );
 }
+
+// --- qualifier agents ---
+
+#[test]
+fn test_agents_bare_invocation_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["agents"]);
+    assert_eq!(code, 0, "agents should succeed: stderr={stderr}");
+    assert!(!stdout.is_empty(), "agents should print something");
+}

@@ -53,6 +53,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Self-contained guide for AI coding agents (start here)
+    Agents(commands::agents::Args),
+
     /// Record an annotation: `qualifier record <kind> <location> [message]`
     Record(Box<commands::record::Args>),
     /// Reply to an existing record (id-prefix or location)
@@ -92,6 +95,7 @@ pub fn run() {
     }
 
     let result: crate::Result<()> = match cli.command {
+        Commands::Agents(args) => commands::agents::run(args),
         Commands::Record(args) => commands::record::run(*args),
         Commands::Reply(args) => commands::reply::run(args),
         Commands::Resolve(args) => commands::resolve::run(args),
