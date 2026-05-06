@@ -2341,14 +2341,6 @@ fn test_agents_unknown_topic_exits_2() {
 }
 
 #[test]
-fn test_agents_concepts_topic_prints_body() {
-    let dir = tempfile::tempdir().unwrap();
-    let (stdout, stderr, code) = run_qualifier(dir.path(), &["agents", "concepts"]);
-    assert_eq!(code, 0, "agents concepts should succeed: stderr={stderr}");
-    assert!(!stdout.is_empty(), "should print body");
-}
-
-#[test]
 fn test_agents_all_registered_topics_render() {
     // Each topic in the registry must produce non-empty stdout with exit 0.
     // If you add a topic, add it here too.
