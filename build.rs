@@ -66,7 +66,7 @@ fn main() {
             )
         });
         let frontmatter = &after_open[..close_offset];
-        let body = &after_open[close_offset + "\n+++\n".len()..];
+        let body = after_open[close_offset + "\n+++\n".len()..].trim_start_matches('\n');
 
         let meta: PageMeta = toml::from_str(frontmatter)
             .unwrap_or_else(|e| panic!("{}: invalid TOML frontmatter: {e}", path.display()));
@@ -121,7 +121,7 @@ fn main() {
     });
 
     let generated = format!(
-        "pub const OVERVIEW: &str = {overview:?};\n\npub const PAGES: &[Page] = &[\n{}\n];\n",
+        "const OVERVIEW: &str = {overview:?};\n\nconst PAGES: &[Page] = &[\n{}\n];\n",
         topic_entries.join("\n"),
     );
 

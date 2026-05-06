@@ -6,12 +6,18 @@ pub struct Args {
     pub topic: Option<String>,
 }
 
-pub struct Page {
-    pub name: &'static str,
-    pub summary: &'static str,
-    pub sees_also: &'static [&'static str],
-    pub since: Option<&'static str>,
-    pub body: &'static str,
+struct Page {
+    name: &'static str,
+    summary: &'static str,
+    /// Cross-references to related topics. Stored for future rendering
+    /// (a "See also: ..." footer is planned); not yet read.
+    #[allow(dead_code)]
+    sees_also: &'static [&'static str],
+    /// Version when the topic was first present. Stored for future
+    /// version-aware navigation; not yet read.
+    #[allow(dead_code)]
+    since: Option<&'static str>,
+    body: &'static str,
 }
 
 include!(concat!(env!("OUT_DIR"), "/agents_pages.rs"));
