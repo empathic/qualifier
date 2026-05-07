@@ -1,5 +1,25 @@
-//! `qualifier diff <ref>` — show records added, resolved, or drifted on this
-//! branch relative to a git ref.
+//! `qualifier diff <ref>` — what changed in the annotation set on this
+//! branch.
+//!
+//! Compares records on `HEAD` against records at a git ref (default `main`,
+//! resolved via merge-base unless `--from-tip`). Output is grouped into
+//! three buckets, all reckoned by record `id`:
+//!
+//! - **Added** — records active on `HEAD` whose id is not in `<ref>`.
+//!   Annotations only; resolve-kind records are filtered to avoid
+//!   double-counting with the closer in *Resolved*.
+//! - **Resolved** — records active at `<ref>` that are no longer active on
+//!   `HEAD`, with the closer (the head-side record whose `supersedes`
+//!   points at it) named when one exists, or `removed` if not.
+//! - **Drifted** — records present at *both* refs whose
+//!   `body.span.content_hash` no longer matches the file's current
+//!   content. Drift on records freshly added on this branch is suppressed.
+//!
+//! Both human and JSON output are stable; CI gating uses `--fail-on
+//! <KIND[,KIND...]>` and `--fail-on-drift`.
+//!
+//! Backed by [`gix`] in-process — no subprocess spawn per `.qual` file
+//! at the ref.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -22,9 +42,9 @@ pub struct Args {
     #[arg(long, default_value = "human")]
     pub format: String,
 
-    /// Compare against the tip of <ref> rather than its merge-base with HEAD.
+    /// Compare against the tip of `<ref>` rather than its merge-base with HEAD.
     /// The default (merge-base) matches what a PR introduces — records that
-    /// landed on <ref> after this branch forked are treated as "old", not
+    /// landed on `<ref>` after this branch forked are treated as "old", not
     /// "added".
     #[arg(long)]
     pub from_tip: bool,
@@ -77,6 +97,8 @@ struct DriftEntry {
     actual: String,
 }
 
+/// `--fail-on*` errors are returned *after* the diff body has been printed
+/// to stdout — the build log shows what triggered the failure.
 pub fn run(args: Args) -> crate::Result<()> {
     // Resolve from an absolute CWD so the upward walk in find_project_root
     // works from any subdirectory — relative-path arithmetic on `.` doesn't

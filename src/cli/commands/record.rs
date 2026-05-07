@@ -48,7 +48,7 @@ pub struct Args {
     pub r#ref: Option<String>,
 
     /// Span override (e.g., "42", "42:58", "42.5:58.80"). When provided,
-    /// overrides any span parsed from <location>.
+    /// overrides any span parsed from `<location>`.
     #[arg(long)]
     pub span: Option<String>,
 
