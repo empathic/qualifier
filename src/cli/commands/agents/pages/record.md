@@ -92,12 +92,43 @@ Behaviour:
 
 - Blank lines and lines starting with `//` are ignored.
 - One stdout line is emitted per recorded entry (compact summary + id, or a
-  full JSONL record under `--format json`). Trailing summary count goes to
+  full JSONL record under `--format json`). Trailing summary goes to
   **stderr** so a `--format json` pipe stays clean.
-- Validation, IO, and parse errors are reported as `stdin line N: <reason>`
-  and abort the batch — earlier records on prior lines are kept.
-- The same flag set works on `qualifier emit --stdin` for non-annotation
-  record types (epoch, dependency, custom URIs).
+- Validation, IO, and parse errors are reported as
+  `stdin line N: <reason>: <input>` (the offending input is echoed so you
+  can see what was sent without re-piping). The batch aborts on the first
+  error by default.
+
+**`--continue-on-error`** collects every failed line, writes the records
+that did pass, and exits non-zero with a final count. Use this when an
+agent submits a large batch and you want to see *all* the validation
+errors at once rather than fix them serially:
+
+```bash
+cat findings.jsonl | qualifier record --stdin --continue-on-error
+# stderr:  stdin line 7: summary must not be empty: {"kind":"pass",...}
+#          Recorded 12 of 13 records from stdin, 1 failed
+```
+
+**`--dry-run`** validates every line but writes nothing. Output uses the
+verb `would-record` so a glance at stdout confirms nothing was committed.
+Combine with `--continue-on-error` to find every bad line in a batch:
+
+```bash
+cat candidates.jsonl | qualifier record --stdin --dry-run --continue-on-error
+```
+
+**`--format json`** mode is fully structured on both streams:
+
+- *stdout* — one JSONL record per processed line.
+- *stderr* — one JSON object per failed line (`{"line":N,"error":"...","input":"..."}`)
+  followed by a final summary trailer
+  (`{"summary":{"recorded":N,"failed":M,"total":N+M,"dry_run":bool}}`).
+  The top-level `qualifier:` text line is suppressed so consumers can
+  parse stderr line-by-line.
+
+The same flag set is mirrored on `qualifier emit --stdin` for non-annotation
+record types (epoch, dependency, custom URIs).
 
 ## Gotchas
 
