@@ -301,9 +301,6 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
     Ok(())
 }
 
-/// Apply parse → validate → supersession-check → append for one stdin line.
-/// On success returns the canonicalized record; on failure returns a
-/// human-readable message (no line-number prefix — the caller adds context).
 fn process_one(trimmed: &str, dry_run: bool) -> std::result::Result<Record, String> {
     let value: serde_json::Value =
         serde_json::from_str(trimmed).map_err(|e| format!("invalid JSON: {e}"))?;
@@ -352,8 +349,8 @@ struct BatchError {
 }
 
 impl BatchError {
-    /// Produce the legacy single-error abort form. Includes the offending
-    /// line content so the user can see what they sent without re-piping.
+    /// Includes the offending line content so the user can see what they
+    /// sent without re-piping.
     fn into_error(self) -> crate::Error {
         let truncated = truncate_for_display(&self.input, 200);
         crate::Error::Validation(if truncated.is_empty() {
@@ -373,8 +370,7 @@ fn truncate_for_display(s: &str, max: usize) -> String {
     }
 }
 
-/// Emit a per-line error in the requested format. Always to stderr so
-/// stdout (the success stream) stays clean.
+/// Always to stderr so stdout (the success stream) stays clean.
 fn emit_batch_error(be: &BatchError, format: &str) {
     if format == "json" {
         let v = serde_json::json!({
@@ -393,13 +389,8 @@ fn emit_batch_error(be: &BatchError, format: &str) {
     }
 }
 
-/// Emit one stdout line per recorded batch entry.
-///
-/// `human`: a compact summary (kind, location[+span], summary, id-prefix).
-/// `json`:  the full canonical record as a single JSONL line.
-///
-/// Under `--dry-run`, the human verb becomes "would-record" so the user
-/// can tell at a glance that nothing was written.
+/// Under `--dry-run`, the human verb is "would-record" so a glance
+/// confirms nothing was committed.
 fn emit_batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Result<()> {
     if format == "json" {
         let mut v = serde_json::to_value(record)?;

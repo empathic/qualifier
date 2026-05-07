@@ -1,21 +1,8 @@
 //! `qualifier diff <ref>` — show records added, resolved, or drifted on this
 //! branch relative to a git ref.
-//!
-//! Compares the union of records at HEAD with the union of records at the
-//! supplied ref (default `main`). "Active" means not superseded — a record
-//! that disappears from the active set on this branch is reported as resolved
-//! (or removed, if no successor exists).
-//!
-//! Drift is checked the same way `qualifier review` does: any active span
-//! with a `content_hash` is rechecked against the current file content.
-//! Drift on records that are *also* present in the ref counts (the
-//! interesting case is "I touched the code under an old annotation");
-//! drift on freshly added records is suppressed since the user just authored
-//! them.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use clap::Args as ClapArgs;
 
@@ -101,38 +88,44 @@ pub fn run(args: Args) -> crate::Result<()> {
         )
     })?;
 
-    if !project_root.join(".git").exists() {
-        return Err(crate::Error::Validation(
-            "qualifier diff currently supports git only — no .git found at project root".into(),
-        ));
-    }
+    let repo = gix::open(&project_root).map_err(|e| {
+        crate::Error::Validation(format!(
+            "qualifier diff currently supports git only — could not open repository at {}: {e}",
+            project_root.display()
+        ))
+    })?;
 
     // Validate the ref exists up-front so the user gets a clean error rather
-    // than a smear of `git show` failures.
-    if !ref_exists(&project_root, &args.r#ref) {
-        return Err(crate::Error::Validation(format!(
-            "git ref '{}' not found",
-            args.r#ref
-        )));
-    }
+    // than a smear of object-lookup failures.
+    let ref_oid = match repo.rev_parse_single(args.r#ref.as_str()) {
+        Ok(id) => id.detach(),
+        Err(_) => {
+            return Err(crate::Error::Validation(format!(
+                "git ref '{}' not found",
+                args.r#ref
+            )));
+        }
+    };
 
-    // Resolve the effective comparison point. Default is the merge-base of
+    // Resolve the effective comparison commit. Default is the merge-base of
     // HEAD with <ref> — this isolates what this branch introduced from
     // anything that landed on <ref> after the branch forked. `--from-tip`
     // opts back into the literal ref.
-    let effective_ref = if args.from_tip {
-        args.r#ref.clone()
+    let effective_oid: gix::ObjectId = if args.from_tip {
+        ref_oid
     } else {
-        match git_merge_base(&project_root, &args.r#ref, "HEAD") {
-            Some(base) => base,
-            None => {
-                // No common ancestor (orphan branches, fresh init): fall back
-                // to ref-tip and emit a hint so the user knows.
+        let head_oid = repo
+            .head_id()
+            .map_err(|e| crate::Error::Validation(format!("could not resolve HEAD: {e}")))?
+            .detach();
+        match repo.merge_base(ref_oid, head_oid) {
+            Ok(base) => base.detach(),
+            Err(_) => {
                 eprintln!(
                     "qualifier diff: no merge-base between HEAD and '{}', comparing to ref tip",
                     args.r#ref
                 );
-                args.r#ref.clone()
+                ref_oid
             }
         }
     };
@@ -143,14 +136,14 @@ pub fn run(args: Args) -> crate::Result<()> {
         .flat_map(|qf| qf.records.iter().cloned())
         .collect();
 
-    let old_records = load_records_at_ref(&project_root, &effective_ref, &new_qual_files)?;
+    let old_records = load_records_at_ref(&repo, effective_oid, &project_root, &new_qual_files)?;
 
     let mut diff = compute_diff(&old_records, &new_records, &project_root);
     apply_filters(&mut diff, &args)?;
 
     let header = DiffHeader {
         input_ref: args.r#ref.clone(),
-        base: effective_ref.clone(),
+        base: effective_oid.to_string(),
         from_tip: args.from_tip,
     };
 
@@ -166,7 +159,6 @@ pub fn run(args: Args) -> crate::Result<()> {
     Ok(())
 }
 
-/// Apply --kind / --issuer-type filters to all three diff buckets in place.
 fn apply_filters(diff: &mut Diff, args: &Args) -> crate::Result<()> {
     let kinds: Option<Vec<String>> = args.kind.as_ref().map(|s| {
         s.split(',')
@@ -203,7 +195,6 @@ fn apply_filters(diff: &mut Diff, args: &Args) -> crate::Result<()> {
     Ok(())
 }
 
-/// `--subjects-only`: dedup-sorted subject paths from all three buckets.
 fn print_subjects(diff: &Diff) {
     let mut subjects: Vec<&str> = diff
         .added
@@ -276,60 +267,68 @@ fn enforce_fail_flags(args: &Args, diff: &Diff) -> crate::Result<()> {
     Ok(())
 }
 
-/// Resolve `git merge-base <a> <b>` to a commit sha, or None if the two refs
-/// share no common ancestor (or git fails).
-fn git_merge_base(project_root: &Path, a: &str, b: &str) -> Option<String> {
-    let output = Command::new("git")
-        .args(["merge-base", a, b])
-        .current_dir(project_root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
-}
-
 fn short_sha(s: &str) -> &str {
     if s.len() >= 7 { &s[..7] } else { s }
 }
 
-/// Enumerate `.qual` paths at the ref via `git ls-tree`, plus the paths that
-/// exist on the current working tree, and load records at `<ref>` for the
-/// union. Paths that exist only at the ref (deleted on this branch) are
-/// included so their records show up as resolved/removed.
+/// Paths from the current working tree are unioned with paths at `<ref>` so
+/// that `.qual` files deleted on this branch still surface their old records
+/// (otherwise we'd never see records under Resolved/removed for them).
 fn load_records_at_ref(
+    repo: &gix::Repository,
+    commit_oid: gix::ObjectId,
     project_root: &Path,
-    git_ref: &str,
     new_qual_files: &[qual_file::QualFile],
 ) -> crate::Result<Vec<Record>> {
-    let mut paths: HashSet<PathBuf> = HashSet::new();
+    // Map relative-path -> blob oid for every .qual entry at <ref>.
+    let qual_blobs_at_ref = enumerate_qual_blobs(repo, commit_oid)?;
 
+    let mut paths: HashSet<PathBuf> = HashSet::new();
     for qf in new_qual_files {
         if let Ok(rel) = qf.path.strip_prefix(project_root) {
             paths.insert(rel.to_path_buf());
         }
     }
-    for p in qual_paths_at_ref(project_root, git_ref)? {
-        paths.insert(p);
+    for path in qual_blobs_at_ref.keys() {
+        paths.insert(path.clone());
     }
 
     let mut all = Vec::new();
     for rel in paths {
-        let blob = match git_show(project_root, git_ref, &rel) {
-            Some(b) => b,
-            None => continue, // file did not exist at <ref>
+        let Some(blob_oid) = qual_blobs_at_ref.get(&rel) else {
+            continue; // file did not exist at <ref>
         };
-        match qual_file::parse_str(&blob) {
+        let blob = match repo.find_object(*blob_oid) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!(
+                    "qualifier diff: cannot read blob for {} at {}: {e}",
+                    rel.display(),
+                    commit_oid
+                );
+                continue;
+            }
+        };
+        let data = &blob.data;
+        let s = match std::str::from_utf8(data) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!(
+                    "qualifier diff: skipping non-UTF8 blob for {} at {}",
+                    rel.display(),
+                    commit_oid
+                );
+                continue;
+            }
+        };
+        match qual_file::parse_str(s) {
             Ok(records) => all.extend(records),
             Err(e) => {
-                // Don't abort the diff for one malformed historical line;
-                // surface it as a hint and skip.
+                // Don't abort the diff for one malformed historical line.
                 eprintln!(
                     "qualifier diff: skipping {} at {}: {}",
                     rel.display(),
-                    git_ref,
+                    commit_oid,
                     e
                 );
             }
@@ -338,51 +337,42 @@ fn load_records_at_ref(
     Ok(all)
 }
 
-fn qual_paths_at_ref(project_root: &Path, git_ref: &str) -> crate::Result<Vec<PathBuf>> {
-    let output = Command::new("git")
-        .args(["ls-tree", "-r", "--name-only", git_ref])
-        .current_dir(project_root)
-        .output()
-        .map_err(|e| crate::Error::Validation(format!("git ls-tree failed: {e}")))?;
-    if !output.status.success() {
-        return Err(crate::Error::Validation(format!(
-            "git ls-tree failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
+fn enumerate_qual_blobs(
+    repo: &gix::Repository,
+    commit_oid: gix::ObjectId,
+) -> crate::Result<HashMap<PathBuf, gix::ObjectId>> {
+    let commit = repo
+        .find_commit(commit_oid)
+        .map_err(|e| crate::Error::Validation(format!("could not read commit {commit_oid}: {e}")))?;
+    let tree = commit
+        .tree()
+        .map_err(|e| crate::Error::Validation(format!("could not read tree at {commit_oid}: {e}")))?;
+
+    let mut recorder = gix::traverse::tree::Recorder::default();
+    tree.traverse()
+        .breadthfirst(&mut recorder)
+        .map_err(|e| crate::Error::Validation(format!("tree traversal failed: {e}")))?;
+
+    let mut out = HashMap::new();
+    for entry in recorder.records {
+        if !entry.mode.is_blob() {
+            continue;
+        }
+        let bytes: &[u8] = entry.filepath.as_ref();
+        let Ok(path_str) = std::str::from_utf8(bytes) else {
+            continue;
+        };
+        let path = PathBuf::from(path_str);
+        if is_qual_path(&path) {
+            out.insert(path, entry.oid);
+        }
     }
-    let listing = String::from_utf8_lossy(&output.stdout);
-    let paths = listing
-        .lines()
-        .filter(|p| {
-            let path = Path::new(p);
-            path.extension().and_then(|e| e.to_str()) == Some("qual")
-                || path.file_name().and_then(|f| f.to_str()) == Some(".qual")
-        })
-        .map(PathBuf::from)
-        .collect();
-    Ok(paths)
+    Ok(out)
 }
 
-fn git_show(project_root: &Path, git_ref: &str, rel_path: &Path) -> Option<String> {
-    let spec = format!("{git_ref}:{}", rel_path.display());
-    let output = Command::new("git")
-        .args(["show", &spec])
-        .current_dir(project_root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn ref_exists(project_root: &Path, git_ref: &str) -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--verify", "--quiet", git_ref])
-        .current_dir(project_root)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+fn is_qual_path(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("qual")
+        || path.file_name().and_then(|f| f.to_str()) == Some(".qual")
 }
 
 fn compute_diff(old: &[Record], new: &[Record], project_root: &Path) -> Diff {
