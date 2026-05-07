@@ -189,7 +189,10 @@ fn apply_filters(diff: &mut Diff, args: &Args) -> crate::Result<()> {
             .collect()
     });
     let issuer_type = match &args.issuer_type {
-        Some(s) => Some(s.parse::<crate::annotation::IssuerType>().map_err(crate::Error::Validation)?),
+        Some(s) => Some(
+            s.parse::<crate::annotation::IssuerType>()
+                .map_err(crate::Error::Validation)?,
+        ),
         None => None,
     };
 
@@ -268,7 +271,11 @@ fn enforce_fail_flags(args: &Args, diff: &Diff) -> crate::Result<()> {
         )));
     }
     if let Some(ref list) = args.fail_on {
-        let kinds: Vec<&str> = list.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        let kinds: Vec<&str> = list
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
         let matched: Vec<&Record> = diff
             .added
             .iter()
@@ -363,12 +370,12 @@ fn enumerate_qual_blobs(
     repo: &gix::Repository,
     commit_oid: gix::ObjectId,
 ) -> crate::Result<HashMap<PathBuf, gix::ObjectId>> {
-    let commit = repo
-        .find_commit(commit_oid)
-        .map_err(|e| crate::Error::Validation(format!("could not read commit {commit_oid}: {e}")))?;
-    let tree = commit
-        .tree()
-        .map_err(|e| crate::Error::Validation(format!("could not read tree at {commit_oid}: {e}")))?;
+    let commit = repo.find_commit(commit_oid).map_err(|e| {
+        crate::Error::Validation(format!("could not read commit {commit_oid}: {e}"))
+    })?;
+    let tree = commit.tree().map_err(|e| {
+        crate::Error::Validation(format!("could not read tree at {commit_oid}: {e}"))
+    })?;
 
     let mut recorder = gix::traverse::tree::Recorder::default();
     tree.traverse()
@@ -520,85 +527,68 @@ fn print_human(header: &DiffHeader, diff: &Diff, project_root: &Path) {
 }
 
 fn print_added(r: &Record) {
-    let att = match r.as_annotation() {
-        Some(a) => a,
-        None => return,
-    };
-    let id_short = id_prefix(&att.id);
-    let loc = format_location(att);
-    println!(
-        "  + {:<10} {:<32}  {}  ({})",
-        att.body.kind.to_string(),
-        loc,
-        att.body.summary,
-        id_short
+    let Some(att) = r.as_annotation() else { return };
+    print_record_row(
+        '+',
+        &att.body.kind.to_string(),
+        &format_location(att),
+        &att.body.summary,
+        id_prefix(&att.id),
+        &[],
     );
 }
 
 fn print_resolved(entry: &ResolvedEntry) {
-    let id_short = id_prefix(entry.old.id());
-    let loc = entry
-        .old
-        .as_annotation()
-        .map(format_location)
-        .unwrap_or_else(|| entry.old.subject().to_string());
     let kind = entry
         .old
         .kind()
         .map(|k| k.to_string())
         .unwrap_or_else(|| entry.old.record_type().to_string());
+    let loc = entry
+        .old
+        .as_annotation()
+        .map(format_location)
+        .unwrap_or_else(|| entry.old.subject().to_string());
     let summary = entry
         .old
         .as_annotation()
-        .map(|a| a.body.summary.clone())
-        .unwrap_or_default();
+        .map(|a| a.body.summary.as_str())
+        .unwrap_or("");
 
-    let suffix = match &entry.closer {
+    let closer_line = match &entry.closer {
         Some(c) => {
-            let closer_kind = c.kind().map(|k| k.to_string()).unwrap_or_default();
-            let closer_id = id_prefix(c.id());
-            let closer_summary = c
-                .as_annotation()
-                .map(|a| a.body.summary.as_str())
-                .unwrap_or("");
-            let verb = if closer_kind == Kind::Resolve.to_string() {
+            let verb = if c.kind() == Some(&Kind::Resolve) {
                 "resolved by"
             } else {
                 "superseded by"
             };
-            if closer_summary.is_empty() {
-                format!(" — {verb} {closer_id}")
-            } else {
-                format!(" — {verb} {closer_id}: {closer_summary:?}")
+            let closer_id = id_prefix(c.id());
+            match c.as_annotation().map(|a| a.body.summary.as_str()) {
+                Some(s) if !s.is_empty() => format!("{verb} {closer_id}: {s:?}"),
+                _ => format!("{verb} {closer_id}"),
             }
         }
-        None => " — removed (no successor)".into(),
+        None => "removed (no successor)".into(),
     };
-    println!(
-        "  - {:<10} {:<32}  {}  ({}){}",
-        kind, loc, summary, id_short, suffix
+
+    print_record_row(
+        '-',
+        &kind,
+        &loc,
+        summary,
+        id_prefix(entry.old.id()),
+        &[closer_line],
     );
 }
 
 fn print_drifted(entry: &DriftEntry, project_root: &Path) {
-    let att = match entry.record.as_annotation() {
-        Some(a) => a,
-        None => return,
+    let Some(att) = entry.record.as_annotation() else {
+        return;
     };
     let id_short = id_prefix(&att.id);
     let loc = format_location(att);
-    println!(
-        "  ~ {:<10} {:<32}  span content drifted  ({})",
-        att.body.kind.to_string(),
-        loc,
-        id_short,
-    );
-    if !att.body.summary.is_empty() {
-        println!("      original: {:?}", att.body.summary);
-    }
-    // Show the current content of the span — what the recorded hash no
-    // longer matches. The original content lives at <ref> and can be
-    // recovered with `git show <ref>:<path>`.
+
+    let mut continuations: Vec<String> = Vec::new();
     if let Some(ref span) = att.body.span {
         let ctx = span_context::read_span_context(
             &project_root.join(&att.subject),
@@ -607,13 +597,103 @@ fn print_drifted(entry: &DriftEntry, project_root: &Path) {
         );
         let formatted = span_context::format_human(&ctx);
         for line in formatted.lines() {
-            println!("    {line}");
+            continuations.push(line.to_string());
         }
+    }
+
+    print_record_row(
+        '~',
+        &att.body.kind.to_string(),
+        &loc,
+        &att.body.summary,
+        id_short,
+        &continuations,
+    );
+}
+
+/// Render one diff row, wrapping to the terminal width. Columns are kept
+/// aligned (`marker  KIND  LOC  SUMMARY  (ID)`) when the whole line fits;
+/// otherwise the summary and any extra continuations move to indented
+/// follow-up lines so the header (KIND + LOC + ID) stays on one line.
+///
+/// Width is read from `$COLUMNS`, defaulting to 80 when unset.
+fn print_record_row(
+    marker: char,
+    kind: &str,
+    location: &str,
+    summary: &str,
+    id_short: &str,
+    extras: &[String],
+) {
+    const KIND_WIDTH: usize = 10;
+    const HEADER_INDENT: &str = "  ";
+    const CONTINUATION_INDENT: &str = "      ";
+    let width = term_width();
+
+    let id_chunk = format!("({id_short})");
+    let single = if summary.is_empty() {
+        format!("{HEADER_INDENT}{marker} {kind:<KIND_WIDTH$} {location}  {id_chunk}",)
+    } else {
+        format!("{HEADER_INDENT}{marker} {kind:<KIND_WIDTH$} {location}  {summary}  {id_chunk}",)
+    };
+
+    if extras.is_empty() && display_width(&single) <= width {
+        println!("{single}");
+        return;
+    }
+
+    // Multi-line: header keeps marker+kind+loc+id; summary (if any) and
+    // each extra are indented continuations, themselves truncated to width.
+    let header = format!("{HEADER_INDENT}{marker} {kind:<KIND_WIDTH$} {location}  {id_chunk}",);
+    println!("{}", truncate_to_width(&header, width));
+
+    let cont_budget = width.saturating_sub(display_width(CONTINUATION_INDENT));
+    if !summary.is_empty() {
+        println!(
+            "{CONTINUATION_INDENT}{}",
+            truncate_to_width(summary, cont_budget)
+        );
+    }
+    for line in extras {
+        println!(
+            "{CONTINUATION_INDENT}{}",
+            truncate_to_width(line, cont_budget)
+        );
     }
 }
 
 fn id_prefix(id: &str) -> &str {
     if id.len() >= 8 { &id[..8] } else { id }
+}
+
+/// Effective terminal width. Reads `$COLUMNS` (set by most shells when stdout
+/// is a TTY); falls back to 80 columns when unset, malformed, or zero.
+fn term_width() -> usize {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n: &usize| n > 0)
+        .unwrap_or(80)
+}
+
+/// Display width, counted in chars (good enough for ASCII paths and English
+/// summaries; non-ASCII may render slightly off in terminals that disagree
+/// with us about grapheme width, but never produces output longer than this).
+fn display_width(s: &str) -> usize {
+    s.chars().count()
+}
+
+fn truncate_to_width(s: &str, max: usize) -> String {
+    if display_width(s) <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let take = max - 1;
+    let mut out: String = s.chars().take(take).collect();
+    out.push('…');
+    out
 }
 
 fn format_location(att: &crate::annotation::Annotation) -> String {

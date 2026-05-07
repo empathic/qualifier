@@ -2491,11 +2491,14 @@ fn test_record_stdin_emits_per_record_human_output() {
 #[test]
 fn test_record_stdin_json_format_emits_records() {
     let dir = tempfile::tempdir().unwrap();
-    let input =
-        r#"{"kind":"pass","location":"x.rs","message":"ok","issuer":"mailto:a@b.com"}"#.to_string()
-            + "\n";
-    let (stdout, _stderr, code) =
-        run_qualifier_stdin(dir.path(), &["record", "--stdin", "--format", "json"], &input);
+    let input = r#"{"kind":"pass","location":"x.rs","message":"ok","issuer":"mailto:a@b.com"}"#
+        .to_string()
+        + "\n";
+    let (stdout, _stderr, code) = run_qualifier_stdin(
+        dir.path(),
+        &["record", "--stdin", "--format", "json"],
+        &input,
+    );
     assert_eq!(code, 0);
 
     // Each stdout line should be a valid JSON record.
@@ -2616,8 +2619,11 @@ fn test_diff_added_resolved_drifted() {
     // but a *fresh* concern at a span that pinned a hash on the post-mutation
     // file content is also recorded so we can check the drift category by
     // mutating after that pin.
-    std::fs::write(dir.path().join("main.rs"), "fn alpha() {}\nfn beta() { /* changed */ }\n")
-        .unwrap();
+    std::fs::write(
+        dir.path().join("main.rs"),
+        "fn alpha() {}\nfn beta() { /* changed */ }\n",
+    )
+    .unwrap();
 
     let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
     assert_eq!(code, 0, "diff should succeed: stderr={stderr}");
@@ -2652,14 +2658,7 @@ fn test_diff_no_changes() {
     std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
     let (_, _, code) = run_qualifier(
         dir.path(),
-        &[
-            "record",
-            "pass",
-            "a.rs",
-            "ok",
-            "--issuer",
-            "mailto:a@b.com",
-        ],
+        &["record", "pass", "a.rs", "ok", "--issuer", "mailto:a@b.com"],
     );
     assert_eq!(code, 0);
     git_commit_all(dir.path(), "baseline");
@@ -2797,7 +2796,13 @@ fn test_record_stdin_dry_run_writes_nothing() {
 "#;
     let (stdout, stderr, code) = run_qualifier_stdin(
         dir.path(),
-        &["record", "--stdin", "--dry-run", "--issuer", "mailto:a@b.com"],
+        &[
+            "record",
+            "--stdin",
+            "--dry-run",
+            "--issuer",
+            "mailto:a@b.com",
+        ],
         input,
     );
     assert_eq!(code, 0);
@@ -2824,7 +2829,13 @@ fn test_record_stdin_dry_run_still_validates() {
 "#;
     let (_, stderr, code) = run_qualifier_stdin(
         dir.path(),
-        &["record", "--stdin", "--dry-run", "--issuer", "mailto:a@b.com"],
+        &[
+            "record",
+            "--stdin",
+            "--dry-run",
+            "--issuer",
+            "mailto:a@b.com",
+        ],
         input,
     );
     assert_ne!(code, 0, "dry-run must still report validation errors");
@@ -3087,15 +3098,17 @@ fn test_diff_fail_on_multiple_kinds() {
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "record", "fail", "x.rs", "broke", "--issuer", "mailto:a@b.com",
+            "record",
+            "fail",
+            "x.rs",
+            "broke",
+            "--issuer",
+            "mailto:a@b.com",
         ],
     );
     assert_eq!(code, 0);
 
-    let (_, _, code) = run_qualifier(
-        dir.path(),
-        &["diff", "main", "--fail-on", "blocker,fail"],
-    );
+    let (_, _, code) = run_qualifier(dir.path(), &["diff", "main", "--fail-on", "blocker,fail"]);
     assert_ne!(code, 0, "comma-separated list should match `fail` records");
 }
 
@@ -3107,7 +3120,12 @@ fn test_diff_fail_on_drift() {
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "record", "concern", "m.rs:2", "look", "--issuer", "mailto:a@b.com",
+            "record",
+            "concern",
+            "m.rs:2",
+            "look",
+            "--issuer",
+            "mailto:a@b.com",
         ],
     );
     assert_eq!(code, 0);
@@ -3147,13 +3165,23 @@ fn test_diff_kind_filter() {
     let (_, _, _) = run_qualifier(
         dir.path(),
         &[
-            "record", "concern", "a.rs", "concern1", "--issuer", "mailto:a@b.com",
+            "record",
+            "concern",
+            "a.rs",
+            "concern1",
+            "--issuer",
+            "mailto:a@b.com",
         ],
     );
     let (_, _, _) = run_qualifier(
         dir.path(),
         &[
-            "record", "blocker", "a.rs", "blocker1", "--issuer", "mailto:a@b.com",
+            "record",
+            "blocker",
+            "a.rs",
+            "blocker1",
+            "--issuer",
+            "mailto:a@b.com",
         ],
     );
     let (_, _, _) = run_qualifier(
@@ -3170,7 +3198,10 @@ fn test_diff_kind_filter() {
 
     let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--kind", "concern"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("concern1"), "concern should appear: {stdout}");
+    assert!(
+        stdout.contains("concern1"),
+        "concern should appear: {stdout}"
+    );
     assert!(
         !stdout.contains("blocker1"),
         "blocker should be filtered out: {stdout}"
@@ -3227,7 +3258,10 @@ fn test_diff_issuer_type_filter() {
     );
 
     let (stdout, _, _) = run_qualifier(dir.path(), &["diff", "main", "--issuer-type", "ai"]);
-    assert!(stdout.contains("from-ai"), "ai record should appear: {stdout}");
+    assert!(
+        stdout.contains("from-ai"),
+        "ai record should appear: {stdout}"
+    );
     assert!(
         !stdout.contains("from-human"),
         "human record should be filtered: {stdout}"
@@ -3266,7 +3300,11 @@ fn test_diff_subjects_only() {
     let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--subjects-only"]);
     assert_eq!(code, 0);
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines, vec!["a.rs", "b.rs"], "should be deduped + sorted: {stdout}");
+    assert_eq!(
+        lines,
+        vec!["a.rs", "b.rs"],
+        "should be deduped + sorted: {stdout}"
+    );
 }
 
 // --- diff: human output polish ---
@@ -3279,7 +3317,12 @@ fn test_diff_resolved_inlines_closer_summary() {
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "record", "concern", "x.rs:1", "needs work", "--issuer", "mailto:a@b.com",
+            "record",
+            "concern",
+            "x.rs:1",
+            "needs work",
+            "--issuer",
+            "mailto:a@b.com",
         ],
     );
     assert_eq!(code, 0);
@@ -3292,7 +3335,11 @@ fn test_diff_resolved_inlines_closer_summary() {
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "resolve", "x.rs:1", "fixed in PR #42", "--issuer", "mailto:a@b.com",
+            "resolve",
+            "x.rs:1",
+            "fixed in PR #42",
+            "--issuer",
+            "mailto:a@b.com",
         ],
     );
     assert_eq!(code, 0);
@@ -3313,12 +3360,20 @@ fn test_diff_resolved_inlines_closer_summary() {
 fn test_diff_drift_includes_span_snippet() {
     let dir = tempfile::tempdir().unwrap();
     git_init(dir.path());
-    std::fs::write(dir.path().join("m.rs"), "fn alpha() {}\nfn beta() {}\nfn gamma() {}\n")
-        .unwrap();
+    std::fs::write(
+        dir.path().join("m.rs"),
+        "fn alpha() {}\nfn beta() {}\nfn gamma() {}\n",
+    )
+    .unwrap();
     let (_, _, code) = run_qualifier(
         dir.path(),
         &[
-            "record", "concern", "m.rs:2", "watch beta", "--issuer", "mailto:a@b.com",
+            "record",
+            "concern",
+            "m.rs:2",
+            "watch beta",
+            "--issuer",
+            "mailto:a@b.com",
         ],
     );
     assert_eq!(code, 0);
@@ -3345,7 +3400,99 @@ fn test_diff_drift_includes_span_snippet() {
         "should print current span content as a snippet: {stdout}"
     );
     // Compiler-style marker for the drifted line.
-    assert!(stdout.contains("> 2"), "snippet should mark line 2: {stdout}");
+    assert!(
+        stdout.contains("> 2"),
+        "snippet should mark line 2: {stdout}"
+    );
+}
+
+// --- diff: 80-col friendliness ---
+
+/// Run qualifier with `COLUMNS` set to override stdout width detection.
+fn run_qualifier_with_columns(dir: &Path, args: &[&str], columns: usize) -> (String, String, i32) {
+    let output = Command::new(qualifier_bin())
+        .args(args)
+        .current_dir(dir)
+        .env("COLUMNS", columns.to_string())
+        .output()
+        .expect("failed to run qualifier binary");
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code().unwrap_or(-1),
+    )
+}
+
+#[test]
+fn test_diff_human_output_fits_80_cols() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+
+    // Create a deeply-nested path and a long summary — the worst case for
+    // line-width budgeting.
+    let nested = dir.path().join("src/cli/commands/agents/pages");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("record.md"), "line one\nline two\nline three\n").unwrap();
+    let long_summary = "AnnotationBody field declaration order silently determines MCF canonical IDs — \
+         make the invariant load-bearing in code or in a doc-test";
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "suggestion",
+            "src/cli/commands/agents/pages/record.md:2",
+            long_summary,
+            "--issuer",
+            "mailto:a@b.com",
+        ],
+    );
+    assert_eq!(code, 0);
+    git_commit_all(dir.path(), "baseline");
+    Command::new("git")
+        .args(["checkout", "-q", "-b", "feat"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap();
+
+    // A second record on the feature branch with a long summary too — this
+    // ends up under Added.
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "src/cli/commands/agents/pages/record.md:1",
+            "this is a deliberately long summary intended to overflow the single-line budget on \
+             any narrow terminal so the wrapping path is exercised",
+            "--issuer",
+            "mailto:a@b.com",
+        ],
+    );
+    assert_eq!(code, 0);
+
+    // Mutate the spanned line to cause drift on the baseline record; this
+    // exercises the Drifted bucket with a snippet, the longest path so far.
+    std::fs::write(
+        nested.join("record.md"),
+        "line one\nDIFFERENT line two\nline three\n",
+    )
+    .unwrap();
+
+    let (stdout, _, code) = run_qualifier_with_columns(dir.path(), &["diff", "main"], 80);
+    assert_eq!(code, 0);
+
+    for line in stdout.lines() {
+        let chars = line.chars().count();
+        assert!(
+            chars <= 80,
+            "line exceeds 80-col budget ({chars} chars): {line:?}"
+        );
+    }
+
+    // Sanity: the summary still appears (truncated or wrapped, but present
+    // enough that a reviewer can identify the record).
+    assert!(stdout.contains("AnnotationBody field declaration order"));
+    assert!(stdout.contains("deliberately long summary"));
 }
 
 // --- diff: JSON shape stability ---
@@ -3367,7 +3514,12 @@ fn test_diff_json_includes_base_and_from_tip() {
     let (_, _, _) = run_qualifier(
         dir.path(),
         &[
-            "record", "concern", "x.rs", "y", "--issuer", "mailto:a@b.com",
+            "record",
+            "concern",
+            "x.rs",
+            "y",
+            "--issuer",
+            "mailto:a@b.com",
         ],
     );
 

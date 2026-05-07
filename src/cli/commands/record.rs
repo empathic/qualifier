@@ -260,7 +260,11 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
     }
 
     let total = recorded + errors.len();
-    let suffix = if dry_run { " (dry run, nothing written)" } else { "" };
+    let suffix = if dry_run {
+        " (dry run, nothing written)"
+    } else {
+        ""
+    };
     if format == "json" {
         // Trailer summary as JSON so consumers parsing stderr line-by-line
         // see a structured terminator rather than a free-form English line.
@@ -320,7 +324,8 @@ fn process_one(trimmed: &str, dry_run: bool) -> std::result::Result<Record, Stri
         }
     }
 
-    let qual_path = qual_file::resolve_qual_path(record.subject(), None).map_err(|e| e.to_string())?;
+    let qual_path =
+        qual_file::resolve_qual_path(record.subject(), None).map_err(|e| e.to_string())?;
 
     if record.supersedes().is_some() {
         let existing = if qual_path.exists() {
@@ -394,16 +399,18 @@ fn emit_batch_error(be: &BatchError, format: &str) {
 fn emit_batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Result<()> {
     if format == "json" {
         let mut v = serde_json::to_value(record)?;
-        if dry_run
-            && let Some(obj) = v.as_object_mut()
-        {
+        if dry_run && let Some(obj) = v.as_object_mut() {
             obj.insert("dry_run".into(), serde_json::Value::Bool(true));
         }
         println!("{}", serde_json::to_string(&v)?);
         return Ok(());
     }
 
-    let verb = if dry_run { "would-record" } else { "recorded   " };
+    let verb = if dry_run {
+        "would-record"
+    } else {
+        "recorded   "
+    };
     let id = record.id();
     let id_short = if id.len() >= 8 { &id[..8] } else { id };
     if let Some(att) = record.as_annotation() {
