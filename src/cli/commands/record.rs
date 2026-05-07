@@ -48,7 +48,7 @@ pub struct Args {
     pub r#ref: Option<String>,
 
     /// Span override (e.g., "42", "42:58", "42.5:58.80"). When provided,
-    /// overrides any span parsed from <location>.
+    /// overrides any span parsed from `<location>`.
     #[arg(long)]
     pub span: Option<String>,
 
@@ -64,19 +64,44 @@ pub struct Args {
     #[arg(long)]
     pub file: Option<String>,
 
-    /// Read JSONL records from stdin (batch mode). Each line is
-    /// `{kind, location, message, ...overrides}`.
+    /// Read JSONL records from stdin (batch mode). Each line is one of:
+    ///
+    ///   1. An overrides object: `{"kind":"concern","location":"src/foo.rs:42",
+    ///      "message":"...","detail":"...","suggested_fix":"...","tags":["x"],
+    ///      "issuer":"mailto:agent@example.com","issuer_type":"ai",
+    ///      "ref":"git:abc123","supersedes":"<id>","references":"<id>",
+    ///      "span":"42:58"}`
+    ///   2. A complete record envelope (forward-compat) — recognized when the
+    ///      object has both `subject` and `body` keys.
+    ///
+    /// Lines starting with `//` and blank lines are ignored. One record per
+    /// line is emitted on stdout (id + summary, or full JSON with --format
+    /// json). Errors are reported as `stdin line N: <reason>: <input>` and
+    /// by default abort the batch on the first failure. Pass
+    /// `--continue-on-error` to collect every error and exit with a summary.
+    /// See `qualifier agents record` for a worked example.
     #[arg(long)]
     pub stdin: bool,
 
-    /// Output format (human, json).
+    /// In --stdin mode: collect all errors and continue past failed lines
+    /// instead of aborting on the first. Exit code is non-zero if any line
+    /// failed; valid lines are still written.
+    #[arg(long)]
+    pub continue_on_error: bool,
+
+    /// In --stdin mode: validate every line but do not write any records.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Output format (human, json). In --stdin mode controls per-record output.
+    /// Under `--format json`, errors are also emitted as JSON objects on stderr.
     #[arg(long, default_value = "human")]
     pub format: String,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
     if args.stdin {
-        return run_batch();
+        return run_batch(&args.format, args.continue_on_error, args.dry_run);
     }
 
     let kind_str = args.kind.as_deref().ok_or_else(|| {
@@ -185,58 +210,236 @@ pub fn run(args: Args) -> crate::Result<()> {
     Ok(())
 }
 
-fn run_batch() -> crate::Result<()> {
+fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Result<()> {
     let stdin = io::stdin();
-    let mut count = 0;
+    let mut recorded = 0usize;
+    let mut errors: Vec<BatchError> = Vec::new();
 
-    for line in stdin.lock().lines() {
-        let line = line?;
-        let trimmed = line.trim();
+    for (line_idx, line) in stdin.lock().lines().enumerate() {
+        let line_no = line_idx + 1;
+        let raw = match line {
+            Ok(l) => l,
+            Err(e) => {
+                let be = BatchError {
+                    line: line_no,
+                    error: format!("io error: {e}"),
+                    input: String::new(),
+                };
+                if continue_on_error {
+                    emit_batch_error(&be, format);
+                    errors.push(be);
+                    continue;
+                }
+                return Err(be.into_error());
+            }
+        };
+        let trimmed = raw.trim();
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
 
-        // Each line is one of:
-        // - A record overrides object: {kind, location, message, detail?, ...}
-        // - A complete record (envelope + body) for forward-compat.
-        let value: serde_json::Value = serde_json::from_str(trimmed)?;
-
-        let record = if value.get("body").is_some() && value.get("subject").is_some() {
-            // Looks like a complete record.
-            let r: Record = serde_json::from_value(value)?;
-            annotation::finalize_record(r)
-        } else {
-            // Overrides object — build an annotation.
-            build_record_from_overrides(value)?
-        };
-
-        // Validate annotation records.
-        if let Some(att) = record.as_annotation() {
-            let errors = annotation::validate(att);
-            if !errors.is_empty() {
-                return Err(crate::Error::Validation(errors.join("; ")));
+        match process_one(trimmed, dry_run) {
+            Ok(record) => {
+                emit_batch_line(&record, format, dry_run)?;
+                recorded += 1;
+            }
+            Err(msg) => {
+                let be = BatchError {
+                    line: line_no,
+                    error: msg,
+                    input: trimmed.to_string(),
+                };
+                if continue_on_error {
+                    emit_batch_error(&be, format);
+                    errors.push(be);
+                    continue;
+                }
+                return Err(be.into_error());
             }
         }
-
-        let qual_path = qual_file::resolve_qual_path(record.subject(), None)?;
-
-        if record.supersedes().is_some() {
-            let existing = if qual_path.exists() {
-                qual_file::parse(&qual_path)?.records
-            } else {
-                Vec::new()
-            };
-            let mut all = existing;
-            all.push(record.clone());
-            annotation::check_supersession_cycles(&all)?;
-            annotation::validate_supersession_targets(&all)?;
-        }
-
-        qual_file::append(&qual_path, &record)?;
-        count += 1;
     }
 
-    println!("Recorded {count} records from stdin");
+    let total = recorded + errors.len();
+    let suffix = if dry_run {
+        " (dry run, nothing written)"
+    } else {
+        ""
+    };
+    if format == "json" {
+        // Trailer summary as JSON so consumers parsing stderr line-by-line
+        // see a structured terminator rather than a free-form English line.
+        let summary = serde_json::json!({
+            "summary": {
+                "recorded": recorded,
+                "failed": errors.len(),
+                "total": total,
+                "dry_run": dry_run,
+            }
+        });
+        eprintln!("{summary}");
+    } else {
+        eprintln!(
+            "Recorded {recorded} of {total} records from stdin{}{}",
+            if errors.is_empty() {
+                String::new()
+            } else {
+                format!(", {} failed", errors.len())
+            },
+            suffix
+        );
+    }
+
+    if !errors.is_empty() {
+        // Suppress the top-level `qualifier: ...` line under --format json so
+        // stderr stays a clean JSONL stream — the per-line error objects and
+        // summary already carry every detail a consumer needs.
+        if format == "json" {
+            std::process::exit(1);
+        }
+        return Err(crate::Error::Validation(format!(
+            "{} of {} stdin records failed (--continue-on-error)",
+            errors.len(),
+            total
+        )));
+    }
+    Ok(())
+}
+
+fn process_one(trimmed: &str, dry_run: bool) -> std::result::Result<Record, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(trimmed).map_err(|e| format!("invalid JSON: {e}"))?;
+
+    let record = if value.get("body").is_some() && value.get("subject").is_some() {
+        let r: Record =
+            serde_json::from_value(value).map_err(|e| format!("invalid record: {e}"))?;
+        annotation::finalize_record(r)
+    } else {
+        build_record_from_overrides(value).map_err(|e| e.to_string())?
+    };
+
+    if let Some(att) = record.as_annotation() {
+        let errors = annotation::validate(att);
+        if !errors.is_empty() {
+            return Err(errors.join("; "));
+        }
+    }
+
+    let qual_path =
+        qual_file::resolve_qual_path(record.subject(), None).map_err(|e| e.to_string())?;
+
+    if record.supersedes().is_some() {
+        let existing = if qual_path.exists() {
+            qual_file::parse(&qual_path)
+                .map_err(|e| e.to_string())?
+                .records
+        } else {
+            Vec::new()
+        };
+        let mut all = existing;
+        all.push(record.clone());
+        annotation::check_supersession_cycles(&all).map_err(|e| e.to_string())?;
+        annotation::validate_supersession_targets(&all).map_err(|e| e.to_string())?;
+    }
+
+    if !dry_run {
+        qual_file::append(&qual_path, &record).map_err(|e| e.to_string())?;
+    }
+    Ok(record)
+}
+
+struct BatchError {
+    line: usize,
+    error: String,
+    input: String,
+}
+
+impl BatchError {
+    /// Includes the offending line content so the user can see what they
+    /// sent without re-piping.
+    fn into_error(self) -> crate::Error {
+        let truncated = truncate_for_display(&self.input, 200);
+        crate::Error::Validation(if truncated.is_empty() {
+            format!("stdin line {}: {}", self.line, self.error)
+        } else {
+            format!("stdin line {}: {}: {}", self.line, self.error, truncated)
+        })
+    }
+}
+
+fn truncate_for_display(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let prefix: String = s.chars().take(max).collect();
+        format!("{prefix}...")
+    }
+}
+
+/// Always to stderr so stdout (the success stream) stays clean.
+fn emit_batch_error(be: &BatchError, format: &str) {
+    if format == "json" {
+        let v = serde_json::json!({
+            "line": be.line,
+            "error": be.error,
+            "input": be.input,
+        });
+        eprintln!("{v}");
+    } else {
+        let truncated = truncate_for_display(&be.input, 200);
+        if truncated.is_empty() {
+            eprintln!("stdin line {}: {}", be.line, be.error);
+        } else {
+            eprintln!("stdin line {}: {}: {}", be.line, be.error, truncated);
+        }
+    }
+}
+
+/// Under `--dry-run`, the human verb is "would-record" so a glance
+/// confirms nothing was committed.
+fn emit_batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Result<()> {
+    if format == "json" {
+        let mut v = serde_json::to_value(record)?;
+        if dry_run && let Some(obj) = v.as_object_mut() {
+            obj.insert("dry_run".into(), serde_json::Value::Bool(true));
+        }
+        println!("{}", serde_json::to_string(&v)?);
+        return Ok(());
+    }
+
+    let verb = if dry_run {
+        "would-record"
+    } else {
+        "recorded   "
+    };
+    let id = record.id();
+    let id_short = if id.len() >= 8 { &id[..8] } else { id };
+    if let Some(att) = record.as_annotation() {
+        let span_str = match &att.body.span {
+            Some(span) => {
+                let end = match &span.end {
+                    Some(e) if e.line != span.start.line => format!(":{}", e.line),
+                    _ => String::new(),
+                };
+                format!(":{}{}", span.start.line, end)
+            }
+            None => String::new(),
+        };
+        println!(
+            "{verb}  {:<10} {}{}  {}  id: {}",
+            att.body.kind.to_string(),
+            att.subject,
+            span_str,
+            att.body.summary,
+            id_short,
+        );
+    } else {
+        println!(
+            "{verb}  {:<10} {}  id: {}",
+            record.record_type(),
+            record.subject(),
+            id_short,
+        );
+    }
     Ok(())
 }
 

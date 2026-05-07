@@ -28,6 +28,7 @@ Inspect annotations:
   ls         List artifacts by kind
   praise     Show who annotated an artifact and why (alias: blame)
   review     Check freshness of annotations against current code
+  diff       Show records added, resolved, or drifted since a git ref
 
 Maintain:
   compact    Compact a .qual file
@@ -77,6 +78,8 @@ pub enum Commands {
     Praise(commands::praise::Args),
     /// Check freshness of annotations against current code
     Review(commands::freshness::Args),
+    /// Show records added, resolved, or drifted since a git ref
+    Diff(commands::diff::Args),
 
     /// Compact a .qual file
     Compact(commands::compact::Args),
@@ -112,6 +115,7 @@ pub fn run() {
         }
         Commands::Praise(args) => commands::praise::run(args),
         Commands::Review(args) => commands::freshness::run(args),
+        Commands::Diff(args) => commands::diff::run(args),
     };
 
     if let Err(e) = result {

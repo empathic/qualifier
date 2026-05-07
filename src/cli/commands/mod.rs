@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod compact;
+pub mod diff;
 pub mod emit;
 pub mod freshness;
 pub mod haiku;

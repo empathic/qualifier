@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive"] }
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:comfy-table", "dep:figment", "dep:rand"]
+cli = ["dep:clap", "dep:comfy-table", "dep:figment", "dep:gix", "dep:rand"]
 
 [dependencies]
 blake3 = "1"
@@ -30,6 +30,8 @@ thiserror = "2"
 clap = { version = "4", features = ["derive"], optional = true }
 comfy-table = { version = "7", optional = true }
 figment = { version = "0.10", features = ["toml", "env"], optional = true }
+# gix powers `qualifier diff` (no fork/exec per .qual file at <ref>).
+gix = { version = "0.83", optional = true }
 rand = { version = "0.9", optional = true }
 
 [dev-dependencies]
