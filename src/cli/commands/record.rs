@@ -64,19 +64,31 @@ pub struct Args {
     #[arg(long)]
     pub file: Option<String>,
 
-    /// Read JSONL records from stdin (batch mode). Each line is
-    /// `{kind, location, message, ...overrides}`.
+    /// Read JSONL records from stdin (batch mode). Each line is one of:
+    ///
+    ///   1. An overrides object: `{"kind":"concern","location":"src/foo.rs:42",
+    ///      "message":"...","detail":"...","suggested_fix":"...","tags":["x"],
+    ///      "issuer":"mailto:agent@example.com","issuer_type":"ai",
+    ///      "ref":"git:abc123","supersedes":"<id>","references":"<id>",
+    ///      "span":"42:58"}`
+    ///   2. A complete record envelope (forward-compat) — recognized when the
+    ///      object has both `subject` and `body` keys.
+    ///
+    /// Lines starting with `//` and blank lines are ignored. One record per
+    /// line is emitted on stdout (id + summary, or full JSON with --format
+    /// json). Errors are reported as `stdin line N: <reason>` and abort the
+    /// batch. See `qualifier agents record` for a worked example.
     #[arg(long)]
     pub stdin: bool,
 
-    /// Output format (human, json).
+    /// Output format (human, json). In --stdin mode controls per-record output.
     #[arg(long, default_value = "human")]
     pub format: String,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
     if args.stdin {
-        return run_batch();
+        return run_batch(&args.format);
     }
 
     let kind_str = args.kind.as_deref().ok_or_else(|| {
@@ -185,12 +197,13 @@ pub fn run(args: Args) -> crate::Result<()> {
     Ok(())
 }
 
-fn run_batch() -> crate::Result<()> {
+fn run_batch(format: &str) -> crate::Result<()> {
     let stdin = io::stdin();
     let mut count = 0;
 
-    for line in stdin.lock().lines() {
-        let line = line?;
+    for (line_idx, line) in stdin.lock().lines().enumerate() {
+        let line_no = line_idx + 1;
+        let line = line.map_err(|e| stdin_err(line_no, e))?;
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
@@ -199,45 +212,106 @@ fn run_batch() -> crate::Result<()> {
         // Each line is one of:
         // - A record overrides object: {kind, location, message, detail?, ...}
         // - A complete record (envelope + body) for forward-compat.
-        let value: serde_json::Value = serde_json::from_str(trimmed)?;
+        let value: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|e| stdin_err(line_no, e))?;
 
         let record = if value.get("body").is_some() && value.get("subject").is_some() {
             // Looks like a complete record.
-            let r: Record = serde_json::from_value(value)?;
+            let r: Record = serde_json::from_value(value).map_err(|e| stdin_err(line_no, e))?;
             annotation::finalize_record(r)
         } else {
             // Overrides object — build an annotation.
-            build_record_from_overrides(value)?
+            build_record_from_overrides(value).map_err(|e| stdin_err_wrap(line_no, e))?
         };
 
         // Validate annotation records.
         if let Some(att) = record.as_annotation() {
             let errors = annotation::validate(att);
             if !errors.is_empty() {
-                return Err(crate::Error::Validation(errors.join("; ")));
+                return Err(crate::Error::Validation(format!(
+                    "stdin line {line_no}: {}",
+                    errors.join("; ")
+                )));
             }
         }
 
-        let qual_path = qual_file::resolve_qual_path(record.subject(), None)?;
+        let qual_path = qual_file::resolve_qual_path(record.subject(), None)
+            .map_err(|e| stdin_err_wrap(line_no, e))?;
 
         if record.supersedes().is_some() {
             let existing = if qual_path.exists() {
-                qual_file::parse(&qual_path)?.records
+                qual_file::parse(&qual_path)
+                    .map_err(|e| stdin_err_wrap(line_no, e))?
+                    .records
             } else {
                 Vec::new()
             };
             let mut all = existing;
             all.push(record.clone());
-            annotation::check_supersession_cycles(&all)?;
-            annotation::validate_supersession_targets(&all)?;
+            annotation::check_supersession_cycles(&all).map_err(|e| stdin_err_wrap(line_no, e))?;
+            annotation::validate_supersession_targets(&all)
+                .map_err(|e| stdin_err_wrap(line_no, e))?;
         }
 
-        qual_file::append(&qual_path, &record)?;
+        qual_file::append(&qual_path, &record).map_err(|e| stdin_err_wrap(line_no, e))?;
+        emit_batch_line(&record, format)?;
         count += 1;
     }
 
-    println!("Recorded {count} records from stdin");
+    if format != "json" {
+        eprintln!("Recorded {count} records from stdin");
+    }
     Ok(())
+}
+
+/// Emit one stdout line per recorded batch entry.
+///
+/// `human`: a compact summary (kind, location[+span], summary, id-prefix).
+/// `json`:  the full canonical record as a single JSONL line.
+fn emit_batch_line(record: &Record, format: &str) -> crate::Result<()> {
+    if format == "json" {
+        println!("{}", serde_json::to_string(record)?);
+        return Ok(());
+    }
+
+    let id = record.id();
+    let id_short = if id.len() >= 8 { &id[..8] } else { id };
+    if let Some(att) = record.as_annotation() {
+        let span_str = match &att.body.span {
+            Some(span) => {
+                let end = match &span.end {
+                    Some(e) if e.line != span.start.line => format!(":{}", e.line),
+                    _ => String::new(),
+                };
+                format!(":{}{}", span.start.line, end)
+            }
+            None => String::new(),
+        };
+        println!(
+            "recorded  {:<10} {}{}  {}  id: {}",
+            att.body.kind.to_string(),
+            att.subject,
+            span_str,
+            att.body.summary,
+            id_short,
+        );
+    } else {
+        println!(
+            "recorded  {:<10} {}  id: {}",
+            record.record_type(),
+            record.subject(),
+            id_short,
+        );
+    }
+    Ok(())
+}
+
+fn stdin_err<E: std::fmt::Display>(line_no: usize, e: E) -> crate::Error {
+    crate::Error::Validation(format!("stdin line {line_no}: {e}"))
+}
+
+fn stdin_err_wrap(line_no: usize, e: crate::Error) -> crate::Error {
+    crate::Error::Validation(format!("stdin line {line_no}: {e}"))
 }
 
 fn build_record_from_overrides(value: serde_json::Value) -> crate::Result<Record> {

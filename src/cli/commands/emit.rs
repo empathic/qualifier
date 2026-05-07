@@ -165,14 +165,16 @@ fn run_batch(default_type: Option<&str>, default_subject: Option<&str>) -> crate
     let stdin = io::stdin();
     let mut count = 0;
 
-    for line in stdin.lock().lines() {
-        let line = line?;
+    for (line_idx, line) in stdin.lock().lines().enumerate() {
+        let line_no = line_idx + 1;
+        let line = line.map_err(|e| stdin_err(line_no, e.to_string()))?;
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
 
-        let mut value: serde_json::Value = serde_json::from_str(trimmed)?;
+        let mut value: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|e| stdin_err(line_no, e.to_string()))?;
         if let Some(obj) = value.as_object_mut() {
             if !obj.contains_key("type")
                 && let Some(t) = default_type
@@ -186,21 +188,36 @@ fn run_batch(default_type: Option<&str>, default_subject: Option<&str>) -> crate
             }
         }
 
-        let record: Record = serde_json::from_value(value)?;
+        let record: Record =
+            serde_json::from_value(value).map_err(|e| stdin_err(line_no, e.to_string()))?;
         let record = annotation::finalize_record(record);
 
         if let Some(att) = record.as_annotation() {
             let errors = annotation::validate(att);
             if !errors.is_empty() {
-                return Err(crate::Error::Validation(errors.join("; ")));
+                return Err(stdin_err(line_no, errors.join("; ")));
             }
         }
 
-        let qual_path = qual_file::resolve_qual_path(record.subject(), None)?;
-        qual_file::append(&qual_path, &record)?;
+        let qual_path = qual_file::resolve_qual_path(record.subject(), None)
+            .map_err(|e| stdin_err(line_no, e.to_string()))?;
+        qual_file::append(&qual_path, &record).map_err(|e| stdin_err(line_no, e.to_string()))?;
+
+        let id = record.id();
+        let id_short = if id.len() >= 8 { &id[..8] } else { id };
+        println!(
+            "emitted  {:<24} {}  id: {}",
+            record.record_type(),
+            record.subject(),
+            id_short,
+        );
         count += 1;
     }
 
-    println!("Emitted {count} records from stdin");
+    eprintln!("Emitted {count} records from stdin");
     Ok(())
+}
+
+fn stdin_err(line_no: usize, msg: String) -> crate::Error {
+    crate::Error::Validation(format!("stdin line {line_no}: {msg}"))
 }

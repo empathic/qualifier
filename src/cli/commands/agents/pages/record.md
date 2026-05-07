@@ -60,10 +60,44 @@ here. Pass the full 64-character ID. (Short prefixes are only resolved by
 set `--issuer-type ai` when writing from an agent; this lets human reviewers
 distinguish machine-generated annotations from their own.
 
-**`--stdin`** switches to batch mode. Each stdin line must be a JSON object
-with at least `kind`, `location`, and `message` keys, plus any optional
-overrides. Lines starting with `//` are ignored. Useful for emitting many
-annotations in one pass.
+**`--stdin`** switches to batch mode. This is the path agents should reach
+for when emitting more than one annotation in a session — it collapses many
+sequential `qualifier record` invocations into a single pipe.
+
+Each stdin line is one of two shapes:
+
+```jsonl
+{"kind":"concern","location":"src/auth.rs:42:58","message":"Token comparison is timing-unsafe","detail":"Uses == on session_token; replace with constant-time compare.","suggested_fix":"Use subtle::ConstantTimeEq.","tags":["security"],"issuer":"mailto:agent@ci.example.com","issuer_type":"ai"}
+{"kind":"suggestion","location":"src/auth.rs:88","message":"Extract magic constant","supersedes":"<full-64-char-id>"}
+```
+
+Recognized keys on the **overrides** form:
+
+- `kind` — required. Any built-in kind or a custom string.
+- `location` — required. `path` or `path:line` or `path:start:end`.
+- `message` — required. Becomes `body.summary`.
+- `detail`, `suggested_fix`, `tags`, `ref`, `references`, `supersedes` —
+  optional, all match their `--flag` equivalents on the non-batch CLI.
+- `span` — optional. Same syntax as the `--span` flag (e.g. `"42:58"`).
+  Overrides any span parsed from `location`.
+- `issuer`, `issuer_type` — optional. Default to the same VCS detection
+  used in non-batch mode. **Always set `"issuer_type":"ai"` from agent code.**
+
+The **complete record** form is recognized when an object carries both
+`subject` and `body` keys; it is taken as a fully-formed envelope and only
+the `id` is recomputed. Use this when round-tripping records produced by
+another tool. The overrides form is the right shape for most agent use.
+
+Behaviour:
+
+- Blank lines and lines starting with `//` are ignored.
+- One stdout line is emitted per recorded entry (compact summary + id, or a
+  full JSONL record under `--format json`). Trailing summary count goes to
+  **stderr** so a `--format json` pipe stays clean.
+- Validation, IO, and parse errors are reported as `stdin line N: <reason>`
+  and abort the batch — earlier records on prior lines are kept.
+- The same flag set works on `qualifier emit --stdin` for non-annotation
+  record types (epoch, dependency, custom URIs).
 
 ## Gotchas
 

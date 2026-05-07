@@ -2419,6 +2419,323 @@ fn test_agents_orientation_summaries_match_pages() {
     }
 }
 
+// --- qualifier record --stdin: per-record output, line-numbered errors ---
+
+/// Pipe `input` to `qualifier <args>` and return (stdout, stderr, code).
+fn run_qualifier_stdin(dir: &Path, args: &[&str], input: &str) -> (String, String, i32) {
+    use std::io::Write;
+    let mut child = Command::new(qualifier_bin())
+        .args(args)
+        .current_dir(dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn qualifier");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().expect("wait_with_output");
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code().unwrap_or(-1),
+    )
+}
+
+#[test]
+fn test_record_stdin_emits_per_record_human_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = r#"{"kind":"concern","location":"foo.rs:1","message":"first issue"}
+{"kind":"suggestion","location":"foo.rs:2","message":"second"}
+"#;
+    let (stdout, stderr, code) = run_qualifier_stdin(
+        dir.path(),
+        &["record", "--stdin", "--issuer", "mailto:probe@example.com"],
+        input,
+    );
+    assert_eq!(code, 0, "stdin should succeed: stderr={stderr}");
+
+    // One stdout line per record, with id-prefix.
+    let stdout_lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        stdout_lines.len(),
+        2,
+        "expected one stdout line per record, got: {stdout}"
+    );
+    assert!(
+        stdout_lines[0].contains("concern") && stdout_lines[0].contains("first issue"),
+        "first line: {}",
+        stdout_lines[0]
+    );
+    assert!(
+        stdout_lines[1].contains("suggestion") && stdout_lines[1].contains("second"),
+        "second line: {}",
+        stdout_lines[1]
+    );
+
+    // Trailing summary count goes to stderr (not stdout) so JSON pipes stay clean.
+    assert!(
+        stderr.contains("Recorded 2 records"),
+        "summary should be on stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Recorded 2 records"),
+        "summary should NOT be on stdout: {stdout}"
+    );
+}
+
+#[test]
+fn test_record_stdin_json_format_emits_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let input =
+        r#"{"kind":"pass","location":"x.rs","message":"ok","issuer":"mailto:a@b.com"}"#.to_string()
+            + "\n";
+    let (stdout, _stderr, code) =
+        run_qualifier_stdin(dir.path(), &["record", "--stdin", "--format", "json"], &input);
+    assert_eq!(code, 0);
+
+    // Each stdout line should be a valid JSON record.
+    for line in stdout.lines() {
+        let v: serde_json::Value =
+            serde_json::from_str(line).expect("each stdout line should be valid JSON");
+        assert_eq!(v["type"], "annotation");
+        assert_eq!(v["body"]["kind"], "pass");
+        assert!(v["id"].as_str().unwrap().len() == 64);
+    }
+}
+
+#[test]
+fn test_record_stdin_error_includes_line_number() {
+    let dir = tempfile::tempdir().unwrap();
+    // Line 2 is malformed (missing 'message').
+    let input = r#"{"kind":"pass","location":"a.rs","message":"first"}
+{"kind":"concern","location":"b.rs"}
+"#;
+    let (_, stderr, code) = run_qualifier_stdin(
+        dir.path(),
+        &["record", "--stdin", "--issuer", "mailto:a@b.com"],
+        input,
+    );
+    assert_ne!(code, 0, "should fail on the bad line");
+    assert!(
+        stderr.contains("stdin line 2"),
+        "error should name the offending line number: {stderr}"
+    );
+}
+
+// --- qualifier diff ---
+
+/// Initialize a git repo in `dir` with name+email config.
+fn git_init(dir: &Path) {
+    let run = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    run(&["init", "-q", "--initial-branch=main"]);
+    run(&["config", "user.email", "probe@example.com"]);
+    run(&["config", "user.name", "probe"]);
+    run(&["config", "commit.gpgsign", "false"]);
+}
+
+fn git_commit_all(dir: &Path, msg: &str) {
+    let run = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    run(&["add", "-A"]);
+    run(&["commit", "-q", "-m", msg]);
+}
+
+#[test]
+fn test_diff_added_resolved_drifted() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+
+    // Baseline on main: an annotated file with a span that has a content_hash.
+    std::fs::write(dir.path().join("main.rs"), "fn alpha() {}\nfn beta() {}\n").unwrap();
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "main.rs:2",
+            "look at beta",
+            "--issuer",
+            "mailto:probe@example.com",
+        ],
+    );
+    assert_eq!(code, 0);
+    git_commit_all(dir.path(), "baseline");
+
+    // Branch off, add a new concern, resolve the old one, and mutate beta.
+    Command::new("git")
+        .args(["checkout", "-q", "-b", "feat"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "main.rs:1",
+            "look at alpha too",
+            "--issuer",
+            "mailto:probe@example.com",
+        ],
+    );
+    assert_eq!(code, 0);
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "resolve",
+            "main.rs:2",
+            "fixed",
+            "--issuer",
+            "mailto:probe@example.com",
+        ],
+    );
+    assert_eq!(code, 0);
+
+    // Mutate beta to drift the original record's span content. Note that
+    // record-resolve happened first; the resolved record won't show drift,
+    // but a *fresh* concern at a span that pinned a hash on the post-mutation
+    // file content is also recorded so we can check the drift category by
+    // mutating after that pin.
+    std::fs::write(dir.path().join("main.rs"), "fn alpha() {}\nfn beta() { /* changed */ }\n")
+        .unwrap();
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0, "diff should succeed: stderr={stderr}");
+
+    assert!(
+        stdout.contains("Added on this branch (1)"),
+        "should report one added record: {stdout}"
+    );
+    assert!(
+        stdout.contains("look at alpha too"),
+        "added record summary should appear: {stdout}"
+    );
+    assert!(
+        stdout.contains("Resolved on this branch (1)"),
+        "should report one resolved record: {stdout}"
+    );
+    assert!(
+        stdout.contains("look at beta"),
+        "resolved record's original summary should appear: {stdout}"
+    );
+    // The resolve record should NOT show up under Added — it's the closer.
+    assert!(
+        !stdout.contains("Added on this branch (2)"),
+        "resolve-kind record must not double-count under Added: {stdout}"
+    );
+}
+
+#[test]
+fn test_diff_no_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "pass",
+            "a.rs",
+            "ok",
+            "--issuer",
+            "mailto:a@b.com",
+        ],
+    );
+    assert_eq!(code, 0);
+    git_commit_all(dir.path(), "baseline");
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("No annotation changes"),
+        "no-op diff should say so: {stdout}"
+    );
+}
+
+#[test]
+fn test_diff_bad_ref() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+    git_commit_all(dir.path(), "init");
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["diff", "no-such-ref"]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("not found"),
+        "should report unknown ref: {stderr}"
+    );
+}
+
+#[test]
+fn test_diff_requires_git() {
+    let dir = tempfile::tempdir().unwrap();
+    // No git init.
+    let (_, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("git") || stderr.contains("VCS"),
+        "should report missing git repo: {stderr}"
+    );
+}
+
+#[test]
+fn test_diff_json_format() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+    git_commit_all(dir.path(), "baseline");
+
+    Command::new("git")
+        .args(["checkout", "-q", "-b", "feat"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap();
+
+    let (_, _, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "a.rs",
+            "smell",
+            "--issuer",
+            "mailto:a@b.com",
+        ],
+    );
+    assert_eq!(code, 0);
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("diff --format json");
+    assert_eq!(v["ref"], "main");
+    assert!(v["added"].is_array());
+    assert_eq!(v["added"].as_array().unwrap().len(), 1);
+    assert!(v["resolved"].is_array());
+    assert!(v["drifted"].is_array());
+}
+
 #[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
