@@ -38,7 +38,11 @@ When making changes, verify that all affected surfaces stay consistent:
 - **SPEC.md** — Section 7 (Library API) must match public function signatures. Section 10 (File Discovery) must match discovery behavior. Update the spec version when semantics change.
 - **README.md** — Core Concepts and CLI Commands table should reflect current behavior.
 - **site/** — `site/js/playground.js` contains a JavaScript scoring engine for the web playground. If scoring logic, record format, or field names change, update it to match.
-- **Cargo.toml** — Bump the crate version for any user-visible change (new feature, behavior change, bug fix). Coordinate with `SPEC.md` version when the spec itself changes.
+- **Cargo.toml** — Bump the crate version for any user-visible change, in the same commit as the change. Follow semver:
+  - **Minor** (`0.X.0`) for new features, new commands/flags, behavior changes, or anything that expands the user-visible surface.
+  - **Patch** (`0.X.Y`) only for bug fixes and internal refactors that do not change observable behavior.
+  - Update `Cargo.lock` in the same commit (rebuild or `cargo update -p qualifier`).
+  - Coordinate with `SPEC.md` version when the spec itself changes.
 - **Tests** — Many test files have local `make_att()`/`make_record()` helpers that construct records by hand. When adding or renaming fields on `Annotation`, `Epoch`, or `DependencyRecord`, update all helpers (~6 locations across `src/` and `tests/`). Run `cargo test --all-features` to catch any you miss.
 - **Golden IDs** — `tests/integration.rs` pins BLAKE3 IDs for annotation, epoch, and dependency records. Any change to canonical form (field order, new envelope fields, MCF rules) will break these. Update the expected hashes after confirming the new values are correct.
 

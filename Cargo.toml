@@ -1,6 +1,6 @@
 [package]
 name = "qualifier"
-version = "0.5.1"
+version = "0.6.1"
 edition = "2024"
 description = "Deterministic quality annotations for software artifacts"
 license = "MIT OR Apache-2.0"
