@@ -3542,9 +3542,14 @@ fn test_top_level_help_shows_agents_group() {
         stdout.contains("For AI agents:"),
         "help should show the agents group header: {stdout}"
     );
-    // The agents row should appear under that header, with the "start here" nudge.
+    // An imperative directive sits above the subcommand list so an agent
+    // scanning the verb table doesn't mistake it for flavor text.
     assert!(
-        stdout.contains("agents") && stdout.contains("start here"),
-        "help should mention the agents subcommand: {stdout}"
+        stdout.contains("If you are an AI coding agent, run `qualifier agents` first"),
+        "help should print the agent directive above the subcommand list: {stdout}"
+    );
+    assert!(
+        stdout.contains("agents") && stdout.contains("Read this before recording annotations"),
+        "help should mention the agents subcommand with imperative description: {stdout}"
     );
 }

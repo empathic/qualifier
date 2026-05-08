@@ -14,8 +14,11 @@ const HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
 
+If you are an AI coding agent, run `qualifier agents` first — it covers
+the conventions and pitfalls you need before recording any annotation.
+
 For AI agents:
-  agents     Self-contained guide for AI coding agents (start here)
+  agents     Read this before recording annotations. Self-contained agent guide.
 
 Record observations:
   record     Record an annotation: `qualifier record <kind> <location> [message]`
@@ -57,7 +60,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Self-contained guide for AI coding agents (start here)
+    /// Read this before recording annotations. Self-contained agent guide.
     Agents(commands::agents::Args),
 
     /// Record an annotation: `qualifier record <kind> <location> [message]`
