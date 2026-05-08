@@ -1,10 +1,8 @@
-use std::path::Path;
-
 use clap::Args as ClapArgs;
 
 use crate::compact::filter_superseded;
 use crate::content_hash::{self, FreshnessStatus};
-use crate::qual_file;
+use crate::qual_file::{self, find_project_root};
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -29,8 +27,10 @@ struct CheckResult {
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
-    let root = Path::new(".");
-    let qual_files = qual_file::discover(root, !args.no_ignore)?;
+    let cwd = std::env::current_dir()?;
+    let project_root = find_project_root(&cwd);
+    let discover_root = project_root.as_deref().unwrap_or(cwd.as_path());
+    let qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
 
     if qual_files.is_empty() {
         if args.format == "json" {
@@ -87,7 +87,8 @@ pub fn run(args: Args) -> crate::Result<()> {
             format!("{}:{}{}", att.subject, span.start.line, end)
         };
 
-        let status = content_hash::check_freshness(Path::new(&att.subject), span);
+        let subject_path = discover_root.join(&att.subject);
+        let status = content_hash::check_freshness(&subject_path, span);
 
         results.push(CheckResult {
             subject: att.subject.clone(),

@@ -35,27 +35,38 @@ impl Default for Config {
     }
 }
 
+/// Resolve the user home directory across platforms.
+///
+/// Prefers `$HOME` (POSIX) and falls back to `$USERPROFILE` (Windows). Returns
+/// `None` when neither is set so the user-level config merge is skipped rather
+/// than silently failing.
+fn user_home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
 /// Load configuration by merging all sources.
-pub fn load(project_root: Option<&Path>) -> Config {
+///
+/// Returns an error if any present config file is malformed or any
+/// `QUALIFIER_*` env var fails to deserialize. Missing config files are not
+/// an error.
+pub fn load(project_root: Option<&Path>) -> crate::Result<Config> {
     let mut figment = Figment::new().merge(Serialized::defaults(Config::default()));
 
-    // User-level config: ~/.config/qualifier/config.toml
-    if let Ok(home) = std::env::var("HOME") {
-        let user_config = PathBuf::from(home)
-            .join(".config")
-            .join("qualifier")
-            .join("config.toml");
+    if let Some(home) = user_home_dir() {
+        let user_config = home.join(".config").join("qualifier").join("config.toml");
         figment = figment.merge(Toml::file(user_config));
     }
 
-    // Project-level config: <root>/.qualifier.toml
     if let Some(root) = project_root {
         let project_config = root.join(".qualifier.toml");
         figment = figment.merge(Toml::file(project_config));
     }
 
-    // Environment variables: QUALIFIER_ISSUER, QUALIFIER_FORMAT, etc.
     figment = figment.merge(Env::prefixed("QUALIFIER_"));
 
-    figment.extract().unwrap_or_default()
+    figment
+        .extract()
+        .map_err(|e| crate::Error::Validation(format!("invalid configuration: {e}")))
 }

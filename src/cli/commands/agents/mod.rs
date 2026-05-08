@@ -37,11 +37,10 @@ pub fn run(args: Args) -> crate::Result<()> {
                 print!("{}", page.body);
                 Ok(())
             } else {
-                eprintln!(
-                    "qualifier agents: no such topic '{name}'. Available: {}",
+                Err(crate::Error::Validation(format!(
+                    "no such topic '{name}'. Available: {}",
                     topic_names()
-                );
-                std::process::exit(2);
+                )))
             }
         }
     }

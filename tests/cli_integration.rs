@@ -1860,6 +1860,47 @@ fn test_review_subject_filter() {
     );
 }
 
+#[test]
+fn test_review_finds_annotations_from_subdirectory() {
+    // Regression: `qualifier review` walked from `Path::new(".")` instead of
+    // the project root, so it returned "no .qual files found" whenever the
+    // user invoked it from anywhere but the project root.
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+
+    let src_dir = dir.path().join("src");
+    std::fs::create_dir(&src_dir).unwrap();
+    std::fs::write(src_dir.join("lib.rs"), "fn alpha() {}\nfn beta() {}\n").unwrap();
+
+    // Record from the project root.
+    let (_, _, rc) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "src/lib.rs:2",
+            "look at beta",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(rc, 0, "record should succeed");
+
+    // Run review from a nested subdirectory — it must still find the
+    // annotation (and the span must hash FRESH because the file is unchanged).
+    let nested = dir.path().join("src");
+    let (stdout, stderr, code) = run_qualifier(&nested, &["review"]);
+    assert_eq!(code, 0, "review from subdir should succeed: {stderr}");
+    assert!(
+        stdout.contains("FRESH"),
+        "annotation should be discovered and FRESH from subdir: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 fresh"),
+        "summary should report 1 fresh from subdir: {stdout}"
+    );
+}
+
 // --- qualifier emit (raw record write) ---
 
 #[test]
@@ -2326,10 +2367,17 @@ fn test_agents_bare_invocation_succeeds() {
 }
 
 #[test]
-fn test_agents_unknown_topic_exits_2() {
+fn test_agents_unknown_topic_returns_error() {
     let dir = tempfile::tempdir().unwrap();
     let (_stdout, stderr, code) = run_qualifier(dir.path(), &["agents", "bogus-topic"]);
-    assert_eq!(code, 2, "unknown topic should exit 2: stderr={stderr}");
+    assert_eq!(
+        code, 1,
+        "unknown topic should exit 1 like other validation errors: stderr={stderr}"
+    );
+    assert!(
+        stderr.starts_with("qualifier:"),
+        "stderr should use the standard top-level error prefix: {stderr}"
+    );
     assert!(
         stderr.contains("no such topic"),
         "stderr should explain: {stderr}"
@@ -2527,6 +2575,35 @@ fn test_record_stdin_error_includes_line_number() {
     assert!(
         stderr.contains("stdin line 2"),
         "error should name the offending line number: {stderr}"
+    );
+}
+
+// --- qualifier config loading ---
+
+#[test]
+fn test_malformed_project_config_fails_loudly() {
+    // Regression: figment errors used to be swallowed via unwrap_or_default(),
+    // so a typo in .qualifier.toml became silent broken behavior. Now the
+    // config layer should surface invalid TOML as a top-level error.
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::write(
+        dir.path().join(".qualifier.toml"),
+        "this is = not [valid TOML\n",
+    )
+    .unwrap();
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["ls"]);
+    assert_ne!(code, 0, "malformed config should fail: stderr={stderr}");
+    assert!(
+        stderr.starts_with("qualifier:"),
+        "should use the standard top-level error prefix: {stderr}"
+    );
+    assert!(
+        stderr.to_lowercase().contains("config")
+            || stderr.to_lowercase().contains("toml")
+            || stderr.contains(".qualifier.toml"),
+        "error should explain it's a config issue: {stderr}"
     );
 }
 

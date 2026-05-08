@@ -103,6 +103,17 @@ pub fn run() {
         );
     }
 
+    // Validate config eagerly so a malformed .qualifier.toml or
+    // ~/.config/qualifier/config.toml fails before the command runs. The
+    // result is discarded for now — no command consumes Config yet — but
+    // surfacing the parse error here is the contract callers expect.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let project_root = crate::qual_file::find_project_root(&cwd);
+    if let Err(e) = config::load(project_root.as_deref()) {
+        eprintln!("qualifier: {e}");
+        std::process::exit(1);
+    }
+
     let result: crate::Result<()> = match cli.command {
         Commands::Agents(args) => commands::agents::run(args),
         Commands::Record(args) => commands::record::run(*args),
