@@ -1,6 +1,6 @@
 # Qualifier Specification
 
-**Version:** 0.4.0
+**Version:** 0.4.1
 **Status:** Draft
 **Authors:** Alex Kesling
 
@@ -1347,14 +1347,20 @@ Paths matched by either source are excluded from all discovery commands:
 ### 10.2 `--no-ignore`
 
 Pass `--no-ignore` to any discovery command to bypass all ignore rules.
-This forces qualifier to walk every non-hidden directory and discover all
-`.qual` files regardless of `.gitignore` or `.qualignore` entries.
+This forces qualifier to walk every directory except VCS metadata
+directories (§10.3) and discover all `.qual` files regardless of
+`.gitignore` or `.qualignore` entries.
 
 ### 10.3 Hidden Directories
 
-Hidden directories (names starting with `.`) are always skipped during
-discovery, regardless of ignore settings. This prevents qualifier from
-descending into `.git`, `.vscode`, `.idea`, and similar tool directories.
+VCS metadata directories (`.git`, `.hg`, `.jj`, `.pijul`, `_FOSSIL_`,
+`.svn`) are always skipped during discovery, regardless of ignore settings.
+
+Other hidden directories (names starting with `.`, such as `.github`) are
+walked like any other directory, so artifacts like
+`.github/workflows/ci.yml` can carry records. Tool directories that should
+not be walked (`.venv`, `.cache`, and so on) are excluded through
+`.gitignore` or `.qualignore`.
 
 Hidden *files* (like `.qual`) are not skipped — the per-directory `.qual`
 layout depends on this.
