@@ -1,3 +1,14 @@
-/target
+# Sandbox
 /.clash
+
+# Local files
 /local
+
+# Rust
+/target
+
+# macOS
+.DS_STORE
+
+# Claude
+/.claude/worktrees
