@@ -1,6 +1,6 @@
 # Qualifier Specification
 
-**Version:** 0.4.1
+**Version:** 0.4.2
 **Status:** Draft
 **Authors:** Alex Kesling
 
@@ -1275,11 +1275,13 @@ The library is the source of truth. The CLI is a thin wrapper around it.
 | VCS        | Configuration |
 |------------|---------------|
 | Git        | Add `*.qual merge=union` to `.gitattributes` |
-| Mercurial  | Add `**.qual = union` to `.hgrc` merge patterns |
+| Mercurial  | Add `**.qual = :union` under `[merge-patterns]` in `.hg/hgrc` |
+| Jujutsu    | No per-path merge configuration; resolve `.qual` conflicts by keeping both sides' lines |
 | Other      | Configure equivalent union-merge behaviour for `*.qual` |
 
 Run `qualifier init` to apply the git configuration interactively
-(or non-interactively with `--yes`; preview with `--dry-run`).
+(or non-interactively with `--yes`; preview with `--dry-run`). For other
+VCSes it prints the relevant row of this table.
 
 ### 8.3 `qualifier blame`
 

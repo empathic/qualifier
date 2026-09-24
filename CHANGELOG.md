@@ -14,11 +14,22 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   (hints for hg/jj/pijul/fossil/svn), and appends a one-line directive
   pointing AI coding agents at `qualifier agents` to any discovered
   agent-instruction file (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
-  `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`,
-  or `*.md`/`*.mdc` files directly under `.cursor/rules/`). If no agent
-  file exists, offers to create `AGENTS.md`. Supports `--yes` for
-  non-interactive use and `--dry-run` to preview changes. Already-
-  configured steps are silently skipped.
+  `CONVENTIONS.md`, `.cursorrules`, `.windsurfrules`, `.clinerules` (file
+  or directory), `.github/copilot-instructions.md`,
+  `.github/instructions/*.instructions.md`, `.junie/guidelines.md`, or
+  `*.md`/`*.mdc` files directly under `.cursor/rules/`). Symlinked
+  duplicates are patched once, and existing CRLF line endings are kept.
+  If no agent file exists, offers to create `AGENTS.md`. Supports `--yes`
+  for non-interactive use and `--dry-run` to preview changes. Already-
+  configured steps are skipped, including `.gitattributes` rules that
+  already union-merge `*.qual` under git's last-match-wins rules. End of
+  input at a prompt aborts instead of accepting the default.
+
+### Fixed
+
+- SPEC §8.2: the Mercurial setup is `**.qual = :union` under
+  `[merge-patterns]` in `.hg/hgrc` (was `**.qual = union`, which names a
+  nonexistent merge tool). Added a Jujutsu row.
 
 ## [0.6.2] — unreleased
 

@@ -3960,8 +3960,8 @@ fn test_init_dry_run_writes_nothing() {
     let (stdout, _, code) = run_qualifier(dir.path(), &["init", "--dry-run"]);
     assert_eq!(code, 0);
     assert!(
-        stdout.contains("[dry-run]"),
-        "stdout should mark dry-run lines: {stdout}"
+        stdout.contains("would apply 2"),
+        "stdout should report what would change: {stdout}"
     );
 
     let after_listing: std::collections::BTreeSet<_> = std::fs::read_dir(dir.path())
