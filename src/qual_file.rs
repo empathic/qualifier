@@ -174,7 +174,9 @@ pub fn find_qual_file_for(subject: &str) -> Option<PathBuf> {
 ///
 /// Walks the directory tree recursively, collecting every file whose name
 /// ends with `.qual`. Respects `.gitignore` and `.qualignore` by default.
-/// Pass `respect_ignore: false` to bypass all ignore rules.
+/// Pass `respect_ignore: false` to bypass all ignore rules. VCS metadata
+/// directories (`.git`, `.hg`, `.jj`, `.pijul`, `_FOSSIL_`, `.svn`) are
+/// always skipped; other hidden directories are walked.
 ///
 /// Returns them sorted by path for determinism.
 pub fn discover(root: &Path, respect_ignore: bool) -> crate::Result<Vec<QualFile>> {
@@ -197,13 +199,12 @@ pub fn discover(root: &Path, respect_ignore: bool) -> crate::Result<Vec<QualFile
             .ignore(false);
     }
 
-    // Skip hidden directories (like .git, .vscode, etc.) but allow hidden
-    // files (like .qual) — matches the old walk_dir behavior.
+    // Never descend into VCS metadata directories. Other hidden directories
+    // (like `.github`) are walked and subject to the ignore rules above.
     builder.filter_entry(|entry| {
-        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-            return !entry.file_name().to_string_lossy().starts_with('.');
-        }
-        true
+        !(entry.depth() > 0
+            && entry.file_type().is_some_and(|ft| ft.is_dir())
+            && VCS_MARKERS.iter().any(|m| entry.file_name() == *m))
     });
 
     let mut qual_files = Vec::new();
@@ -244,10 +245,12 @@ pub fn subject_name(qual_path: &Path) -> String {
     }
 }
 
+/// VCS metadata entries. Their presence marks a project root, and discovery
+/// never descends into them.
+const VCS_MARKERS: &[&str] = &[".git", ".hg", ".jj", ".pijul", "_FOSSIL_", ".svn"];
+
 /// Find the project root by searching upward for VCS markers.
 pub fn find_project_root(start: &Path) -> Option<PathBuf> {
-    const VCS_MARKERS: &[&str] = &[".git", ".hg", ".jj", ".pijul", "_FOSSIL_", ".svn"];
-
     let mut current = if start.is_file() {
         start.parent()?.to_path_buf()
     } else {
@@ -409,6 +412,26 @@ mod tests {
 
         let found = discover(dir.path(), true).unwrap();
         assert_eq!(found.len(), 0);
+    }
+
+    #[test]
+    fn test_discover_includes_non_vcs_hidden_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows = dir.path().join(".github/workflows");
+        fs::create_dir_all(&workflows).unwrap();
+
+        let r = make_record(".github/workflows/rust.yml", Kind::Concern, "pin actions");
+        append(&workflows.join(".qual"), &r).unwrap();
+
+        for vcs in [".hg", ".jj", ".pijul", "_FOSSIL_", ".svn"] {
+            let d = dir.path().join(vcs);
+            fs::create_dir_all(&d).unwrap();
+            append(&d.join("x.qual"), &make_record("x", Kind::Pass, "ok")).unwrap();
+        }
+
+        let found = discover(dir.path(), true).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, workflows.join(".qual"));
     }
 
     #[test]

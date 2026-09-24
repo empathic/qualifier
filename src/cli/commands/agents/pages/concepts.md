@@ -108,8 +108,10 @@ file named `.qual` or ending in `.qual`.
 Pass `--no-ignore` to bypass all ignore rules on any discovery command
 (`show`, `ls`, `compact`, `review`, `praise`).
 
-Hidden directories (e.g., `.git`, `.vscode`) are always skipped. Hidden
-*files* like `.qual` are not skipped.
+VCS metadata directories (`.git`, `.hg`, `.jj`, `.pijul`, `_FOSSIL_`,
+`.svn`) are always skipped. Other hidden directories, such as `.github`, are
+walked and subject to the ignore rules above. Hidden *files* like `.qual` are
+not skipped.
 
 ## Issuer URIs and `issuer_type`
 

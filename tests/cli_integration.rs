@@ -239,6 +239,57 @@ fn test_show_finds_annotation_in_directory_qual() {
 }
 
 #[test]
+fn test_show_and_reply_in_hidden_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".github/workflows")).unwrap();
+
+    let (stdout, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            ".github/workflows/rust.yml",
+            "pin action versions",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "record should succeed: {stdout}{stderr}");
+    assert!(dir.path().join(".github/workflows/.qual").exists());
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", ".github/workflows/rust.yml"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("pin action versions"),
+        "show should find records under .github/: {stdout}"
+    );
+
+    let id = run_qualifier(
+        dir.path(),
+        &["show", ".github/workflows/rust.yml", "--format", "json"],
+    )
+    .0;
+    let v: serde_json::Value = serde_json::from_str(&id).unwrap();
+    let id = v["records"][0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no id in show json: {v}"))
+        .to_string();
+
+    let (stdout, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            &id[..8],
+            "pinned",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "reply by ID should succeed: {stdout}{stderr}");
+}
+
+#[test]
 fn test_record_creates_parent_dirs() {
     let dir = tempfile::tempdir().unwrap();
 

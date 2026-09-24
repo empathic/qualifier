@@ -5,6 +5,18 @@ All notable changes to this project are documented here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (with
 the pre-1.0 caveat that any breaking change bumps the minor version).
 
+## [0.6.2] — unreleased
+
+### Fixed
+
+- **Discovery walks hidden directories other than VCS metadata.** Records
+  under directories such as `.github/` were invisible to `show`, `ls`,
+  `reply`/`resolve` by ID prefix, `compact`, and `praise`, because
+  every directory starting with `.` was skipped. Only `.git`, `.hg`,
+  `.jj`, `.pijul`, `_FOSSIL_`, and `.svn` are now always skipped; other
+  hidden directories are subject to `.gitignore`/`.qualignore` like any
+  other directory (SPEC §10.2–10.3).
+
 ## [0.5.1] — unreleased
 
 ### Added
