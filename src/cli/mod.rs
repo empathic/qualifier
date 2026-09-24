@@ -17,6 +17,9 @@ const HELP_TEMPLATE: &str = "\
 If you are an AI coding agent, run `qualifier agents` first — it covers
 the conventions and pitfalls you need before recording any annotation.
 
+Initialize:
+  init       Bootstrap a project: VCS merge config and agent directives
+
 For AI agents:
   agents     Read this before recording annotations. Self-contained agent guide.
 
@@ -60,6 +63,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Bootstrap a project: VCS merge config and agent directives
+    Init(commands::init::Args),
+
     /// Read this before recording annotations. Self-contained agent guide.
     Agents(commands::agents::Args),
 
@@ -115,6 +121,7 @@ pub fn run() {
     }
 
     let result: crate::Result<()> = match cli.command {
+        Commands::Init(args) => commands::init::run(args),
         Commands::Agents(args) => commands::agents::run(args),
         Commands::Record(args) => commands::record::run(*args),
         Commands::Reply(args) => commands::reply::run(args),

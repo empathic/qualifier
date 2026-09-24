@@ -3681,3 +3681,304 @@ fn test_top_level_help_shows_agents_group() {
         "help should mention the agents subcommand with imperative description: {stdout}"
     );
 }
+
+// --- qualifier init: scaffolding ---
+
+#[test]
+fn test_init_help_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _, code) = run_qualifier(dir.path(), &["init", "--help"]);
+    assert_eq!(code, 0, "init --help should succeed");
+    assert!(stdout.contains("--yes"), "help should mention --yes flag");
+    assert!(
+        stdout.contains("--dry-run"),
+        "help should mention --dry-run flag"
+    );
+}
+
+#[test]
+fn test_init_appears_in_top_level_help() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _, code) = run_qualifier(dir.path(), &["--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("Initialize:"),
+        "top-level help should have Initialize section"
+    );
+    assert!(
+        stdout.contains("init"),
+        "top-level help should list init command"
+    );
+}
+
+#[test]
+fn test_init_yes_and_dry_run_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier(dir.path(), &["init", "--yes", "--dry-run"]);
+    assert_ne!(code, 0, "conflicting flags should fail");
+    assert!(
+        stderr.contains("--dry-run") || stderr.contains("--yes") || stderr.contains("conflict"),
+        "stderr should explain the conflict: {stderr}"
+    );
+}
+
+#[test]
+fn test_init_non_tty_without_flag_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    // run_qualifier already pipes stdin (not a TTY).
+    let (_, stderr, code) = run_qualifier(dir.path(), &["init"]);
+    assert_ne!(code, 0, "should refuse to prompt without a TTY");
+    assert!(
+        stderr.contains("TTY") || stderr.contains("tty"),
+        "stderr should mention TTY: {stderr}"
+    );
+    assert!(
+        stderr.contains("--yes") || stderr.contains("--dry-run"),
+        "stderr should suggest --yes or --dry-run: {stderr}"
+    );
+}
+
+#[test]
+fn test_init_git_creates_gitattributes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0, "init --yes should succeed: {stdout}");
+
+    let gitattr = std::fs::read_to_string(dir.path().join(".gitattributes")).unwrap();
+    assert!(
+        gitattr.contains("*.qual merge=union"),
+        ".gitattributes should contain the rule: {gitattr:?}"
+    );
+}
+
+#[test]
+fn test_init_git_idempotent_gitattributes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".gitattributes"), "*.qual merge=union\n").unwrap();
+
+    let (_, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+
+    let gitattr = std::fs::read_to_string(dir.path().join(".gitattributes")).unwrap();
+    assert_eq!(
+        gitattr, "*.qual merge=union\n",
+        ".gitattributes should be unchanged byte-for-byte"
+    );
+}
+
+#[test]
+fn test_init_hg_prints_hint_no_gitattributes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".hg")).unwrap();
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("hg"), "stdout should mention hg: {stdout}");
+    assert!(
+        !dir.path().join(".gitattributes").exists(),
+        ".gitattributes should not be created for hg repos"
+    );
+}
+
+#[test]
+fn test_init_no_vcs_prints_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("no VCS detected"),
+        "stdout should explain no-VCS skip: {stdout}"
+    );
+}
+
+// --- qualifier init: agent-file patching ---
+
+#[test]
+fn test_init_patches_existing_agents_md() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("AGENTS.md"), "# AGENTS.md\n\nBe nice.\n").unwrap();
+
+    let (_, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+
+    let content = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+    assert!(
+        content.contains("qualifier agents"),
+        "AGENTS.md should contain the directive: {content:?}"
+    );
+    assert!(
+        content.starts_with("# AGENTS.md\n\nBe nice.\n"),
+        "prior content should be preserved"
+    );
+}
+
+#[test]
+fn test_init_patches_multiple_agent_files() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("AGENTS.md"), "# AGENTS\n").unwrap();
+    std::fs::write(dir.path().join("CLAUDE.md"), "# Claude\n").unwrap();
+
+    let (_, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        let content = std::fs::read_to_string(dir.path().join(name)).unwrap();
+        assert!(
+            content.contains("qualifier agents"),
+            "{name} should contain directive: {content:?}"
+        );
+        assert_eq!(
+            content.matches("qualifier agents").count(),
+            1,
+            "{name} should have directive exactly once"
+        );
+    }
+}
+
+#[test]
+fn test_init_skips_agent_file_with_directive() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = "# AGENTS.md\n\nSee qualifier agents.\n";
+    std::fs::write(dir.path().join("AGENTS.md"), original).unwrap();
+
+    let (_, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+
+    let content = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+    assert_eq!(content, original, "AGENTS.md should be unchanged");
+}
+
+#[test]
+fn test_init_patches_copilot_instructions() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".github")).unwrap();
+    std::fs::write(
+        dir.path().join(".github/copilot-instructions.md"),
+        "# Copilot\n",
+    )
+    .unwrap();
+
+    let (_, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+
+    let content =
+        std::fs::read_to_string(dir.path().join(".github/copilot-instructions.md")).unwrap();
+    assert!(content.contains("qualifier agents"));
+}
+
+#[test]
+fn test_init_creates_agents_md_when_none_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+
+    let path = dir.path().join("AGENTS.md");
+    assert!(path.exists(), "AGENTS.md should have been created");
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("qualifier agents"));
+
+    // Other supported files should NOT have been created.
+    assert!(!dir.path().join("CLAUDE.md").exists());
+    assert!(!dir.path().join("GEMINI.md").exists());
+}
+
+#[test]
+fn test_init_walks_cursor_rules_one_level() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".cursor/rules")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".cursor/rules/nested")).unwrap();
+    std::fs::write(dir.path().join(".cursor/rules/main.md"), "# main\n").unwrap();
+    std::fs::write(dir.path().join(".cursor/rules/style.mdc"), "# style\n").unwrap();
+    std::fs::write(dir.path().join(".cursor/rules/README.txt"), "# unrelated\n").unwrap();
+    std::fs::write(dir.path().join(".cursor/rules/nested/deep.md"), "# deep\n").unwrap();
+
+    let (_, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+
+    let main = std::fs::read_to_string(dir.path().join(".cursor/rules/main.md")).unwrap();
+    let style = std::fs::read_to_string(dir.path().join(".cursor/rules/style.mdc")).unwrap();
+    assert!(main.contains("qualifier agents"));
+    assert!(style.contains("qualifier agents"));
+
+    let readme = std::fs::read_to_string(dir.path().join(".cursor/rules/README.txt")).unwrap();
+    let deep = std::fs::read_to_string(dir.path().join(".cursor/rules/nested/deep.md")).unwrap();
+    assert!(
+        !readme.contains("qualifier agents"),
+        "README.txt must not be touched"
+    );
+    assert!(
+        !deep.contains("qualifier agents"),
+        "nested file must not be touched"
+    );
+}
+
+#[test]
+fn test_init_summary_counts_fresh_git() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("applied 2") && stdout.contains("skipped 0"),
+        "summary should report 2 applied / 0 skipped: {stdout}"
+    );
+}
+
+#[test]
+fn test_init_summary_counts_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".gitattributes"), "*.qual merge=union\n").unwrap();
+    std::fs::write(
+        dir.path().join("AGENTS.md"),
+        "# AGENTS\n\nSee qualifier agents.\n",
+    )
+    .unwrap();
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["init", "--yes"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("applied 0") && stdout.contains("skipped 2"),
+        "summary should report 0 applied / 2 skipped: {stdout}"
+    );
+}
+
+#[test]
+fn test_init_dry_run_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+
+    let before_listing: std::collections::BTreeSet<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["init", "--dry-run"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("would apply 2"),
+        "stdout should report what would change: {stdout}"
+    );
+
+    let after_listing: std::collections::BTreeSet<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        before_listing, after_listing,
+        "dry-run must not create files"
+    );
+
+    assert!(
+        !dir.path().join(".gitattributes").exists(),
+        "dry-run must not create .gitattributes"
+    );
+    assert!(
+        !dir.path().join("AGENTS.md").exists(),
+        "dry-run must not create AGENTS.md"
+    );
+}
