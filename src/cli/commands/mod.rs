@@ -4,6 +4,7 @@ pub mod diff;
 pub mod emit;
 pub mod freshness;
 pub mod haiku;
+pub mod init;
 pub mod ls;
 pub mod praise;
 pub mod record;

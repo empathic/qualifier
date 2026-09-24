@@ -5,6 +5,21 @@ All notable changes to this project are documented here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (with
 the pre-1.0 caveat that any breaking change bumps the minor version).
 
+## [0.7.0] — unreleased
+
+### Added
+
+- **`qualifier init`** — interactive, idempotent bootstrap command.
+  Configures `*.qual merge=union` in `.gitattributes` for git repos
+  (hints for hg/jj/pijul/fossil/svn), and appends a one-line directive
+  pointing AI coding agents at `qualifier agents` to any discovered
+  agent-instruction file (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
+  `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`,
+  or `*.md`/`*.mdc` files directly under `.cursor/rules/`). If no agent
+  file exists, offers to create `AGENTS.md`. Supports `--yes` for
+  non-interactive use and `--dry-run` to preview changes. Already-
+  configured steps are silently skipped.
+
 ## [0.6.2] — unreleased
 
 ### Fixed

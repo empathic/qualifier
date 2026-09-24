@@ -54,6 +54,12 @@ qualifier review src/parser.rs
 |---------|-------------|
 | `qualifier agents [topic]` | Self-contained guide for AI coding agents (start here) |
 
+### Bootstrap
+
+| Command | Description |
+|---------|-------------|
+| `qualifier init` | Bootstrap a project: VCS merge config and agent directives |
+
 ### Record observations
 
 | Command | Description |
