@@ -18,3 +18,10 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
+
+  plugin:
+    name: plugin checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/test-plugin.sh

@@ -14,6 +14,7 @@
 - `cargo run --bin qualifier -- <args>` — run the CLI locally (e.g., `cargo run --bin qualifier -- score`).
 - `./scripts/dev.sh` — serve the Eleventy site locally; installs pnpm deps on first run.
 - `./scripts/release.sh [--execute] [--allow-dirty]` — dry-run publish by default; `--execute` actually publishes after tests/clippy.
+- `scripts/test-plugin.sh` — offline checks for the Claude Code plugin (manifests, binary wrapper, SessionStart hook, skills).
 
 ## Coding Style & Naming Conventions
 - Rust 2024; prefer small, deterministic functions and explicit error handling via `Result` + `thiserror` types.
