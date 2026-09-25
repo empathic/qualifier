@@ -4131,3 +4131,121 @@ fn test_reply_allow_superseded_annotates_history() {
     let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
     assert!(qual.contains(&format!("\"references\":\"{id}\"")), "{qual}");
 }
+
+// --- ID prefixes in --supersedes / --references ---
+
+#[test]
+fn test_record_supersedes_accepts_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = write_id(dir.path(), &["record", "concern", "lib.rs", "first"]);
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "second",
+            "--supersedes",
+            &old[..8],
+        ],
+    );
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(
+        qual.contains(&format!("\"supersedes\":\"{old}\"")),
+        "{qual}"
+    );
+}
+
+#[test]
+fn test_record_references_accepts_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_id(dir.path(), &["record", "concern", "lib.rs", "first"]);
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "lib.rs",
+            "see also",
+            "--references",
+            &root[..6],
+        ],
+    );
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(
+        qual.contains(&format!("\"references\":\"{root}\"")),
+        "{qual}"
+    );
+}
+
+#[test]
+fn test_reply_supersedes_accepts_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_id(dir.path(), &["record", "concern", "lib.rs", "first"]);
+    let r1 = write_id(dir.path(), &["reply", &root[..8], "draft reply"]);
+    write_id(
+        dir.path(),
+        &[
+            "reply",
+            &root[..8],
+            "edited reply",
+            "--supersedes",
+            &r1[..8],
+        ],
+    );
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(qual.contains(&format!("\"supersedes\":\"{r1}\"")), "{qual}");
+}
+
+#[test]
+fn test_record_supersedes_rejects_superseded_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "lib.rs", "v1"]);
+    let b = write_id(
+        dir.path(),
+        &["record", "concern", "lib.rs", "v2", "--supersedes", &a],
+    );
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "v2-fork",
+            "--supersedes",
+            &a[..8],
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(
+        code, 0,
+        "superseding an already-superseded record forks the chain"
+    );
+    assert!(stderr.contains("--supersedes"), "{stderr}");
+    assert!(stderr.contains(&b[..8]), "{stderr}");
+}
+
+#[test]
+fn test_record_supersedes_short_prefix_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(dir.path(), &["record", "concern", "lib.rs", "v1"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "v2",
+            "--supersedes",
+            "abc",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("--supersedes") && stderr.contains("at least 4"),
+        "{stderr}"
+    );
+}

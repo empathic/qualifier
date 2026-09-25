@@ -82,6 +82,14 @@ pub fn run(args: Args) -> crate::Result<()> {
         None => None,
     };
 
+    let supersedes = args
+        .supersedes
+        .as_deref()
+        .map(|v| {
+            targets::resolve_id_flag("--supersedes", v, &all_qual_files, args.allow_superseded)
+        })
+        .transpose()?;
+
     let qual_path = qual_file::resolve_qual_path(&subject, args.file.as_deref().map(Path::new))?;
 
     let att = annotation::finalize(Annotation {
@@ -100,7 +108,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             span: None,
             suggested_fix: args.suggested_fix,
             summary: args.message,
-            supersedes: args.supersedes.clone(),
+            supersedes,
             tags: args.tags,
         },
     });

@@ -216,6 +216,23 @@ fn resolve_location_target(location: &str, qual_files: &[QualFile]) -> crate::Re
     Ok(candidates[0].clone())
 }
 
+/// Resolve an ID-valued flag (`--supersedes`, `--references`) to the full
+/// ID of a record. Unless `allow_superseded`, the record must be live.
+/// Errors are prefixed with `flag`.
+pub(crate) fn resolve_id_flag(
+    flag: &str,
+    value: &str,
+    qual_files: &[QualFile],
+    allow_superseded: bool,
+) -> crate::Result<String> {
+    let prefixed = |e: crate::Error| crate::Error::Validation(format!("{flag}: {e}"));
+    let record = resolve_id_prefix(value, qual_files).map_err(prefixed)?;
+    if !allow_superseded {
+        ensure_live(&record, qual_files).map_err(prefixed)?;
+    }
+    Ok(record.id().to_string())
+}
+
 pub(crate) fn record_created_at(r: &Record) -> chrono::DateTime<chrono::Utc> {
     match r {
         Record::Annotation(a) => a.created_at,

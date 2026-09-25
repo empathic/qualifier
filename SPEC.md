@@ -927,7 +927,12 @@ qualifier record concern src/parser.rs:42:58 "Panics on malformed input" \
 **Flags:** `--detail TEXT`, `--ref REF`, `--tag T1 --tag T2 ...`,
 `--suggested-fix TEXT`, `--issuer URI`, `--issuer-type {human|ai|tool|unknown}`,
 `--file PATH`, `--span SPEC` (overrides any span in `<location>`),
-`--supersedes ID`, `--references ID`, `--stdin` (batch JSONL).
+`--supersedes ID`, `--references ID`, `--allow-superseded`, `--stdin` (batch
+JSONL).
+
+`--supersedes` and `--references` each take an ID or ID prefix
+(≥ 4 characters) of a prior record; must name a live record unless
+`--allow-superseded`.
 
 **Defaults:**
 

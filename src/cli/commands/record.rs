@@ -4,6 +4,7 @@ use std::io::{self, BufRead};
 use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
+use crate::cli::targets;
 use crate::content_hash;
 use crate::qual_file;
 
@@ -59,6 +60,10 @@ pub struct Args {
     /// ID of a related annotation (conversational reference).
     #[arg(long)]
     pub references: Option<String>,
+
+    /// Allow --supersedes / --references to name a superseded or resolved record.
+    #[arg(long)]
+    pub allow_superseded: bool,
 
     /// Explicit .qual file to write to (overrides layout resolution).
     #[arg(long)]
@@ -143,6 +148,22 @@ pub fn run(args: Args) -> crate::Result<()> {
         None => None,
     };
 
+    let (supersedes, references) = if args.supersedes.is_some() || args.references.is_some() {
+        let qual_files = targets::discover_project(true)?;
+        let resolve = |flag: &str, value: &Option<String>| -> crate::Result<Option<String>> {
+            value
+                .as_deref()
+                .map(|v| targets::resolve_id_flag(flag, v, &qual_files, args.allow_superseded))
+                .transpose()
+        };
+        (
+            resolve("--supersedes", &args.supersedes)?,
+            resolve("--references", &args.references)?,
+        )
+    } else {
+        (None, None)
+    };
+
     let qual_path = qual_file::resolve_qual_path(&subject, args.file.as_deref().map(Path::new))?;
 
     let att = annotation::finalize(Annotation {
@@ -157,11 +178,11 @@ pub fn run(args: Args) -> crate::Result<()> {
             detail: args.detail,
             kind,
             r#ref: args.r#ref,
-            references: args.references,
+            references,
             span,
             suggested_fix: args.suggested_fix,
             summary: message,
-            supersedes: args.supersedes.clone(),
+            supersedes,
             tags: args.tags,
         },
     });

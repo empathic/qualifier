@@ -52,9 +52,9 @@ drift.
 **`--supersedes <ID>`** marks this record as superseding a prior annotation.
 Use this to update or correct an existing annotation rather than leaving both
 visible — the superseded record is filtered out by `show`, `praise`, and
-`review`. The value is stored verbatim — no prefix expansion is performed
-here. Pass the full 64-character ID. (Short prefixes are only resolved by
-`reply` and `resolve`, not `record`.)
+`review`. Takes an ID or ID prefix (≥ 4 characters); it must name a live
+record unless `--allow-superseded` is also passed. `--references <ID>` takes
+the same ID-or-prefix form for its target.
 
 **`--issuer-type <TYPE>`** takes `human`, `ai`, `tool`, or `unknown`. Always
 set `--issuer-type ai` when writing from an agent; this lets human reviewers
@@ -78,6 +78,9 @@ Recognized keys on the **overrides** form:
 - `message` — required. Becomes `body.summary`.
 - `detail`, `suggested_fix`, `tags`, `ref`, `references`, `supersedes` —
   optional, all match their `--flag` equivalents on the non-batch CLI.
+  Unlike the non-batch `--supersedes`/`--references` flags, `supersedes`
+  and `references` in stdin mode are stored verbatim — pass the full
+  64-character ID; prefix resolution is not performed here.
 - `span` — optional. Same syntax as the `--span` flag (e.g. `"42:58"`).
   Overrides any span parsed from `location`.
 - `issuer`, `issuer_type` — optional. Default to the same VCS detection

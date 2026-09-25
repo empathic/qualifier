@@ -7,6 +7,12 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 
 ## [0.8.0] — unreleased
 
+### Added
+
+- `--supersedes` and `--references` accept ID prefixes (≥ 4 characters),
+  resolved like `reply`/`resolve` targets. Editing a reply is
+  `qualifier reply <target> "…" --supersedes <prefix>`.
+
 ### Changed
 
 - **`reply` and `resolve` refuse superseded targets.** An ID prefix that
