@@ -2553,6 +2553,35 @@ fn test_agents_orientation_summaries_match_pages() {
     }
 }
 
+#[test]
+fn test_agents_conventions_and_batch_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let (out, _, code) = run_qualifier(dir.path(), &["agents", "conventions"]);
+    assert_eq!(code, 0);
+    for needle in [
+        "status:needs-decision",
+        "reason:wontfix",
+        "revisit:",
+        "alternative",
+        "session:",
+        "depends-on:",
+    ] {
+        assert!(out.contains(needle), "conventions page must cover {needle}");
+    }
+    let (out, _, code) = run_qualifier(dir.path(), &["agents", "batch"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("\"reply\"") && out.contains("\"resolve\"") && out.contains("--dry-run"));
+}
+
+#[test]
+fn test_agents_concepts_documents_issuer_env_and_harness() {
+    let dir = tempfile::tempdir().unwrap();
+    let (out, _, code) = run_qualifier(dir.path(), &["agents", "concepts"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("QUALIFIER_ISSUER_TYPE"));
+    assert!(out.contains("CLAUDECODE"));
+}
+
 // --- qualifier record --stdin: per-record output, line-numbered errors ---
 
 /// Pipe `input` to `qualifier <args>` and return (stdout, stderr, code).

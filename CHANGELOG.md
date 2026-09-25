@@ -26,6 +26,7 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 - `record --stdin` accepts `{"reply": "<target>", …}` and
   `{"resolve": "<target>", …}` lines with the same target resolution as
   the single commands, including records created earlier in the batch.
+- `qualifier agents conventions` and `qualifier agents batch`.
 
 ### Fixed
 

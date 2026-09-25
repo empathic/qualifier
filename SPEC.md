@@ -565,6 +565,19 @@ to a reply is a valid thread.
 After the resolve, the original concern's `-10` is withdrawn from scoring.
 The reply remains visible in the thread for context.
 
+### 2.12 Reserved Tag Namespaces
+
+Tags are free-form, but these prefixes carry meaning that tools interpret.
+A tag in a reserved namespace must follow its rule.
+
+| namespace | form | meaning |
+|---|---|---|
+| `status:` | `status:needs-decision[:<issuer>]`, `status:decided`, `status:deferred` | Workflow state of a thread. A thread's status is its latest `status:*` tag by `created_at`, over the root and live replies. An `:<issuer>` suffix addresses a decision to someone. |
+| `reason:` | `reason:fixed`, `reason:wontfix`, `reason:duplicate`, `reason:invalid`, `reason:obsolete` | Why a `resolve` closed its target. At most one per record. |
+| `session:` | `session:<harness>:<id>` | The agent session whose reasoning produced the record. A pointer for readers who have the transcript; the record must stand alone without it. |
+| `revisit:` | `revisit:<condition>` | On an `alternative` annotation: the observable condition under which to reconsider the option. |
+| `depends-on:` | `depends-on:<record id>` | On a reply in a thread: the thread cannot land before the thread whose root has this full ID. |
+
 ## 3. Record Type Specifications
 
 ### 3.1 Annotation (`type: "annotation"`)
@@ -1327,7 +1340,7 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult);
 // qualifier::threads — group annotations into conversations
 pub struct Thread<'a> {
     pub origin: &'a str,                 // oldest record in the root chain
-    pub root: &'a Record,                // live head (closed: newest non-resolve)
+    pub root: &'a Record,                // open: newest non-resolve tip; closed: closed_by's target, else newest non-resolve
     pub closed_by: Option<&'a Record>,   // the closing resolve, if any
     pub replies: Vec<ThreadEntry<'a>>,   // records outside the root chain, oldest first
     pub history: Vec<&'a Record>,        // superseded root-chain records, oldest first
@@ -1422,6 +1435,13 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
   lets agents close issues after fixes are applied.
 - **Threading:** The `references` field enables agents to thread follow-up
   observations to prior signals, creating navigable conversation histories.
+- **Thread queries:** `qualifier threads --format json` lists every open
+  thread with its live replies; `--status needs-decision` lists threads
+  waiting on a human.
+- **Provenance:** records written inside a detected agent harness default to
+  `issuer_type: ai` and carry a `session:` tag (§8.4).
+- **Conventions:** `qualifier agents conventions` defines the `status:`,
+  `reason:`, `session:`, and `revisit:` tag vocabulary and close authority.
 
 ## 10. File Discovery
 

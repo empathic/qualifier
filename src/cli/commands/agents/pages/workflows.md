@@ -115,3 +115,17 @@ Compaction is always explicit and user-initiated; it never happens silently.
 Records of unrecognized types are preserved unchanged. After compaction the
 file is still valid JSONL — no special reader support is needed. VCS history
 retains the full pre-compaction records if you need to trace back.
+
+## Triage open threads
+
+```bash
+qualifier threads --format json > /tmp/open.json        # the worklist
+# check each root's claim against the code, then write one batch:
+qualifier record --stdin --dry-run < /tmp/triage.jsonl
+qualifier record --stdin < /tmp/triage.jsonl
+qualifier threads --status needs-decision               # what's left for a human
+```
+
+Close only what close authority allows (`qualifier agents conventions`);
+propose other closes to a human as one list, with a reason and one line of
+evidence each.

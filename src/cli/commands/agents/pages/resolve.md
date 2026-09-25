@@ -86,6 +86,6 @@ convention (§2.12), not a body field.
 ## Superseded targets
 
 If the target has been superseded, the command fails and names the live
-record — reply to that one instead. If the target was resolved, the command
+record — target (resolve) that one instead. If the target was resolved, the command
 reports it as closed. `--allow-superseded` overrides both checks; use it
 only to add context to history.

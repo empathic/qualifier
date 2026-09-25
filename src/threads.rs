@@ -22,8 +22,10 @@ use crate::compact::filter_superseded;
 pub struct Thread<'a> {
     /// ID of the oldest record in the root chain. Stable across edits.
     pub origin: &'a str,
-    /// The live head of the root chain. For a closed thread, the newest
-    /// non-`resolve` record in the root chain.
+    /// The live head of the root chain. While open, the newest root-chain
+    /// tip that is not a `resolve`. Once closed, `closed_by`'s
+    /// `supersedes` target when that target is a non-`resolve` chain
+    /// member, else the newest non-`resolve` chain member.
     pub root: &'a Record,
     /// The `resolve` record that closed the thread, if any.
     pub closed_by: Option<&'a Record>,
@@ -32,7 +34,8 @@ pub struct Thread<'a> {
     pub replies: Vec<ThreadEntry<'a>>,
     /// Root-chain members other than `root` and `closed_by`, oldest first.
     pub history: Vec<&'a Record>,
-    /// True while the root chain's live head is not a `resolve`.
+    /// True while any root-chain tip (a chain member no other chain
+    /// member supersedes) is not a `resolve`.
     pub open: bool,
     /// Newest `created_at` across every record in the thread.
     pub latest_at: DateTime<Utc>,

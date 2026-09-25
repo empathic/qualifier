@@ -100,11 +100,11 @@ pub struct Args {
     /// Resolution message (defaults to "Resolved")
     pub message: Option<String>,
 
-    /// Issuer identity URI (defaults to VCS user email with mailto:)
+    /// Issuer identity URI (defaults to QUALIFIER_ISSUER, then detected agent harness, then VCS user email)
     #[arg(long)]
     pub issuer: Option<String>,
 
-    /// Issuer type (human, ai, tool, unknown)
+    /// Issuer type: human, ai, tool, unknown (defaults to QUALIFIER_ISSUER_TYPE, then detected agent harness)
     #[arg(long)]
     pub issuer_type: Option<String>,
 

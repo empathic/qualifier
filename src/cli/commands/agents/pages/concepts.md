@@ -126,13 +126,27 @@ https://ci.example.com        # CI job or tool with a URL
 urn:qualifier:compact         # reserved for the compact command
 ```
 
-When `--issuer` is omitted, the CLI detects the VCS user identity:
-- Git: `git config user.email` → wrapped as `mailto:<email>`
-- Mercurial: `hg config ui.username` → wrapped as `mailto:<username>`
-- Fallback: `mailto:$USER@localhost`
+`record`, `reply`, and `resolve` resolve `issuer`, `issuer_type`, and the
+`session:` tag in the same precedence order, each falling through to the
+next source when the previous one is unset. Empty environment variables
+count as unset.
 
-As an agent, always pass `--issuer "mailto:your-agent-id@example.com"` and
-`--issuer-type ai` so records are traceable back to you.
+1. **Explicit flag** — `--issuer`, `--issuer-type`.
+2. **`QUALIFIER_*` environment variables** — `QUALIFIER_ISSUER`,
+   `QUALIFIER_ISSUER_TYPE`, `QUALIFIER_SESSION`.
+3. **Detected agent harness** — currently Claude Code: `CLAUDECODE=1`
+   implies `issuer_type: ai` and the tag
+   `session:claude-code:<CLAUDE_CODE_SESSION_ID>`.
+4. **VCS identity** (issuer only) — `git config user.email`, then
+   `hg config ui.username`, then `mailto:$USER@localhost`. There is no
+   fallback for issuer type or session; they are simply omitted.
+
+As an agent running inside a detected harness (e.g. Claude Code), you can
+leave `--issuer` and `--issuer-type` unset — the defaults already mark the
+record as `ai`-issued and tag it with the session. If you are a human
+running `qualifier` through an agent harness (so the harness marker is
+set but you, not the agent, are the author), pass `--issuer-type human`
+to override the detected default.
 
 The `issuer_type` field is optional but strongly recommended:
 
