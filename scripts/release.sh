@@ -39,4 +39,9 @@ else
     echo "==> Publishing to crates.io..."
     cargo publish $ALLOW_DIRTY
     echo "==> Published!"
+
+    VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+    echo ""
+    echo "Next: tag and push to build release binaries (used by the Claude Code plugin):"
+    echo "  git tag v${VERSION} && git push origin v${VERSION}"
 fi
