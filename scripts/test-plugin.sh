@@ -151,6 +151,10 @@ ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not the expecte
 case "$ctx" in *"qual:recording-design-decisions"*) ;; *) fail "context lacks the using-qualifier map" ;; esac
 case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the thread summary: $ctx" ;; esac
 case "$ctx" in *"name: using-qualifier"*) fail "frontmatter must be stripped" ;; esac
+# The backticks are a literal call-line quote, not command substitution.
+# shellcheck disable=SC2016
+case "$ctx" in *'Call it as `qualifier`'*) ;; *) fail "context must give the on-PATH call line: $ctx" ;; esac
+case "$ctx" in *'ensure-qualifier.sh" exec'*) fail "an on-PATH binary must not route through the wrapper: $ctx" ;; esac
 [ "${#ctx}" -lt 10000 ] || fail "context is ${#ctx} chars; the harness caps it at 10000"
 ok "hook injects using-qualifier and the summary (${#ctx} chars)"
 
@@ -194,6 +198,17 @@ out="$(run_hook "$GITNOQUAL" PATH="$STUB1:$PATH")"
 [ -z "$out" ] || fail "a git repo without .qual files must be silent, got: $out"
 ok "hook gates git repositories through the index"
 
+# H6b. A .qual file excluded by .gitignore must be silent: only the git
+# index path (not a filesystem find fallback) is expected to honor it.
+GITIGNORED="$SANDBOX/gitignored"
+mkdir -p "$GITIGNORED/src"
+git -C "$GITIGNORED" init -q
+echo '*.qual' >"$GITIGNORED/.gitignore"
+echo '{}' >"$GITIGNORED/src/.qual"
+out="$(run_hook "$GITIGNORED" PATH="$STUB1:$PATH")"
+[ -z "$out" ] || fail "a gitignored .qual must be silent, got: $out"
+ok "hook honors .gitignore via the git index path"
+
 # H7. An old binary puts an upgrade note into the context.
 out="$(run_hook "$WITHQUAL" PATH="$STUB_OLD:$PATH")"
 ctx="$(printf '%s' "$out" | context_of)"
@@ -218,6 +233,21 @@ elapsed=$(( $(date +%s) - start ))
 ctx="$(printf '%s' "$out" | context_of)"
 case "$ctx" in *"too late"*) fail "a late summary must be dropped" ;; esac
 ok "hook drops a summary that misses its one-second budget"
+
+# H9. A summary containing raw control characters (an ANSI color escape, a
+# form feed) must not break the JSON: they are stripped before it is quoted.
+CTRLCHARS="$SANDBOX/ctrlchars"
+mkdir -p "$CTRLCHARS"
+# The ${1:-} is a literal shell parameter expansion in the generated
+# script, not one to expand here.
+# shellcheck disable=SC2016
+printf '#!/usr/bin/env bash\ncase "${1:-}" in\n    --version) echo "qualifier 9.9.9" ;;\n    threads) printf "\\033[31m1 blocker\\033[0m\\f\\n" ;;\nesac\n' \
+    >"$CTRLCHARS/qualifier"
+chmod +x "$CTRLCHARS/qualifier"
+out="$(run_hook "$WITHQUAL" PATH="$CTRLCHARS:$PATH")"
+ctx="$(printf '%s' "$out" | context_of)" || fail "control characters in the summary broke the JSON: $out"
+case "$ctx" in *"1 blocker"*) ;; *) fail "context lost the summary text: $ctx" ;; esac
+ok "hook strips control characters that would break the JSON"
 
 # --- stubbed download ---
 # The download tests run a copy of the wrapper pinned to a fixture release

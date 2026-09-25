@@ -67,8 +67,13 @@ bounded_summary() {
     rm -f "$out"
 }
 
+# Strips C0 control characters other than \t \n \r (a raw ESC or form feed
+# from a wrapped tool's output would otherwise land unescaped in the JSON
+# string below and make the whole additionalContext unparseable), then
+# escapes what JSON requires.
 escape_for_json() {
     local s="$1"
+    s="$(printf '%s' "$s" | LC_ALL=C tr -d '\000-\010\013\014\016-\037')"
     s="${s//\\/\\\\}"
     s="${s//\"/\\\"}"
     s="${s//$'\n'/\\n}"
@@ -80,8 +85,15 @@ escape_for_json() {
 ROOT="$(find_root "$PROJECT_DIR")" || ROOT="$PROJECT_DIR"
 has_qual_files "$ROOT" || exit 0
 
-skill_body="$(awk 'n >= 2 { print; next } /^---$/ { n++ }' \
-    "$PLUGIN_ROOT/skills/using-qualifier/SKILL.md" 2>/dev/null)"
+# The skill body with its frontmatter stripped: the block between the first
+# and second `---` lines. A file with no frontmatter (first line isn't
+# `---`) is passed through whole.
+skill_body="$(awk '
+    NR == 1 && $0 != "---" { no_frontmatter = 1 }
+    no_frontmatter { print; next }
+    n >= 2 { print; next }
+    /^---$/ { n++ }
+' "$PLUGIN_ROOT/skills/using-qualifier/SKILL.md" 2>/dev/null)"
 
 BIN="$("$WRAPPER" 2>/dev/null)" || BIN=""
 on_path="$(command -v qualifier 2>/dev/null || true)"
@@ -104,11 +116,13 @@ else
     summary="$(bounded_summary "$BIN")"
 fi
 
-context="<qualifier-plugin>
-This repository uses qualifier (.qual files found). ${call_line}
-${note}
-${summary}
+# Assembled so a missing note or summary contributes no blank line.
+body_lines=("This repository uses qualifier (.qual files found). ${call_line}")
+[ -n "$note" ] && body_lines+=("$note")
+[ -n "$summary" ] && body_lines+=("$summary")
 
+context="<qualifier-plugin>
+$(printf '%s\n' "${body_lines[@]}")
 ${skill_body}
 </qualifier-plugin>"
 
