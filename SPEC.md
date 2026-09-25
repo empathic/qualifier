@@ -888,6 +888,16 @@ SARIF v2.1.0 results can be converted to qualifier annotations:
 The CLI binary is named `qualifier`. Writes go through four verbs:
 `record`, `reply`, `resolve`, and `emit`.
 
+**Locations are relative to the current directory; subjects are stored
+relative to the project root** (§10). Every location or artifact argument
+— `record <location>`, batch `location`/`reply`/`resolve` values,
+`reply`/`resolve` targets, `threads` filters, and the `show`, `praise`, and
+`compact` artifacts — is joined to the current directory's path below the
+project root and normalized (`.` and `..` folded, `/` separators, the root
+itself is `.`). An argument that leaves the project root is an error. Every
+write lands in a `.qual` file under the project root, laid out as in
+§2.10; an explicit `--file` path stays relative to the current directory.
+
 ### 6.1 Core Commands
 
 **Write commands:**
@@ -1018,7 +1028,8 @@ Sugar over "kind=comment + references=`<target-id>`". The default kind is
 
 - An **id-prefix** (≥ 4 characters), or
 - A **`<location>`** (e.g., `src/auth.rs:42`). A location resolves to the
-  most-recent active record at that subject and span. If multiple active
+  most-recent active record at that subject and span; a `resolve` record is
+  never a location target. If multiple active
   records share the most-recent timestamp, exit non-zero with a
   disambiguation list of `[id-prefix] kind L<line> "summary"`.
 

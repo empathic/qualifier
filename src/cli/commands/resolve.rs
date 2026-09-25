@@ -5,7 +5,6 @@ use std::path::Path;
 use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record};
 use crate::cli::provenance;
 use crate::cli::targets;
-use crate::qual_file;
 
 /// Close reasons accepted by `--reason`; each becomes the tag `reason:<value>`.
 pub const CLOSE_REASONS: &[&str] = &["fixed", "wontfix", "duplicate", "invalid", "obsolete"];
@@ -135,8 +134,14 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
+    let locator = targets::Locator::from_cwd()?;
     let all_qual_files = targets::discover_project(true)?;
-    let target = targets::resolve_target(&args.target, &all_qual_files, args.allow_superseded)?;
+    let target = targets::resolve_target(
+        &args.target,
+        &all_qual_files,
+        args.allow_superseded,
+        &locator,
+    )?;
 
     let att = build_resolve(
         &target,
@@ -150,15 +155,10 @@ pub fn run(args: Args) -> crate::Result<()> {
         },
     )?;
 
-    let root = targets::project_root()?;
-    let qual_path = targets::resolve_existing_target_path(
-        &root,
-        &att.subject,
-        args.file.as_deref().map(Path::new),
-    )?;
+    let qual_path = locator.write_path(&att.subject, args.file.as_deref().map(Path::new));
     let record = Record::Annotation(Box::new(att.clone()));
     targets::preflight_supersession(&qual_path, &record)?;
-    qual_file::append(qual_path.as_ref(), &record)?;
+    targets::append(&qual_path, &record)?;
 
     if args.format == "json" {
         println!("{}", serde_json::to_string(&record)?);

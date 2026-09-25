@@ -2,7 +2,7 @@
 //! and the liveness check that keeps writes off superseded records.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::annotation::{self, Kind, Record, Span};
 use crate::compact::filter_superseded;
@@ -26,43 +26,120 @@ pub(crate) fn discover_project(respect_ignore: bool) -> crate::Result<Vec<QualFi
     qual_file::discover(&project_root()?, respect_ignore)
 }
 
-/// Resolve the `.qual` file that should receive a new record for an
-/// **existing** record's subject (a `reply` or `resolve` target, single
-/// or batch). Unlike `qual_file::resolve_qual_path`, this is rooted at
-/// the project root rather than the current working directory: the
-/// target's subject was recorded relative to the project root, so the
-/// write must land next to the rest of that subject's history regardless
-/// of the subdirectory the command was invoked from. An explicit `--file`
-/// keeps its current, CWD-relative meaning.
-pub(crate) fn resolve_existing_target_path(
-    root: &Path,
-    subject: &str,
-    explicit_path: Option<&Path>,
-) -> crate::Result<PathBuf> {
-    if explicit_path.is_some() {
-        return qual_file::resolve_qual_path(subject, explicit_path);
+/// Maps location arguments to stored subjects. Arguments are interpreted
+/// relative to the current directory; subjects are stored relative to the
+/// project root. Every write lands in a `.qual` file under the project root.
+pub(crate) struct Locator {
+    root: PathBuf,
+    /// The current directory relative to `root` (empty at the root).
+    cwd_rel: PathBuf,
+}
+
+impl Locator {
+    /// A locator for the current directory and its project root.
+    pub(crate) fn from_cwd() -> crate::Result<Self> {
+        let cwd = std::env::current_dir()?;
+        let root = qual_file::find_project_root(&cwd).unwrap_or_else(|| cwd.clone());
+        let cwd_rel = cwd
+            .strip_prefix(&root)
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        Ok(Self { root, cwd_rel })
     }
 
-    // 1. Check for an existing 1:1 file, rooted at the project root.
-    let one_to_one = root.join(format!("{subject}.qual"));
-    if one_to_one.exists() {
-        return Ok(one_to_one);
+    /// The project root (absolute).
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
     }
 
-    // 2. Default to the directory-level `.qual`, rooted at the project root.
-    let subject_path = Path::new(subject);
-    let dir_qual = match subject_path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => root.join(parent).join(".qual"),
-        _ => root.join(".qual"),
-    };
+    /// Normalize a CWD-relative (or absolute) path argument to a
+    /// root-relative subject: `.` and `..` are folded, separators become
+    /// `/`, and the project root itself is `.`. A path that leaves the
+    /// project root is an error. An empty argument is returned unchanged.
+    pub(crate) fn subject(&self, arg: &str) -> crate::Result<String> {
+        if arg.is_empty() {
+            return Ok(String::new());
+        }
+        let outside = || {
+            crate::Error::Validation(format!(
+                "location '{arg}' is outside the project root ({})",
+                self.root.display()
+            ))
+        };
+        let path = Path::new(arg);
+        let joined = if path.is_absolute() {
+            path.strip_prefix(&self.root)
+                .map_err(|_| outside())?
+                .to_path_buf()
+        } else {
+            self.cwd_rel.join(path)
+        };
+        let mut parts: Vec<String> = Vec::new();
+        for component in joined.components() {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    parts.pop().ok_or_else(outside)?;
+                }
+                Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+                Component::RootDir | Component::Prefix(_) => return Err(outside()),
+            }
+        }
+        Ok(if parts.is_empty() {
+            ".".into()
+        } else {
+            parts.join("/")
+        })
+    }
 
-    if let Some(dir) = dir_qual.parent()
+    /// Parse a `path[:start[:end]]` location argument into a root-relative
+    /// subject and optional span.
+    pub(crate) fn location(&self, location: &str) -> crate::Result<(String, Option<Span>)> {
+        let (path, span) = annotation::parse_location(location);
+        Ok((self.subject(&path)?, span))
+    }
+
+    /// The on-disk path of a root-relative subject.
+    pub(crate) fn file(&self, subject: &str) -> PathBuf {
+        self.root.join(subject)
+    }
+
+    /// The `.qual` file that receives a new record about `subject`: the
+    /// existing 1:1 `<subject>.qual`, else the directory-level `.qual`
+    /// next to the subject, both under the project root. An explicit
+    /// `--file` keeps its CWD-relative meaning. Creates nothing; see
+    /// [`append`].
+    pub(crate) fn write_path(&self, subject: &str, explicit: Option<&Path>) -> PathBuf {
+        if let Some(p) = explicit {
+            return p.to_path_buf();
+        }
+        let one_to_one = self.root.join(format!("{subject}.qual"));
+        if one_to_one.exists() {
+            return one_to_one;
+        }
+        match Path::new(subject).parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => self.root.join(parent).join(".qual"),
+            _ => self.root.join(".qual"),
+        }
+    }
+
+    /// The existing `.qual` file holding `subject`'s records, if any: the
+    /// 1:1 file, else the directory-level file, under the project root.
+    pub(crate) fn existing_qual_file(&self, subject: &str) -> Option<PathBuf> {
+        let path = self.write_path(subject, None);
+        path.exists().then_some(path)
+    }
+}
+
+/// Append `record` to `path`, creating missing parent directories.
+pub(crate) fn append(path: &Path, record: &Record) -> crate::Result<()> {
+    if let Some(dir) = path.parent()
+        && !dir.as_os_str().is_empty()
         && !dir.exists()
     {
         std::fs::create_dir_all(dir)?;
     }
-
-    Ok(dir_qual)
+    qual_file::append(path, record)
 }
 
 /// First eight characters of an ID, for messages.
@@ -117,9 +194,10 @@ pub(crate) fn resolve_target(
     target: &str,
     qual_files: &[QualFile],
     allow_superseded: bool,
+    locator: &Locator,
 ) -> crate::Result<Record> {
     let record = if looks_like_location(target) {
-        resolve_location_target(target, qual_files)?
+        resolve_location_target(target, qual_files, locator)?
     } else {
         resolve_id_prefix(target, qual_files)?
     };
@@ -190,8 +268,15 @@ pub(crate) fn span_overlaps(a: &Span, b: &Span) -> bool {
     a_start <= b_end && b_start <= a_end
 }
 
-fn resolve_location_target(location: &str, qual_files: &[QualFile]) -> crate::Result<Record> {
-    let (subject, span_filter) = annotation::parse_location(location);
+/// The newest active record at `location` (a `resolve` is never a
+/// candidate). Ties at the newest timestamp are reported with a candidate
+/// list.
+fn resolve_location_target(
+    location: &str,
+    qual_files: &[QualFile],
+    locator: &Locator,
+) -> crate::Result<Record> {
+    let (subject, span_filter) = locator.location(location)?;
 
     // Collect all records, filter to active.
     let all: Vec<Record> = qual_files
@@ -206,6 +291,7 @@ fn resolve_location_target(location: &str, qual_files: &[QualFile]) -> crate::Re
         .iter()
         .flat_map(|qf| qf.records.iter())
         .filter(|r| r.subject() == subject)
+        .filter(|r| r.kind() != Some(&Kind::Resolve))
         .filter(|r| active_ids.contains(r.id()))
         .filter(|r| {
             if let Some(ref s) = span_filter {

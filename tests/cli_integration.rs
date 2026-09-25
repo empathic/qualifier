@@ -4932,6 +4932,219 @@ fn test_threads_and_reply_discover_project_from_subdirectory() {
     assert!(root_qual.contains("batch confirmed"), "{root_qual}");
 }
 
+/// A git project with `src/net/tcp.rs` (three lines); returns `src/net`.
+fn subdir_project(root: &Path) -> std::path::PathBuf {
+    git_init(root);
+    let net = root.join("src/net");
+    std::fs::create_dir_all(&net).unwrap();
+    std::fs::write(net.join("tcp.rs"), "fn a() {}\nfn b() {}\nfn c() {}\n").unwrap();
+    net
+}
+
+#[test]
+fn test_record_from_subdirectory_stores_root_relative_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    let net = subdir_project(dir.path());
+
+    let (stdout, stderr, code) = run_qualifier(
+        &net,
+        &[
+            "record",
+            "concern",
+            "tcp.rs:2",
+            "b is racy",
+            "--issuer",
+            "mailto:test@test.com",
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let rec: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(rec["subject"], "src/net/tcp.rs", "{stdout}");
+    assert!(
+        rec["body"]["span"]["content_hash"].is_string(),
+        "span hash computed against the real file: {stdout}"
+    );
+    let qual = std::fs::read_to_string(net.join(".qual")).unwrap();
+    assert!(qual.contains("\"subject\":\"src/net/tcp.rs\""), "{qual}");
+    assert!(!net.join("src").exists(), "no nested src/net/src tree");
+}
+
+#[test]
+fn test_threads_location_from_subdirectory_is_cwd_relative() {
+    let dir = tempfile::tempdir().unwrap();
+    let net = subdir_project(dir.path());
+    write_id(
+        dir.path(),
+        &["record", "concern", "src/net/tcp.rs:2", "b is racy"],
+    );
+
+    let threads = threads_json(&net, &["tcp.rs"]);
+    assert_eq!(threads.len(), 1, "{threads:?}");
+    let threads = threads_json(&net, &["tcp.rs:2"]);
+    assert_eq!(threads.len(), 1, "{threads:?}");
+    let threads = threads_json(&net, &["*.rs"]);
+    assert_eq!(threads.len(), 1, "globs are CWD-relative too: {threads:?}");
+    let threads = threads_json(&dir.path().join("src"), &["../src/net"]);
+    assert_eq!(threads.len(), 1, "{threads:?}");
+    // From the root, root-relative paths are unchanged.
+    let threads = threads_json(dir.path(), &["src/net/tcp.rs"]);
+    assert_eq!(threads.len(), 1, "{threads:?}");
+}
+
+#[test]
+fn test_reply_and_resolve_locations_from_subdirectory() {
+    let dir = tempfile::tempdir().unwrap();
+    let net = subdir_project(dir.path());
+    let a = write_id(
+        dir.path(),
+        &["record", "concern", "src/net/tcp.rs:2", "b is racy"],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(
+        &net,
+        &[
+            "reply",
+            "tcp.rs:2",
+            "confirmed",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains(&format!("re: {}", &a[..8])), "{stdout}");
+
+    let (stdout, stderr, code) = run_qualifier(
+        &net,
+        &[
+            "resolve",
+            "tcp.rs:2",
+            "fixed",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains(&format!("supersedes: {}", &a[..8])),
+        "{stdout}"
+    );
+    assert!(!net.join("src").exists(), "no nested src/net/src tree");
+    let qual = std::fs::read_to_string(net.join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 3, "{qual}");
+}
+
+#[test]
+fn test_batch_from_subdirectory_normalizes_locations() {
+    let dir = tempfile::tempdir().unwrap();
+    let net = subdir_project(dir.path());
+    let input = concat!(
+        "{\"kind\":\"concern\",\"location\":\"tcp.rs:1\",\"message\":\"a leaks\"}\n",
+        "{\"reply\":\"tcp.rs:1\",\"message\":\"seen\"}\n",
+        "{\"resolve\":\"tcp.rs:1\",\"reason\":\"fixed\"}\n",
+    );
+    let (stdout, stderr, code) = run_qualifier_stdin(&net, &["record", "--stdin"], input);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(!net.join("src").exists(), "no nested src/net/src tree");
+    let qual = std::fs::read_to_string(net.join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 3, "{qual}");
+    assert!(
+        qual.lines()
+            .all(|l| l.contains("\"subject\":\"src/net/tcp.rs\"")),
+        "{qual}"
+    );
+}
+
+#[test]
+fn test_location_escaping_project_root_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let net = subdir_project(dir.path());
+    let (_, stderr, code) = run_qualifier(
+        &net,
+        &[
+            "record",
+            "concern",
+            "../../../outside.rs",
+            "x",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+    let (_, stderr, code) = run_qualifier(&net, &["threads", "../../../outside.rs"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+}
+
+#[test]
+fn test_batch_dry_run_creates_no_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = "{\"kind\":\"concern\",\"location\":\"new/dir/x.rs\",\"message\":\"x\"}\n";
+    let (_, stderr, code) =
+        run_qualifier_stdin(dir.path(), &["record", "--stdin", "--dry-run"], input);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        !dir.path().join("new").exists(),
+        "--dry-run must not create directories"
+    );
+}
+
+#[test]
+fn test_location_target_skips_resolve_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "a is racy"]);
+    write_id(dir.path(), &["resolve", &a[..8], "fixed"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &["reply", "a.rs", "more", "--issuer", "mailto:test@test.com"],
+    );
+    assert_ne!(code, 0, "a resolve record is not a location target");
+    assert!(stderr.contains("no active record"), "{stderr}");
+}
+
+#[test]
+fn test_show_praise_compact_from_subdirectory() {
+    let dir = tempfile::tempdir().unwrap();
+    let net = subdir_project(dir.path());
+    let a = write_id(
+        dir.path(),
+        &["record", "concern", "src/net/tcp.rs:2", "b is racy"],
+    );
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "src/net/tcp.rs:2",
+            "b is racy (edited)",
+            "--supersedes",
+            &a[..8],
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(&net, &["show", "tcp.rs", "--pretty"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("src/net/tcp.rs"), "{stdout}");
+    assert!(
+        stdout.contains("fn b() {}"),
+        "pretty context found: {stdout}"
+    );
+
+    let (stdout, stderr, code) = run_qualifier(&net, &["praise", "tcp.rs"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("b is racy (edited)"), "{stdout}");
+
+    let (stdout, stderr, code) = run_qualifier(&net, &["compact", "tcp.rs", "--dry-run"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("1 superseded"), "{stdout}");
+
+    let (stdout, stderr, code) = run_qualifier(&net, &["ls"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("src/net/tcp.rs"), "{stdout}");
+}
+
 #[test]
 fn test_threads_all_includes_closed() {
     let dir = tempfile::tempdir().unwrap();

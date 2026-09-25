@@ -1,12 +1,12 @@
 use clap::Args as ClapArgs;
-use std::path::Path;
 
+use crate::cli::targets;
 use crate::compact::filter_superseded;
-use crate::qual_file::{self, find_project_root};
+use crate::qual_file;
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// The artifact to show attribution for
+    /// The artifact to show attribution for, relative to the current directory
     pub artifact: String,
 
     /// Output format (human, json)
@@ -34,17 +34,15 @@ pub fn run(args: Args) -> crate::Result<()> {
 }
 
 fn run_records(args: Args) -> crate::Result<()> {
-    let root = find_project_root(Path::new("."));
-    let discover_root = root.as_deref().unwrap_or(Path::new("."));
-    let all_qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
+    let subject = targets::Locator::from_cwd()?.subject(&args.artifact)?;
+    let all_qual_files = targets::discover_project(!args.no_ignore)?;
 
     let records: Vec<&crate::annotation::Record> =
-        qual_file::find_records_for(&args.artifact, &all_qual_files);
+        qual_file::find_records_for(&subject, &all_qual_files);
 
     if records.is_empty() {
         return Err(crate::Error::Validation(format!(
-            "No records found for '{}'",
-            args.artifact
+            "No records found for '{subject}'"
         )));
     }
 
@@ -55,7 +53,7 @@ fn run_records(args: Args) -> crate::Result<()> {
         let entries: Vec<serde_json::Value> =
             active.iter().filter_map(|r| record_to_json(r)).collect();
         let output = serde_json::json!({
-            "subject": args.artifact,
+            "subject": subject,
             "records": entries,
         });
         println!(
@@ -67,7 +65,7 @@ fn run_records(args: Args) -> crate::Result<()> {
 
     // Human output
     println!();
-    println!("  {} \u{2014} {} records", args.artifact, active.len());
+    println!("  {} \u{2014} {} records", subject, active.len());
     println!();
 
     for record in &active {
@@ -192,14 +190,15 @@ fn record_to_json(record: &crate::annotation::Record) -> Option<serde_json::Valu
 fn run_vcs(artifact: &str) -> crate::Result<()> {
     use std::process::Command;
 
-    let qual_path = qual_file::find_qual_file_for(artifact).ok_or_else(|| {
+    let locator = targets::Locator::from_cwd()?;
+    let subject = locator.subject(artifact)?;
+    let qual_path = locator.existing_qual_file(&subject).ok_or_else(|| {
         crate::Error::Validation(format!(
-            "No .qual file found containing annotations for '{}'",
-            artifact
+            "No .qual file found containing annotations for '{subject}'"
         ))
     })?;
 
-    let vcs = qual_file::detect_vcs(Path::new("."));
+    let vcs = qual_file::detect_vcs(locator.root());
 
     match vcs {
         Some("git") => {

@@ -6,15 +6,15 @@ use std::path::{Path, PathBuf};
 use clap::Args as ClapArgs;
 use globset::{GlobBuilder, GlobMatcher};
 
-use crate::annotation::{self, IssuerType, Kind, Record, Span};
+use crate::annotation::{IssuerType, Kind, Record, Span};
 use crate::cli::targets::{self, short_id};
 use crate::threads::{self, Thread};
 
 #[derive(ClapArgs)]
 pub struct Args {
     /// Filter by location: a path, a directory, a glob (`src/**/*.rs`), or
-    /// `path:start[:end]` (threads whose root span overlaps). Any match
-    /// selects the thread.
+    /// `path:start[:end]` (threads whose root span overlaps). Relative to
+    /// the current directory. Any match selects the thread.
     pub locations: Vec<String>,
 
     /// Include closed threads and superseded replies
@@ -67,7 +67,8 @@ pub fn run(args: Args) -> crate::Result<()> {
         return Ok(());
     }
 
-    let mut filter = Filter::from_args(&args)?;
+    let locator = targets::Locator::from_cwd()?;
+    let mut filter = Filter::from_args(&args, &locator)?;
     if let Some(base) = args.changed_since.as_deref() {
         filter.changed = Some(changed_files(&repo_root()?, base)?);
     }
@@ -97,11 +98,11 @@ struct Filter {
 }
 
 impl Filter {
-    fn from_args(args: &Args) -> crate::Result<Self> {
+    fn from_args(args: &Args, locator: &targets::Locator) -> crate::Result<Self> {
         let locations = args
             .locations
             .iter()
-            .map(|l| LocationFilter::parse(l))
+            .map(|l| LocationFilter::parse(l, locator))
             .collect::<crate::Result<Vec<_>>>()?;
         let kinds = args.kind.as_deref().map(|s| {
             s.split(',')
@@ -156,19 +157,17 @@ enum LocationFilter {
 }
 
 impl LocationFilter {
-    fn parse(s: &str) -> crate::Result<Self> {
+    /// Parse a CWD-relative filter into one over root-relative subjects.
+    fn parse(s: &str, locator: &targets::Locator) -> crate::Result<Self> {
         if s.contains(['*', '?', '[']) {
-            let glob = GlobBuilder::new(s)
+            let pattern = locator.subject(s)?;
+            let glob = GlobBuilder::new(&pattern)
                 .literal_separator(true)
                 .build()
                 .map_err(|e| crate::Error::Validation(format!("invalid glob '{s}': {e}")))?;
             return Ok(Self::Glob(glob.compile_matcher()));
         }
-        let (subject, span) = annotation::parse_location(s);
-        let subject = subject
-            .trim_start_matches("./")
-            .trim_end_matches('/')
-            .to_string();
+        let (subject, span) = locator.location(s)?;
         Ok(Self::Path { subject, span })
     }
 

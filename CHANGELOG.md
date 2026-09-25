@@ -50,10 +50,21 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   `--supersedes`/`--references` flags. Previously these fields were stored
   verbatim with no resolution or liveness check.
 - Commands now discover the whole project when run from a subdirectory,
-  not just that subdirectory's `.qual` files. `reply` and `resolve`
-  (single and batch) write next to the rest of the target's history at
-  the project root, regardless of the subdirectory the command was run
-  from; `--file` still resolves relative to the current directory.
+  not just that subdirectory's `.qual` files.
+- **Locations are relative to the current directory; subjects are stored
+  relative to the project root.** `record` (single and `--stdin`
+  `location` values), `reply`/`resolve` location targets (single and
+  batch), `threads` filters, and the `show`, `praise`, and `compact`
+  artifacts join the argument to the current directory's path below the
+  project root and normalize it; an argument that leaves the project root
+  is an error. Every write lands in a `.qual` file under the project root;
+  `--file` still resolves relative to the current directory. From `src/`,
+  `record concern foo.rs …` now stores subject `src/foo.rs` in
+  `src/.qual` (previously `foo.rs` in `src/.qual`), and a repo-relative
+  path given from a subdirectory no longer creates a nested `.qual` tree.
+- A location target for `reply`/`resolve` never resolves to a `resolve`
+  record.
+- `record --stdin --dry-run` no longer creates directories.
 
 ## [0.7.0] — unreleased
 

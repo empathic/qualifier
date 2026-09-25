@@ -44,7 +44,10 @@ qualifier reply src/auth.rs "This is intentional per security policy" \
 ## Flags worth knowing
 
 **`<target>`** accepts either an id-prefix (at least 4 hex characters) or a
-location string like `src/auth.rs` or `src/auth.rs:42`. The id-prefix form
+location string like `src/auth.rs` or `src/auth.rs:42`. Locations are
+relative to the current directory; subjects are stored relative to the
+project root, and the reply is written under the project root next to the
+target's history. The id-prefix form
 matches any record in the project whose ID starts with those characters — if
 more than one record matches, the command fails with a list of candidates so
 you can narrow it. The location form resolves to the most-recent active record

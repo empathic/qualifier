@@ -49,7 +49,9 @@ qualifier resolve a1b2c3d4 "Done" --format json
 ## Flags worth knowing
 
 **`<target>`** follows the same resolution rules as `reply`: an id-prefix (4+
-chars) or a location string. An id-prefix that matches more than one record,
+chars) or a location string. Locations are relative to the current
+directory; subjects are stored relative to the project root. A location
+never resolves to a `resolve` record. An id-prefix that matches more than one record,
 or a location with multiple tied active records, surfaces a disambiguation
 list and exits without writing.
 

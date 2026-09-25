@@ -29,6 +29,10 @@ qualifier threads --format json             # one JSON array
 qualifier threads --summary                 # 0-2 line digest for session-start hooks
 ```
 
+Locations are relative to the current directory; subjects are stored
+relative to the project root. From `src/`, `qualifier threads net/tcp.rs`
+and `qualifier threads ../src/net/tcp.rs` both select `src/net/tcp.rs`.
+
 ## JSON shape
 
 ```json

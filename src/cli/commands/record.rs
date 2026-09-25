@@ -9,7 +9,6 @@ use crate::cli::commands::{reply, resolve};
 use crate::cli::provenance;
 use crate::cli::targets;
 use crate::content_hash;
-use crate::qual_file;
 use crate::qual_file::QualFile;
 
 #[derive(ClapArgs)]
@@ -140,7 +139,8 @@ pub fn run(args: Args) -> crate::Result<()> {
         crate::Error::Validation("<message> is required (or use --stdin for batch mode)".into())
     })?;
 
-    let (subject, location_span) = annotation::parse_location(location);
+    let locator = targets::Locator::from_cwd()?;
+    let (subject, location_span) = locator.location(location)?;
 
     // --span overrides the location's span.
     let mut span = match &args.span {
@@ -150,7 +150,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     // Auto-compute content hash for spans
     if let Some(ref mut s) = span
-        && let Some(hash) = content_hash::compute_span_hash(Path::new(&subject), s)
+        && let Some(hash) = content_hash::compute_span_hash(&locator.file(&subject), s)
     {
         s.content_hash = Some(hash);
     }
@@ -174,7 +174,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         (None, None)
     };
 
-    let qual_path = qual_file::resolve_qual_path(&subject, args.file.as_deref().map(Path::new))?;
+    let qual_path = locator.write_path(&subject, args.file.as_deref().map(Path::new));
 
     let att = annotation::finalize(Annotation {
         metabox: "1".into(),
@@ -207,7 +207,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         targets::preflight_supersession(&qual_path, &record)?;
     }
 
-    qual_file::append(qual_path.as_ref(), &record)?;
+    targets::append(&qual_path, &record)?;
 
     if args.format == "json" {
         println!("{}", serde_json::to_string(&record)?);
@@ -269,7 +269,7 @@ impl BatchView {
 }
 
 fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Result<()> {
-    let root = targets::project_root()?;
+    let locator = targets::Locator::from_cwd()?;
     let mut view = BatchView::new(targets::discover_project(true)?);
     let mut planned: Vec<(Record, PathBuf, usize)> = Vec::new();
     let mut errors: Vec<BatchError> = Vec::new();
@@ -291,7 +291,7 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
-        match plan_one(trimmed, &view, &root) {
+        match plan_one(trimmed, &view, &locator) {
             Ok((record, path)) => {
                 view.push(record.clone());
                 planned.push((record, path, line_no));
@@ -313,7 +313,7 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
     let mut recorded = 0usize;
     if proceed {
         for (i, (record, path, line_no)) in planned.iter().enumerate() {
-            if !dry_run && let Err(e) = qual_file::append(path, record) {
+            if !dry_run && let Err(e) = targets::append(path, record) {
                 return Err(crate::Error::Validation(format!(
                     "wrote {i} of {} records before an I/O error appending stdin line {line_no}: {e}",
                     planned.len()
@@ -376,38 +376,31 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
 }
 
 /// Parse, resolve, and validate one line against `view`. Returns the record
-/// and the `.qual` path it will be appended to.
-///
-/// `reply`/`resolve` lines target an existing record, so their write path
-/// is resolved against `root` — the record's subject was already recorded
-/// relative to the project root, regardless of where this batch is run
-/// from. Overrides lines and complete-record lines describe a subject that
-/// may not exist yet, so their write path stays CWD-relative, matching
-/// non-batch `record`.
+/// and the `.qual` path it will be appended to. Locations on overrides,
+/// reply, and resolve lines are relative to the current directory; every
+/// write path is under the project root. Plans only: nothing is created.
 fn plan_one(
     trimmed: &str,
     view: &BatchView,
-    root: &Path,
+    locator: &targets::Locator,
 ) -> std::result::Result<(Record, PathBuf), String> {
     let value: Value = serde_json::from_str(trimmed).map_err(|e| format!("invalid JSON: {e}"))?;
 
-    let (record, existing_target) = if value.get("body").is_some() && value.get("subject").is_some()
-    {
+    let record = if value.get("body").is_some() && value.get("subject").is_some() {
         let r: Record =
             serde_json::from_value(value).map_err(|e| format!("invalid record: {e}"))?;
-        (annotation::finalize_record(r), false)
+        annotation::finalize_record(r)
     } else {
         let obj = value
             .as_object()
             .ok_or_else(|| "stdin line must be a JSON object".to_string())?;
-        let (built, existing_target) =
-            match (obj.contains_key("reply"), obj.contains_key("resolve")) {
-                (true, true) => return Err("line has both 'reply' and 'resolve'".into()),
-                (true, false) => (build_reply_from_line(obj, view.files()), true),
-                (false, true) => (build_resolve_from_line(obj, view.files()), true),
-                (false, false) => (build_record_from_overrides(obj, view.files()), false),
-            };
-        (built.map_err(|e| e.to_string())?, existing_target)
+        let built = match (obj.contains_key("reply"), obj.contains_key("resolve")) {
+            (true, true) => return Err("line has both 'reply' and 'resolve'".into()),
+            (true, false) => build_reply_from_line(obj, view.files(), locator),
+            (false, true) => build_resolve_from_line(obj, view.files(), locator),
+            (false, false) => build_record_from_overrides(obj, view.files(), locator),
+        };
+        built.map_err(|e| e.to_string())?
     };
 
     if let Some(att) = record.as_annotation() {
@@ -417,12 +410,7 @@ fn plan_one(
         }
     }
 
-    let qual_path = if existing_target {
-        targets::resolve_existing_target_path(root, record.subject(), None)
-    } else {
-        qual_file::resolve_qual_path(record.subject(), None)
-    }
-    .map_err(|e| e.to_string())?;
+    let qual_path = locator.write_path(record.subject(), None);
 
     if record.supersedes().is_some() {
         targets::check_supersession(view.all_records(), &record).map_err(|e| e.to_string())?;
@@ -451,13 +439,17 @@ fn allow_superseded_field(obj: &Map<String, Value>) -> bool {
         .unwrap_or(false)
 }
 
-fn build_reply_from_line(obj: &Map<String, Value>, files: &[QualFile]) -> crate::Result<Record> {
+fn build_reply_from_line(
+    obj: &Map<String, Value>,
+    files: &[QualFile],
+    locator: &targets::Locator,
+) -> crate::Result<Record> {
     let target = str_field(obj, "reply")
         .ok_or_else(|| crate::Error::Validation("'reply' must be a target string".into()))?;
     let message = str_field(obj, "message")
         .ok_or_else(|| crate::Error::Validation("reply line missing 'message'".into()))?;
     let allow = allow_superseded_field(obj);
-    let target = targets::resolve_target(&target, files, allow)?;
+    let target = targets::resolve_target(&target, files, allow, locator)?;
     let supersedes = str_field(obj, "supersedes")
         .map(|v| targets::resolve_id_flag("supersedes", &v, files, allow))
         .transpose()?;
@@ -478,10 +470,14 @@ fn build_reply_from_line(obj: &Map<String, Value>, files: &[QualFile]) -> crate:
     Ok(Record::Annotation(Box::new(att)))
 }
 
-fn build_resolve_from_line(obj: &Map<String, Value>, files: &[QualFile]) -> crate::Result<Record> {
+fn build_resolve_from_line(
+    obj: &Map<String, Value>,
+    files: &[QualFile],
+    locator: &targets::Locator,
+) -> crate::Result<Record> {
     let target = str_field(obj, "resolve")
         .ok_or_else(|| crate::Error::Validation("'resolve' must be a target string".into()))?;
-    let target = targets::resolve_target(&target, files, allow_superseded_field(obj))?;
+    let target = targets::resolve_target(&target, files, allow_superseded_field(obj), locator)?;
     let att = resolve::build_resolve(
         &target,
         resolve::ResolveInput {
@@ -582,6 +578,7 @@ fn emit_batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Resul
 fn build_record_from_overrides(
     obj: &Map<String, Value>,
     files: &[QualFile],
+    locator: &targets::Locator,
 ) -> crate::Result<Record> {
     let kind_str = obj
         .get("kind")
@@ -596,7 +593,7 @@ fn build_record_from_overrides(
     let message = str_field(obj, "message")
         .ok_or_else(|| crate::Error::Validation("stdin object missing 'message'".into()))?;
 
-    let (subject, location_span) = annotation::parse_location(location);
+    let (subject, location_span) = locator.location(location)?;
 
     let mut span = match obj.get("span").and_then(|v| v.as_str()) {
         Some(s) => Some(annotation::parse_span(s).map_err(crate::Error::Validation)?),
@@ -604,7 +601,7 @@ fn build_record_from_overrides(
     };
 
     if let Some(ref mut s) = span
-        && let Some(hash) = content_hash::compute_span_hash(Path::new(&subject), s)
+        && let Some(hash) = content_hash::compute_span_hash(&locator.file(&subject), s)
     {
         s.content_hash = Some(hash);
     }

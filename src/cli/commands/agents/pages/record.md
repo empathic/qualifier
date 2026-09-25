@@ -41,6 +41,12 @@ qualifier record suggestion src/auth.rs "Replace inline regex with a named const
 cat findings.jsonl | qualifier record --stdin
 ```
 
+Locations are relative to the current directory; subjects are stored
+relative to the project root. From `src/net/`, `tcp.rs:42` records against
+`src/net/tcp.rs`, written to `src/net/.qual` under the project root. A
+location that leaves the project root is an error. The same rule applies to
+`location`, `reply`, and `resolve` values in `--stdin` batches.
+
 ## Flags worth knowing
 
 **`--span <SPAN>`** overrides any line range parsed from `<location>`. When
