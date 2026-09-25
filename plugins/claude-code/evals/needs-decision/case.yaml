@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: needs-decision
+context:
+  scaffold_script: ../_fixture/scaffold.sh
