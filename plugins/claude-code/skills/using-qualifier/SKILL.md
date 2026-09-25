@@ -63,8 +63,12 @@ brief, "principle N", "as discussed", or anything outside the repository.
 
 ## Mechanics
 
-- Target the live record. `reply` and `resolve` refuse superseded targets
-  and name the live one — retarget, don't reach for `--allow-superseded`.
+- Target the live record. `reply` and `resolve` refuse superseded or closed
+  targets and name the live record, or the `resolve` that closed it —
+  retarget to it. `--supersedes` and `--references` (on `record`, `reply`,
+  and batch lines) take the full 64-character ID of a live record, from
+  `qualifier threads --format json` (`root.id`) — never a prefix or
+  location.
 - More than two writes: one `record --stdin` batch, written to a file with
   the Write tool, dry-run first (`qualifier agents batch`).
 - Leave `--issuer` and `--issuer-type` unset; qualifier marks records from

@@ -37,12 +37,15 @@ when, tagged `status:needs-decision:<their issuer>`, so they confirm it.
 Once per session, confirm their identity: read `git config user.email` and
 ask "Record decisions as mailto:<email>?".
 
-Then reply with their decision under their identity:
+Then reply with their decision under their identity, using the thread's
+full `root.id`/`root.subject` (from `qualifier threads --format json`):
 
-`{"reply": "<id>", "message": "Decided: <the decision>", "detail": "<their words, verbatim>", "issuer": "mailto:<email>", "issuer_type": "human", "tags": ["status:decided"]}`
+`{"kind": "comment", "location": "<root.subject>", "references": "<root.id>", "message": "Decided: <the decision>", "detail": "<their words, verbatim>", "issuer": "mailto:<email>", "issuer_type": "human", "tags": ["status:decided"]}`
 
 The session tag is still added, which links the record to the session it
 was made in. If they decide `wontfix`, resolve with `--reason wontfix`
-under their identity in the same way.
+under their identity in the same way — this closes the thread. To later
+add context, reply to that closing `resolve` record; to reopen it, record
+a new non-reply record on the same subject that supersedes it.
 
 Next: `qual:triaging-threads` or `qual:planning-from-threads`.

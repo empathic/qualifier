@@ -43,16 +43,21 @@ committed by accident: Write tool → `<scratch>/triage.jsonl`, where
 real run.
 
 ```json
-{"resolve": "e52b00e4", "message": "cargo test net::retry passes; retry budget added in 4f1c2aa", "reason": "fixed", "ref": "git:4f1c2aa"}
-{"reply": "7c1d93aa", "message": "Resolution: move the lock into ConnPool::get (src/pool.rs:88) so callers can't forget it"}
+{"kind": "resolve", "location": "<root.subject>", "supersedes": "<root.id>", "message": "cargo test net::retry passes; retry budget added in 4f1c2aa", "tags": ["reason:fixed"], "ref": "git:4f1c2aa"}
+{"kind": "comment", "location": "<root.subject>", "references": "<root.id>", "message": "Resolution: move the lock into ConnPool::get (src/pool.rs:88) so callers can't forget it"}
 ```
+
+`supersedes` and `references` take the thread's full `root.id`, exactly as
+`qualifier threads --format json` gives it — no prefixes, no locations.
 
 A `fixed` close needs evidence in the message (a test that now passes, or a
 command and its output) and a `"ref"` naming the commit; commit the `.qual`
 change separately from the fix it references.
 
 If a target was superseded, the batch fails naming the live record —
-retarget to it.
+retarget to it. If it was already closed, the batch names the closing
+`resolve` record; comment by targeting that record instead, or reopen the
+thread with a new non-reply line whose `supersedes` is its ID.
 
 Next: `qual:escalating-decisions` for anything left needing a decision,
 then `qual:planning-from-threads`.

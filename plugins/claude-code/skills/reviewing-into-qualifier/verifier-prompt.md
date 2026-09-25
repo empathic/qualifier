@@ -2,7 +2,7 @@
 
 You are verifying these qualifier findings: `{IDS}`. For each, read its
 thread with `qualifier threads <id> --format json` (one thread per ID; read
-`root`) and check the claim against the current code.
+`root.id` and `root.subject`) and check the claim against the current code.
 
 ## Verdict per finding
 
@@ -12,10 +12,11 @@ thread with `qualifier threads <id> --format json` (one thread per ID; read
 
 Write one reply per finding in a single batch (Write tool → file, then
 `qualifier record --stdin --dry-run < <file>` and
-`qualifier record --stdin < <file>`):
+`qualifier record --stdin < <file>`). `location` and `references` come from
+the finding's own `root.subject`/`root.id` — full ID, no prefixes:
 
-`{"reply": "<id>", "message": "confirmed: <one line>", "detail": "<evidence>", "tags": ["verified"]}`
-`{"reply": "<id>", "message": "refuted: <one line>", "detail": "<evidence>", "tags": ["verified"]}`
+`{"kind": "comment", "location": "<root.subject>", "references": "<root.id>", "message": "confirmed: <one line>", "detail": "<evidence>", "tags": ["verified"]}`
+`{"kind": "comment", "location": "<root.subject>", "references": "<root.id>", "message": "refuted: <one line>", "detail": "<evidence>", "tags": ["verified"]}`
 
 Evidence must stand alone: repository paths and lines, not this brief. Do
 not resolve anything yourself — the reviewing session resolves findings

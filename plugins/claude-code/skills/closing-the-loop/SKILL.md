@@ -24,7 +24,8 @@ Run this checklist before you say the work is done.
    location, find its record with `qualifier threads <location> --format json`
    (the thread whose root span is that location) and read `root.id`.
    Re-anchor it on the new lines with
-   `qualifier record <kind> <path>:<start>:<end> "<same summary>" --supersedes <prefix>`,
+   `qualifier record <kind> <path>:<start>:<end> "<same summary>" --supersedes <root.id>`,
+   using that full ID from `threads --format json` — never a prefix,
    keeping the original kind, summary, `--detail`, and `--suggested-fix`
    exactly as they were, and passing every original tag again with `--tag`
    except `session:*` (the new session tag is added automatically) — a

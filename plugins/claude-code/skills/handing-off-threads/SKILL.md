@@ -25,14 +25,20 @@ do?
 
 ## Fix
 
-Rewrite your own records (`qualifier reply <target> "…" --supersedes <prefix>`
-or `record … --supersedes <prefix>`) that:
+Rewrite your own records (`qualifier reply <target> "…" --supersedes <id>`
+or `record … --supersedes <id>`, where `<id>` is the full 64-character ID
+of the live record from `qualifier threads --format json`) that:
 
 - cite a brief, a prompt, "principle N", "as discussed", or a path outside
   the repository;
 - cite record IDs that are now superseded — use the live ID;
 - leave a resolution vague ("fix the locking") instead of saying where and
   how.
+
+To comment on a thread this session closed, reply to the closing `resolve`
+record — the reply joins the thread, which stays closed. To reopen it,
+record a new non-reply record on the same subject whose `--supersedes` is
+the closing record's full ID.
 
 ## Confirm
 

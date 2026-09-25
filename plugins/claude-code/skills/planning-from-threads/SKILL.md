@@ -22,16 +22,18 @@ allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qual
 
 ## Record ordering constraints
 
-When thread B cannot land before thread A, reply on B:
+When thread B cannot land before thread A, reply on B as a batch line:
 
 ```json
-{"reply": "<B prefix>", "message": "Depends on <A prefix>: <one-line reason>", "tags": ["depends-on:<A's origin>"]}
+{"kind": "comment", "location": "<B's root.subject>", "references": "<B's root.id>", "message": "Depends on <A prefix>: <one-line reason>", "tags": ["depends-on:<A's origin>"]}
 ```
 
-Use A's `origin` (full ID), not `root.id`: the origin stays the same when
-A's root is edited or re-anchored, so the edge never points at a
-superseded record. A reply's `references` already points into B, so the
-tag carries the edge.
+`references` takes B's full `root.id`, exactly as
+`qualifier threads --format json` gives it — no prefixes, no locations.
+Use A's `origin` (full ID) in the tag, not `root.id`: the origin stays the
+same when A's root is edited or re-anchored, so the edge never points at a
+superseded record. The `references` field already points into B, so the
+tag carries the edge to A.
 List them with `qualifier threads --tag 'depends-on:*'`. The plan may repeat
 the dependency; the record is authoritative because it survives the plan
 document.
