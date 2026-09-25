@@ -249,6 +249,50 @@ ctx="$(printf '%s' "$out" | context_of)" || fail "control characters in the summ
 case "$ctx" in *"1 blocker"*) ;; *) fail "context lost the summary text: $ctx" ;; esac
 ok "hook strips control characters that would break the JSON"
 
+# --- skills ----------------------------------------------------------------
+
+python3 - "$PLUGIN" <<'PY' || fail "skill checks"
+import os, re, sys
+
+plugin = sys.argv[1]
+skills_dir = f"{plugin}/skills"
+expected = {
+    "using-qualifier", "recording-design-decisions", "planning-from-threads",
+    "consulting-threads", "closing-the-loop", "reviewing-into-qualifier",
+    "triaging-threads", "escalating-decisions", "handing-off-threads",
+}
+found = {d for d in os.listdir(skills_dir) if os.path.isdir(f"{skills_dir}/{d}")}
+assert found == expected, f"skill set mismatch: missing {expected - found}, extra {found - expected}"
+
+topics = {f[:-3] for f in os.listdir("src/cli/commands/agents/pages") if f.endswith(".md")}
+
+for name in sorted(expected):
+    path = f"{skills_dir}/{name}/SKILL.md"
+    text = open(path).read()
+    m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
+    assert m, f"{path}: missing frontmatter"
+    front, body = m.group(1), m.group(2)
+    fields = dict(line.split(": ", 1) for line in front.splitlines() if ": " in line)
+    assert fields.get("name") == name, f"{path}: name must be {name!r}"
+    assert fields.get("description", "").startswith("Use "), f"{path}: description must start with 'Use '"
+    tools = fields.get("allowed-tools", "")
+    for rule in ("Bash(qualifier:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)"):
+        assert rule in tools, f"{path}: allowed-tools must include {rule}"
+    for topic in re.findall(r"qualifier agents ([a-z_-]+)", body):
+        assert topic in topics, f"{path}: cites missing agents topic {topic!r}"
+    for ref in re.findall(r"qual:([a-z-]+)", body):
+        assert ref in expected, f"{path}: references unknown skill qual:{ref}"
+    for support in re.findall(r"`([a-z-]+-prompt\.md)`", body):
+        assert os.path.exists(f"{skills_dir}/{name}/{support}"), f"{path}: missing {support}"
+    assert not re.search(r"\bTBD\b|(?<!\$)\{[A-Z_ ]+\}", body), f"{path}: placeholder text"
+
+bootstrap = open(f"{skills_dir}/using-qualifier/SKILL.md").read()
+assert len(bootstrap) < 8000, f"using-qualifier is {len(bootstrap)} chars; keep it under 8000 (hook context cap)"
+for name in expected - {"using-qualifier"}:
+    assert f"qual:{name}" in bootstrap, f"using-qualifier must map qual:{name}"
+PY
+ok "skills: frontmatter, cited topics, cross-references, supporting files, size"
+
 # --- stubbed download ---
 # The download tests run a copy of the wrapper pinned to a fixture release
 # (version 9.9.9 and the fixture's checksum), served by a curl stub.
