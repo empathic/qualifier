@@ -5,6 +5,73 @@ All notable changes to this project are documented here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (with
 the pre-1.0 caveat that any breaking change bumps the minor version).
 
+## [0.8.0] — unreleased
+
+### Added
+
+- Write commands read `QUALIFIER_ISSUER`, `QUALIFIER_ISSUER_TYPE`, and
+  `QUALIFIER_SESSION`, and detect Claude Code (`CLAUDECODE=1`): records
+  written there default to `issuer_type: ai` and carry the tag
+  `session:claude-code:<session id>`. Explicit flags still win.
+- `resolve --reason <fixed|wontfix|duplicate|invalid|obsolete>` adds the
+  tag `reason:<value>`.
+- **`qualifier threads`** lists conversations across the project (root,
+  live replies, open/closed) with location, glob, span, record-ID, kind,
+  tag, and issuer-type filters, and JSON output. Path and span filters
+  also match threads on the path's ancestor directories, and a span filter
+  matches span-less threads on the same file; an ID prefix selects the
+  thread containing that record in any role; under `--all`, `--tag` also
+  matches the closing resolve.
+- `threads --status`, `--changed-since <ref>`, and `--summary` (a
+  two-line digest for session-start hooks).
+- `qualifier agents conventions` and `qualifier agents batch`.
+
+### Fixed
+
+- `record --stdin` detects the VCS issuer once per run instead of once per
+  line.
+
+### Changed
+
+- `show` marks records whose issuer type is not `human`, e.g. `alex (ai)`.
+- **`reply` and `resolve` refuse superseded and closed targets.** A target
+  that has been superseded fails, naming the live record at the tip of its
+  chain. A target whose chain ends in a `resolve` fails as closed, naming
+  the closing record: reply to that record to comment on the closed
+  thread, or record a new record that supersedes it to reopen the thread.
+- `record --stdin` without `--continue-on-error` is all-or-nothing: every
+  line is validated first, every failing line is reported, and nothing is
+  written if any line fails. Previously lines before the first failure
+  were written.
+- **`supersedes`/`references` pointers must name a live record by full
+  ID.** `record --supersedes`/`--references`, `reply --supersedes`, and
+  the `supersedes`/`references` keys on `record --stdin` overrides lines
+  take the full 64-character ID of a record that exists (for batch lines,
+  on disk or on an earlier line) and is neither superseded nor closed.
+  Previously the value was stored verbatim.
+- Every `resolve` the CLI writes (`record resolve`, a `kind: "resolve"`
+  line in `record --stdin`, `reply --kind resolve`, `resolve`) carries at
+  most one `reason:*` tag, from the same vocabulary as `resolve --reason`.
+- Commands now discover the whole project when run from a subdirectory,
+  not just that subdirectory's `.qual` files.
+- **Locations are relative to the current directory; subjects are stored
+  relative to the project root.** `record` (single and `--stdin`
+  `location` values), `reply`/`resolve` location targets, `threads`
+  filters, and the `show`, `praise`, and `compact`
+  artifacts join the argument to the current directory's path below the
+  project root and normalize it; an argument that leaves the project root
+  is an error. Every write lands in a `.qual` file under the project root;
+  `--file` still resolves relative to the current directory. From `src/`,
+  `record concern foo.rs …` now stores subject `src/foo.rs` in
+  `src/.qual` (previously `foo.rs` in `src/.qual`), and a repo-relative
+  path given from a subdirectory no longer creates a nested `.qual` tree.
+- A location target for `reply`/`resolve` never resolves to a `resolve`
+  record.
+- `record --stdin --dry-run` no longer creates directories.
+- `record --stdin` rejects `--file` instead of silently ignoring it.
+- An ambiguous ID prefix lists the candidates, one
+  `[id8] kind location "summary"` line each.
+
 ## [0.7.0] — unreleased
 
 ### Added

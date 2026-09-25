@@ -31,10 +31,9 @@ qualifier reply a1b2c3d4 "Confirmed — also affects the logout path"
 # Reply to the most-recent active annotation at a location
 qualifier reply src/auth.rs:42 "Fixed in PR #88 but needs backport to v2"
 
-# Reply with a suggested fix and ai issuer-type
+# Reply with a suggested fix
 qualifier reply a1b2c3d4 "Here is a safer pattern" \
-  --suggested-fix "Use constant-time comparison: crypto.timingSafeEqual(a, b)" \
-  --issuer-type ai
+  --suggested-fix "Use constant-time comparison: crypto.timingSafeEqual(a, b)"
 
 # Reply with a non-default kind
 qualifier reply src/auth.rs "This is intentional per security policy" \
@@ -44,7 +43,10 @@ qualifier reply src/auth.rs "This is intentional per security policy" \
 ## Flags worth knowing
 
 **`<target>`** accepts either an id-prefix (at least 4 hex characters) or a
-location string like `src/auth.rs` or `src/auth.rs:42`. The id-prefix form
+location string like `src/auth.rs` or `src/auth.rs:42`. Locations are
+relative to the current directory; subjects are stored relative to the
+project root, and the reply is written under the project root next to the
+target's history. The id-prefix form
 matches any record in the project whose ID starts with those characters — if
 more than one record matches, the command fails with a list of candidates so
 you can narrow it. The location form resolves to the most-recent active record
@@ -55,6 +57,12 @@ also fails with a disambiguation list.
 kind (`concern`, `suggestion`, `waiver`, etc.) or custom string is accepted.
 This lets a reply carry semantic weight — for example, a `waiver` reply is
 meaningful to tools that consume the annotation graph.
+
+**`--supersedes <ID>`** replaces an earlier reply. It takes that reply's
+full 64-character ID (no prefix), and the reply must still be live.
+Get full IDs from `qualifier threads --format json` (`root.id`,
+`closed_by.id`), `qualifier show --format json`, or the `id:` line that
+`record`/`reply`/`resolve` print.
 
 **`--format json`** prints the emitted record as JSON on stdout, which is
 useful when you need to capture the new record's ID for a subsequent
@@ -68,6 +76,18 @@ useful when you need to capture the new record's ID for a subsequent
 - Location resolution only considers **active** records (those not superseded
   by a later annotation). If the record at a location has already been
   resolved, the location will return "no active record" rather than the
-  resolved one. Use an id-prefix instead if you need to target a closed record.
+  resolved one.
 - The minimum id-prefix length is 4 characters. Passing 3 or fewer produces a
   validation error.
+
+## Superseded targets
+
+If the target has been superseded, the command fails and names the live
+record — reply to that one instead. If the target was resolved, the command
+reports it as closed and prints the full ID of the `resolve` record that
+closed it. To comment on the closed thread, reply to that `resolve` record;
+the reply joins the thread, which stays closed. To reopen the thread,
+record a new record on the same subject that supersedes the `resolve`
+record (`qualifier record <kind> <location> "…" --supersedes
+<resolve-id>`, with the full ID from the error or from `closed_by.id` in
+`qualifier threads --all --format json`).

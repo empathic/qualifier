@@ -16,10 +16,11 @@ after future edits, and `--suggested-fix` if you know what to do.
 qualifier record concern src/auth.rs:42:58 \
   "Token validation skips expiry check when issuer is internal" \
   --suggested-fix "Check exp claim unconditionally; remove the issuer shortcut" \
-  --tag security \
-  --issuer "mailto:review-agent@example.com" \
-  --issuer-type ai
+  --tag security
 ```
+
+Leave `--issuer` and `--issuer-type` unset; see `qualifier agents concepts`
+for defaults (`QUALIFIER_*` variables, agent-harness detection).
 
 The CLI writes to `src/.qual` (or `src/auth.rs.qual` if it exists), prints
 the new record's id, and exits zero. Use `qualifier show src/auth.rs` to
@@ -38,15 +39,11 @@ conversation together.
 ```bash
 # The original concern has id starting with a1b2c3d4
 qualifier reply a1b2 \
-  "Root cause: the issuer allow-list is populated from an env var that CI never sets" \
-  --issuer "mailto:review-agent@example.com" \
-  --issuer-type ai
+  "Root cause: the issuer allow-list is populated from an env var that CI never sets"
 
 # Or target by location if you know the span
 qualifier reply src/auth.rs:42 \
-  "Root cause: the issuer allow-list is populated from an env var that CI never sets" \
-  --issuer "mailto:review-agent@example.com" \
-  --issuer-type ai
+  "Root cause: the issuer allow-list is populated from an env var that CI never sets"
 ```
 
 The id-prefix form matches by prefix. The location form resolves to the most-recent active record at that location.
@@ -115,3 +112,18 @@ Compaction is always explicit and user-initiated; it never happens silently.
 Records of unrecognized types are preserved unchanged. After compaction the
 file is still valid JSONL — no special reader support is needed. VCS history
 retains the full pre-compaction records if you need to trace back.
+
+## Triage open threads
+
+```bash
+qualifier threads --format json > /tmp/open.json        # the worklist
+# check each root's claim against the code, then write one batch
+# (replies and resolves point at each root's full `id`; see `qualifier agents batch`):
+qualifier record --stdin --dry-run < /tmp/triage.jsonl
+qualifier record --stdin < /tmp/triage.jsonl
+qualifier threads --status needs-decision               # what's left for a human
+```
+
+Close only what close authority allows (`qualifier agents conventions`);
+propose other closes to a human as one list, with a reason and one line of
+evidence each.

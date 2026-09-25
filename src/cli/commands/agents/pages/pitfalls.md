@@ -39,13 +39,15 @@ since = "0.5.0"
   Prefer `concern` for non-blocking bugs and `blocker` for must-fix issues;
   reserve custom kinds for genuinely domain-specific signals.
 
-- **Resolving annotations the user has not directed you to close.**
-  `qualifier resolve` *closes* a record — the original concern is hidden
-  from `qualifier show`, `qualifier ls`, and other active views. An agent
-  resolving an annotation it does not fully understand silently buries a
-  concern the user may still want to act on. Resolution is a user
-  decision: surface the annotation (e.g., with `qualifier show`) and let
-  the user decide whether it is addressed.
+- **Resolving annotations you were not directed to close.**
+  `qualifier resolve` closes a record and hides it from active views, so
+  resolving one you don't fully understand buries a concern the user may
+  still want. Resolve only (a) records your own session wrote — with a
+  message citing why (the refuting reply's ID, or the evidence itself); no
+  commit ref needed — or (b) threads your own commit fixed, and only with
+  evidence in the message (a test that now passes, or a command and its
+  output) and `--ref git:<sha>`. Otherwise reply with what you found and
+  let the user close it.
 
 - **Adding positive annotations the user did not ask for.**
   An agent volunteering `praise`, `pass`, or other positive-polarity
@@ -62,5 +64,17 @@ since = "0.5.0"
   email address like `agent@example.com` will fail. Wrap it:
   `--issuer "mailto:agent@example.com"`. If your agent has an HTTP identity,
   use that directly: `--issuer "https://agents.example.com/review-bot"`.
+
+- **Replying to a superseded record.**
+  A re-recorded annotation supersedes the old one, and replies to the old ID
+  attach to a dead record that never shows on the live thread. `reply` and
+  `resolve` refuse superseded targets and name the live record: retarget to
+  it. A closed record is refused too, with the `resolve` that closed it
+  named: to comment on the closed thread, reply to that closing record.
+
+- **Citing context outside the repository.**
+  "Breaks principle 3" or "as the brief says" means nothing to the next
+  reader: the brief lived in your session. Cite the repository doc and line
+  (`docs/architecture.md:40`) or restate the principle in the record.
 
 <!-- Add new pitfalls here as we observe them. -->

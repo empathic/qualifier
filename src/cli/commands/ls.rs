@@ -1,8 +1,7 @@
 use clap::Args as ClapArgs;
 use std::collections::BTreeMap;
-use std::path::Path;
 
-use crate::qual_file::{self, find_project_root};
+use crate::cli::targets;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -24,9 +23,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
-    let root = find_project_root(Path::new("."));
-    let discover_root = root.as_deref().unwrap_or(Path::new("."));
-    let qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
+    let qual_files = targets::discover_project(!args.no_ignore)?;
 
     // Group records by subject and count by kind.
     let mut by_subject: BTreeMap<String, Vec<String>> = BTreeMap::new();

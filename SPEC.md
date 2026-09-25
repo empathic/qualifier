@@ -1,6 +1,6 @@
 # Qualifier Specification
 
-**Version:** 0.4.2
+**Version:** 0.5.0
 **Status:** Draft
 **Authors:** Alex Kesling
 
@@ -565,6 +565,19 @@ to a reply is a valid thread.
 After the resolve, the original concern's `-10` is withdrawn from scoring.
 The reply remains visible in the thread for context.
 
+### 2.12 Reserved Tag Namespaces
+
+Tags are free-form, but these prefixes carry meaning that tools interpret.
+A tag in a reserved namespace must follow its rule.
+
+| namespace | form | meaning |
+|---|---|---|
+| `status:` | `status:needs-decision[:<issuer>]`, `status:decided`, `status:deferred` | Workflow state of a thread. A thread's status is its latest `status:*` tag by `created_at`, over the root and live replies. An `:<issuer>` suffix addresses a decision to someone. |
+| `reason:` | `reason:fixed`, `reason:wontfix`, `reason:duplicate`, `reason:invalid`, `reason:obsolete` | Why a `resolve` closed its target. At most one per record. |
+| `session:` | `session:<harness>:<id>` | The agent session whose reasoning produced the record. A pointer for readers who have the transcript; the record must stand alone without it. |
+| `revisit:` | `revisit:<condition>` | On an `alternative` annotation: the observable condition under which to reconsider the option. |
+| `depends-on:` | `depends-on:<record id>` | On a reply in a thread: the thread cannot land before the thread whose `origin` (§7, `qualifier::threads`) has this full ID. The origin, unlike the root, is stable when the root is edited or re-anchored. |
+
 ## 3. Record Type Specifications
 
 ### 3.1 Annotation (`type: "annotation"`)
@@ -875,6 +888,16 @@ SARIF v2.1.0 results can be converted to qualifier annotations:
 The CLI binary is named `qualifier`. Writes go through four verbs:
 `record`, `reply`, `resolve`, and `emit`.
 
+**Locations are relative to the current directory; subjects are stored
+relative to the project root** (§10). Every location or artifact argument
+— `record <location>`, batch `location`/`reply`/`resolve` values,
+`reply`/`resolve` targets, `threads` filters, and the `show`, `praise`, and
+`compact` artifacts — is joined to the current directory's path below the
+project root and normalized (`.` and `..` folded, `/` separators, the root
+itself is `.`). An argument that leaves the project root is an error. Every
+write lands in a `.qual` file under the project root, laid out as in
+§2.10; an explicit `--file` path stays relative to the current directory.
+
 ### 6.1 Core Commands
 
 **Write commands:**
@@ -890,6 +913,7 @@ qualifier emit <type> <subject> --body '<JSON>' Emit a raw record of any type
 
 ```
 qualifier show <artifact>                 Show annotations for an artifact
+qualifier threads [location...]           List conversation threads
 qualifier ls [--kind <k>]                 List subjects by kind
 qualifier praise <artifact>               Show who annotated an artifact and why
                                           (also available as the `blame` alias)
@@ -929,6 +953,21 @@ qualifier record concern src/parser.rs:42:58 "Panics on malformed input" \
 `--file PATH`, `--span SPEC` (overrides any span in `<location>`),
 `--supersedes ID`, `--references ID`, `--stdin` (batch JSONL).
 
+`--supersedes` and `--references` each take the full ID (64 lowercase hex
+characters) of a record that exists in the project and is live: not
+superseded, and not closed by a `resolve`. A prefix or location is
+rejected. A superseded target fails, printing the full ID of the live
+record at the tip of its chain; a closed target fails, printing the full ID
+of the closing `resolve` record. Full IDs are available from
+`qualifier threads --format json` (`root.id`, `closed_by.id`),
+`qualifier show --format json`, or the `id:` line that
+`record`/`reply`/`resolve` print.
+
+A record of kind `resolve` carries at most one `reason:*` tag, and its
+value must be one of the `resolve --reason` values (§6.4). The CLI rejects
+anything else on every `resolve` it writes: `record resolve …`, a
+`"kind":"resolve"` batch line, `reply --kind resolve`, and `resolve`.
+
 **Defaults:**
 
 - When `--issuer` is omitted, defaults to the VCS user identity (see §8.4).
@@ -957,12 +996,43 @@ the same forms plus column granularity:
 
 #### 6.2.2 Batch Mode
 
-`qualifier record --stdin` reads JSONL from stdin. Each line is one of:
+`qualifier record --stdin` reads JSONL from stdin. Each line describes one
+new record and is one of:
 
 - An overrides object: `{"kind":"...","location":"...","message":"...", ...}`
   with optional `detail`, `ref`, `tags`, `issuer`, `issuer_type`,
-  `span`, `supersedes`, `references`, `suggested_fix`.
-- A complete record (envelope + body), accepted for forward-compat.
+  `span`, `supersedes`, `references`, `suggested_fix`. `location` is
+  required.
+- A complete record (envelope + body), accepted for forward-compat. Its
+  pointers are stored as given.
+
+There are no reply or resolve line shapes. A reply is an overrides line
+whose `references` is the target's ID; a resolve is an overrides line with
+`"kind":"resolve"` whose `supersedes` is the target's ID:
+
+```
+{"kind":"comment","location":"src/auth.rs","references":"<id>","message":"Confirmed"}
+{"kind":"resolve","location":"src/auth.rs","supersedes":"<id>","message":"Fixed","tags":["reason:fixed"]}
+```
+
+`supersedes` and `references` on an overrides line follow the same rule as
+the `--supersedes`/`--references` flags: the full ID of a live record,
+which may be on disk or on an earlier line of the same batch. Only
+complete-envelope lines have IDs known in advance (an overrides line is
+stamped with the time it is planned), so in practice an in-batch pointer
+names an envelope line. A
+`"kind":"resolve"` line follows the `reason:*` tag rule above. `--file` is
+rejected with `--stdin`.
+
+Without `--continue-on-error`, batch mode is all-or-nothing with respect to
+parse and validation failures: every line is parsed and validated before
+any record is written, every failing line is reported, and nothing is
+written if any line fails that way. This guarantee does not cover I/O
+failures while writing: if appending a planned record to disk fails
+partway through (e.g., the filesystem fills up), the lines written before
+the failure stay written; the error message reports how many. Pass
+`--continue-on-error` to collect every parse/validation error, write the
+lines that succeeded, and exit non-zero if any line failed.
 
 ### 6.3 `qualifier reply`
 
@@ -975,13 +1045,25 @@ Sugar over "kind=comment + references=`<target-id>`". The default kind is
 
 `<target>` is either:
 
-- An **id-prefix** (≥ 4 characters), or
+- An **id-prefix** (≥ 4 characters). A prefix matching more than one
+  record exits non-zero with the same disambiguation list, one
+  `[id-prefix] kind location "summary"` line per candidate; or
 - A **`<location>`** (e.g., `src/auth.rs:42`). A location resolves to the
-  most-recent active record at that subject and span. If multiple active
+  most-recent active record at that subject and span; a `resolve` record is
+  never a location target. If multiple active
   records share the most-recent timestamp, exit non-zero with a
   disambiguation list of `[id-prefix] kind L<line> "summary"`.
 
-Same body flags as `qualifier record`.
+A target that has been superseded is rejected; the error prints the full
+ID of the live record at the tip of its supersession chain. A target whose
+chain ends in a `resolve` is rejected as closed; the error prints the full
+ID of the closing `resolve` record. To comment on a closed thread, reply to that `resolve` record: the
+reply joins the thread (§6.12), which stays closed. To reopen the thread,
+record a new non-reply record on the same subject that supersedes the
+`resolve` record; it becomes the thread's root.
+
+Same body flags as `qualifier record`. `--supersedes` (for editing an
+earlier reply) takes a full, live record ID, as in §6.2.
 
 ### 6.4 `qualifier resolve`
 
@@ -991,7 +1073,15 @@ qualifier resolve <target> [message]
 
 Sugar over "kind=resolve + supersedes=`<target-id>`". `<target>` follows
 the same id-prefix-or-location rules as `qualifier reply`. The default
-summary is "Resolved" when `[message]` is omitted.
+summary is "Resolved" when `[message]` is omitted. Superseded and closed
+targets are rejected as for `reply`; resolving an already-closed record
+fails, naming the closing record.
+
+`--reason fixed|wontfix|duplicate|invalid|obsolete` adds the tag
+`reason:<value>`. A resolve carries at most one `reason:*` tag, and its
+value must be one of these; the CLI rejects anything else on every
+`resolve` it writes (§6.2). It is a tag convention (§2.12), not a body
+field.
 
 ### 6.5 `qualifier emit`
 
@@ -1053,6 +1143,8 @@ qualifier show src/parser.rs
 
 When annotations have spans, the line range is displayed. Use
 `--line <n>` to filter to annotations overlapping a specific line.
+
+Human output shows the issuer type after the issuer name when it is set and not `human` (e.g. `alex (ai)`).
 
 `--all` shows all records including resolved/superseded ones (default hides
 them). `--pretty` forces colored output when piped.
@@ -1131,6 +1223,49 @@ the underlying VCS blame command for the subject's `.qual` file.
 qualifier praise src/parser.rs
 qualifier praise src/parser.rs --vcs
 ```
+
+### 6.12 `qualifier threads`
+
+```
+qualifier threads [LOCATION|ID...] [--all] [--kind K[,K]] [--tag T]
+                  [--issuer-type TYPE] [--status needs-decision|decided|deferred]
+                  [--changed-since REF] [--summary]
+                  [--format human|json] [--no-ignore]
+```
+
+Lists threads as defined in §7 (`qualifier::threads`). By default only
+open threads and live replies are shown; `--all` adds closed threads and
+superseded replies. Each argument filters by location or record ID, and a
+thread matching any argument is listed:
+
+- A path or directory matches roots on that subject, below it, or on one
+  of its ancestor directories (a directory subject that is a proper,
+  `/`-bounded prefix of the path: `src/net` and `src` for
+  `src/net/tcp.rs`, never `src/ne`).
+- `path:start[:end]` matches roots on that file whose span overlaps, roots
+  on that file with no span, and roots on its ancestor directories.
+- A glob (`*` does not cross `/`) matches root subjects.
+- An argument of four or more hex characters (and so no `/`, `.`, or `:`)
+  is an ID prefix, matching threads that contain a record whose ID starts
+  with it — root, origin, history, replies, or `closed_by`. Write `./cafe`
+  to filter on a directory whose name is all hex.
+
+`--tag` matches tags on the root, a live reply, or — under `--all` — the
+`closed_by` resolve; `ns:*` matches a namespace; repeated `--tag` flags
+must all match. JSON output is a single
+array of `{origin, open, root, closed_by, history, replies: [{active,
+record}], latest_at}` with full IDs.
+
+`--status needs-decision|decided|deferred` matches the thread's latest
+`status:*` tag by `created_at` (an addressee suffix such as
+`status:needs-decision:<issuer>` still matches). `--changed-since REF`
+keeps threads whose root subject changed between the merge base of HEAD
+and REF and the working tree, including untracked files (git only).
+`--summary` prints at most two lines — open blockers and concerns on files
+changed since `main` (or `master`, or the `--changed-since` ref), and
+threads waiting on a decision — and nothing when both counts are zero.
+On the base branch, or outside git, the first line counts project-wide and
+ends with `(project-wide)`.
 
 ## 7. Library API
 
@@ -1254,7 +1389,31 @@ pub struct CompactResult { pub before: usize, pub after: usize, pub pruned: usiz
 pub fn filter_superseded(records: &[Record]) -> Vec<&Record>;
 pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult);
 pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult);
+
+// qualifier::threads — group annotations into conversations
+pub struct Thread<'a> {
+    pub origin: &'a str,                 // oldest record in the root chain
+    pub root: &'a Record,                // open: newest non-resolve tip; closed: closed_by's target, else newest non-resolve
+    pub closed_by: Option<&'a Record>,   // the closing resolve, if any
+    pub replies: Vec<ThreadEntry<'a>>,   // records outside the root chain, oldest first
+    pub history: Vec<&'a Record>,        // superseded root-chain records, oldest first
+    pub open: bool,
+    pub latest_at: DateTime<Utc>,
+}
+pub struct ThreadEntry<'a> { pub record: &'a Record, pub active: bool }
+pub fn build_threads(records: &[Record]) -> Vec<Thread<'_>>;
 ```
+
+A thread starts at an origin annotation. Records join it through
+`references` (replies) or `supersedes` (edits and resolutions). The root
+chain is the origin plus the non-reply records that supersede it in turn.
+A chain member no other chain member supersedes is a tip (a chain can fork
+into more than one). If any tip is not a `resolve`, the thread is open and
+its root is the newest such tip; otherwise the thread is closed by the
+newest resolve tip, and the root is the non-resolve chain member that
+resolve targets, falling back to the newest non-resolve chain member.
+Resolving a reply does not close the thread. `history` holds the root
+chain's other members, oldest first. Non-annotation records are ignored.
 
 The library is the source of truth. The CLI is a thin wrapper around it.
 
@@ -1293,11 +1452,20 @@ Delegates to the underlying VCS blame/annotate command:
 
 ### 8.4 Issuer Defaults
 
-When `--issuer` is omitted:
+Each value resolves in order: explicit flag, `QUALIFIER_*` environment
+variable, detected agent harness, then the fallback below. Empty variables
+count as unset.
 
-- Git: `git config user.email`
-- Mercurial: `hg config ui.username`
-- Fallback: `mailto:$USER@localhost`
+| value | flag | variable | harness (Claude Code: `CLAUDECODE=1`) | fallback |
+|---|---|---|---|---|
+| issuer | `--issuer` | `QUALIFIER_ISSUER` | — | `git config user.email`, then `hg config ui.username`, then `mailto:$USER@localhost` |
+| issuer type | `--issuer-type` | `QUALIFIER_ISSUER_TYPE` | `ai` | none |
+| session tag | — | `QUALIFIER_SESSION` | `claude-code:$CLAUDE_CODE_SESSION_ID` | none |
+
+When a session is known, `record`, `reply`, and `resolve` add the tag
+`session:<value>`. `emit` applies the issuer defaults but writes bodies
+verbatim. A human running `qualifier` inside an agent harness is detected
+as the agent; pass `--issuer-type human` to override.
 
 ## 9. Agent Integration
 
@@ -1306,7 +1474,10 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
 - **Structured output:** `--format json` on `show` and `ls` commands.
 - **Batch annotation:** `qualifier record --stdin` reads JSONL from stdin
   (overrides objects or full records). For non-annotation record types,
-  `qualifier emit --stdin` accepts complete records.
+  `qualifier emit --stdin` accepts complete records. A batch reply or
+  resolve is a record line whose `references` or `supersedes` is the
+  target's full ID (from `qualifier threads --format json`); without
+  `--continue-on-error` a batch writes nothing unless every line validates.
 - **Suggested fixes:** The `suggested_fix` body field gives agents a concrete
   action to take.
 - **Span precision:** The `span` body field lets agents target specific line
@@ -1315,9 +1486,19 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
   agents a worklist of issues to address.
 - **Continuous interaction:** `qualifier reply <id> <message>` lets agents
   respond to human signals with threaded follow-ups. `qualifier resolve <id>`
-  lets agents close issues after fixes are applied.
+  closes a thread; an agent resolves only within close authority
+  (`qualifier agents conventions`) and otherwise replies and leaves the
+  close to a human.
 - **Threading:** The `references` field enables agents to thread follow-up
   observations to prior signals, creating navigable conversation histories.
+- **Thread queries:** `qualifier threads --format json` lists every open
+  thread with its live replies; `--status needs-decision` lists threads
+  waiting on a human.
+- **Provenance:** records written inside a detected agent harness default to
+  `issuer_type: ai` and carry a `session:` tag (§8.4).
+- **Conventions:** `qualifier agents conventions` defines the `status:`,
+  `reason:`, `session:`, `revisit:`, and `depends-on:` tag vocabulary and
+  close authority.
 
 ## 10. File Discovery
 

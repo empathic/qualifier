@@ -2,10 +2,102 @@ use chrono::Utc;
 use clap::Args as ClapArgs;
 use std::path::Path;
 
-use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
-use crate::cli::commands::record::{detect_issuer, normalize_issuer_uri};
-use crate::cli::commands::reply;
-use crate::qual_file;
+use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record};
+use crate::cli::provenance;
+use crate::cli::targets;
+
+/// Close reasons accepted by `--reason`; each becomes the tag `reason:<value>`.
+pub const CLOSE_REASONS: &[&str] = &["fixed", "wontfix", "duplicate", "invalid", "obsolete"];
+
+/// Add `reason:<reason>` to `tags` unless present. Rejects unknown reasons,
+/// a `reason:*` tag that conflicts with `reason`, and more than one
+/// `reason:*` tag.
+pub(crate) fn with_reason(
+    mut tags: Vec<String>,
+    reason: Option<&str>,
+) -> crate::Result<Vec<String>> {
+    if let Some(r) = reason {
+        if !CLOSE_REASONS.contains(&r) {
+            return Err(crate::Error::Validation(format!(
+                "unknown close reason '{r}' (expected one of: {})",
+                CLOSE_REASONS.join(", ")
+            )));
+        }
+        let tag = format!("reason:{r}");
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    let reasons: Vec<&str> = tags
+        .iter()
+        .filter_map(|t| t.strip_prefix("reason:"))
+        .collect();
+    if reasons.len() > 1 {
+        return Err(crate::Error::Validation(format!(
+            "a resolve takes one reason; got reason:{}",
+            reasons.join(", reason:")
+        )));
+    }
+    if let Some(r) = reasons.first()
+        && !CLOSE_REASONS.contains(r)
+    {
+        return Err(crate::Error::Validation(format!(
+            "unknown close reason '{r}' (expected one of: {})",
+            CLOSE_REASONS.join(", ")
+        )));
+    }
+    Ok(tags)
+}
+
+/// For a record of kind `resolve`, check that `tags` carry at most one
+/// `reason:*` tag from [`CLOSE_REASONS`]; other kinds pass unchanged.
+pub(crate) fn checked_reason_tags(kind: &Kind, tags: Vec<String>) -> crate::Result<Vec<String>> {
+    if *kind == Kind::Resolve {
+        with_reason(tags, None)
+    } else {
+        Ok(tags)
+    }
+}
+
+/// Inputs for a resolve after target resolution.
+pub(crate) struct ResolveInput {
+    pub message: Option<String>,
+    pub reason: Option<String>,
+    pub tags: Vec<String>,
+    pub issuer: Option<String>,
+    pub issuer_type: Option<String>,
+    pub r#ref: Option<String>,
+}
+
+/// Build a validated `resolve` annotation superseding `target`.
+pub(crate) fn build_resolve(target: &Record, input: ResolveInput) -> crate::Result<Annotation> {
+    let tags = with_reason(input.tags, input.reason.as_deref())?;
+    let att = annotation::finalize(Annotation {
+        metabox: "1".into(),
+        record_type: "annotation".into(),
+        subject: target.subject().to_string(),
+        issuer: provenance::issuer(input.issuer.as_deref()),
+        issuer_type: provenance::issuer_type(input.issuer_type.as_deref())?,
+        created_at: Utc::now(),
+        id: String::new(),
+        body: AnnotationBody {
+            detail: None,
+            kind: Kind::Resolve,
+            r#ref: input.r#ref,
+            references: None,
+            span: None,
+            suggested_fix: None,
+            summary: input.message.unwrap_or_else(|| "Resolved".into()),
+            supersedes: Some(target.id().to_string()),
+            tags: provenance::with_session_tag(tags),
+        },
+    });
+    let errors = annotation::validate(&att);
+    if !errors.is_empty() {
+        return Err(crate::Error::Validation(errors.join("; ")));
+    }
+    Ok(att)
+}
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -17,11 +109,11 @@ pub struct Args {
     /// Resolution message (defaults to "Resolved")
     pub message: Option<String>,
 
-    /// Issuer identity URI (defaults to VCS user email with mailto:)
+    /// Issuer identity URI (defaults to QUALIFIER_ISSUER, then detected agent harness, then VCS user email)
     #[arg(long)]
     pub issuer: Option<String>,
 
-    /// Issuer type (human, ai, tool, unknown)
+    /// Issuer type: human, ai, tool, unknown (defaults to QUALIFIER_ISSUER_TYPE, then detected agent harness)
     #[arg(long)]
     pub issuer_type: Option<String>,
 
@@ -40,79 +132,41 @@ pub struct Args {
     /// Classification tags (repeatable)
     #[arg(long = "tag")]
     pub tags: Vec<String>,
+
+    /// Why the record is closed: fixed, wontfix, duplicate, invalid, or
+    /// obsolete. Adds the tag `reason:<value>`.
+    #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(CLOSE_REASONS.iter().copied()))]
+    pub reason: Option<String>,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
-    let root = qual_file::find_project_root(Path::new("."));
-    let discover_root = root.as_deref().unwrap_or(Path::new("."));
-    let all_qual_files = qual_file::discover(discover_root, true)?;
+    let locator = targets::Locator::from_cwd()?;
+    let all_qual_files = targets::discover_project(true)?;
+    let target = targets::resolve_target(&args.target, &all_qual_files, &locator)?;
 
-    let target = reply::resolve_target(&args.target, &all_qual_files)?;
-    let subject = target.subject().to_string();
-    let target_id = target.id().to_string();
-
-    let message = args.message.unwrap_or_else(|| "Resolved".into());
-
-    let issuer = normalize_issuer_uri(
-        args.issuer
-            .or_else(detect_issuer)
-            .unwrap_or_else(|| "mailto:unknown@localhost".into()),
-    );
-
-    let issuer_type = match &args.issuer_type {
-        Some(s) => Some(s.parse::<IssuerType>().map_err(crate::Error::Validation)?),
-        None => None,
-    };
-
-    let qual_path = qual_file::resolve_qual_path(&subject, args.file.as_deref().map(Path::new))?;
-
-    let att = annotation::finalize(Annotation {
-        metabox: "1".into(),
-        record_type: "annotation".into(),
-        subject,
-        issuer,
-        issuer_type,
-        created_at: Utc::now(),
-        id: String::new(),
-        body: AnnotationBody {
-            detail: None,
-            kind: Kind::Resolve,
-            r#ref: args.r#ref,
-            references: None,
-            span: None,
-            suggested_fix: None,
-            summary: message,
-            supersedes: Some(target_id.clone()),
+    let att = build_resolve(
+        &target,
+        ResolveInput {
+            message: args.message,
+            reason: args.reason,
             tags: args.tags,
+            issuer: args.issuer,
+            issuer_type: args.issuer_type,
+            r#ref: args.r#ref,
         },
-    });
+    )?;
 
-    let errors = annotation::validate(&att);
-    if !errors.is_empty() {
-        return Err(crate::Error::Validation(errors.join("; ")));
-    }
-
-    // Check supersession invariants
-    let existing = if qual_path.exists() {
-        qual_file::parse(&qual_path)?.records
-    } else {
-        Vec::new()
-    };
-    let mut all = existing;
-    all.push(Record::Annotation(Box::new(att.clone())));
-    annotation::check_supersession_cycles(&all)?;
-    annotation::validate_supersession_targets(&all)?;
-
+    let qual_path = locator.write_path(&att.subject, args.file.as_deref().map(Path::new));
     let record = Record::Annotation(Box::new(att.clone()));
-
-    qual_file::append(qual_path.as_ref(), &record)?;
+    targets::preflight_supersession(&qual_path, &record)?;
+    targets::append(&qual_path, &record)?;
 
     if args.format == "json" {
         println!("{}", serde_json::to_string(&record)?);
     } else {
-        println!("{} {} {}", att.body.kind, att.subject, att.body.summary,);
+        println!("{} {} {}", att.body.kind, att.subject, att.body.summary);
         println!("  id: {}", att.id);
-        println!("  supersedes: {}", &target_id[..8]);
+        println!("  supersedes: {}", targets::short_id(target.id()));
     }
 
     Ok(())

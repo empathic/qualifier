@@ -1,15 +1,17 @@
 use clap::Args as ClapArgs;
 use std::path::Path;
 
+use crate::annotation::IssuerType;
 use crate::annotation::Kind;
 use crate::cli::output;
 use crate::cli::span_context;
+use crate::cli::targets;
 use crate::compact::filter_superseded;
-use crate::qual_file::{self, find_project_root};
+use crate::qual_file;
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// The artifact to show
+    /// The artifact to show, relative to the current directory
     pub artifact: String,
 
     /// Output format (human, json)
@@ -35,16 +37,16 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
-    let root = find_project_root(Path::new("."));
-    let discover_root = root.as_deref().unwrap_or(Path::new("."));
-    let all_qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
+    let locator = targets::Locator::from_cwd()?;
+    let subject = locator.subject(&args.artifact)?;
+    let source = locator.file(&subject);
+    let all_qual_files = targets::discover_project(!args.no_ignore)?;
 
-    let records = qual_file::find_records_for(&args.artifact, &all_qual_files);
+    let records = qual_file::find_records_for(&subject, &all_qual_files);
 
     if records.is_empty() {
         return Err(crate::Error::Validation(format!(
-            "No records found for '{}'",
-            args.artifact
+            "No records found for '{subject}'"
         )));
     }
 
@@ -71,7 +73,7 @@ pub fn run(args: Args) -> crate::Result<()> {
     if args.format == "json" {
         if args.pretty {
             let mut value: serde_json::Value =
-                serde_json::from_str(&output::show_json(&args.artifact, &display_records))?;
+                serde_json::from_str(&output::show_json(&subject, &display_records))?;
             if let Some(records_arr) = value["records"].as_array_mut() {
                 for rec_val in records_arr.iter_mut() {
                     if let Some(span_val) = rec_val.get("body").and_then(|b| b.get("span"))
@@ -83,7 +85,7 @@ pub fn run(args: Args) -> crate::Result<()> {
                         && let Some(ref span) = att.body.span
                     {
                         let ctx = span_context::read_span_context(
-                            Path::new(&args.artifact),
+                            &source,
                             span,
                             span_context::DEFAULT_CONTEXT_LINES,
                         );
@@ -93,14 +95,14 @@ pub fn run(args: Args) -> crate::Result<()> {
             }
             println!("{}", serde_json::to_string_pretty(&value)?);
         } else {
-            println!("{}", output::show_json(&args.artifact, &display_records));
+            println!("{}", output::show_json(&subject, &display_records));
         }
         return Ok(());
     }
 
     // Human output
     println!();
-    println!("  {}", args.artifact);
+    println!("  {subject}");
 
     // Build threading: group replies under their parent record
     let display_ids: std::collections::HashSet<&str> =
@@ -130,7 +132,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         if i > 0 {
             println!();
         }
-        print_record(record, "    ", "    ", &args, &children);
+        print_record(record, "    ", "    ", &args, &source, &children);
     }
     println!();
 
@@ -146,6 +148,7 @@ fn print_record(
     line_prefix: &str,
     cont_prefix: &str,
     args: &Args,
+    source: &Path,
     children: &std::collections::HashMap<&str, Vec<&crate::annotation::Record>>,
 ) {
     if let Some(att) = record.as_annotation() {
@@ -155,19 +158,20 @@ fn print_record(
             .strip_prefix("mailto:")
             .and_then(|e| e.split('@').next())
             .unwrap_or(&att.issuer);
+        let issuer_label = match &att.issuer_type {
+            Some(t) if *t != IssuerType::Human => format!("{issuer_short} ({t})"),
+            _ => issuer_short.to_string(),
+        };
         let id_short = &att.id[..8.min(att.id.len())];
         println!(
             "{line_prefix}{}  {:?}  {}  {}  {}",
-            att.body.kind, att.body.summary, issuer_short, date, id_short,
+            att.body.kind, att.body.summary, issuer_label, date, id_short,
         );
         if args.pretty
             && let Some(ref span) = att.body.span
         {
-            let ctx = span_context::read_span_context(
-                Path::new(&args.artifact),
-                span,
-                span_context::DEFAULT_CONTEXT_LINES,
-            );
+            let ctx =
+                span_context::read_span_context(source, span, span_context::DEFAULT_CONTEXT_LINES);
             if let Some(ref warning) = ctx.warning {
                 println!("{cont_prefix}  note: {warning}");
             }
@@ -217,7 +221,7 @@ fn print_record(
             let continuation = if is_last { "   " } else { "\u{2502}  " };
             let child_line = format!("{cont_prefix}{branch}");
             let child_cont = format!("{cont_prefix}{continuation}");
-            print_record(reply, &child_line, &child_cont, args, children);
+            print_record(reply, &child_line, &child_cont, args, source, children);
         }
     }
 }

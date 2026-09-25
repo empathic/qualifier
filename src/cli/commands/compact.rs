@@ -1,12 +1,13 @@
 use clap::Args as ClapArgs;
-use std::path::Path;
 
+use crate::cli::targets;
 use crate::compact as compact_lib;
-use crate::qual_file::{self, find_project_root};
+use crate::qual_file;
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// The artifact to compact (required unless --all)
+    /// The artifact to compact, relative to the current directory
+    /// (required unless --all)
     pub artifact: Option<String>,
 
     /// Compact all .qual files in the repo
@@ -36,9 +37,11 @@ pub fn run(args: Args) -> crate::Result<()> {
         .as_deref()
         .ok_or_else(|| crate::Error::Validation("artifact is required (or use --all)".into()))?;
 
-    let qual_path = qual_file::find_qual_file_for(artifact).ok_or_else(|| {
+    let locator = targets::Locator::from_cwd()?;
+    let subject = locator.subject(artifact)?;
+    let qual_path = locator.existing_qual_file(&subject).ok_or_else(|| {
         crate::Error::Validation(format!(
-            "No .qual file found containing annotations for '{artifact}'"
+            "No .qual file found containing annotations for '{subject}'"
         ))
     })?;
 
@@ -49,9 +52,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 }
 
 fn run_all(args: &Args) -> crate::Result<()> {
-    let root = find_project_root(Path::new("."));
-    let discover_root = root.as_deref().unwrap_or(Path::new("."));
-    let qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
+    let qual_files = targets::discover_project(!args.no_ignore)?;
 
     if qual_files.is_empty() {
         println!("No .qual files found.");

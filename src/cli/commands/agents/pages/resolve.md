@@ -49,7 +49,9 @@ qualifier resolve a1b2c3d4 "Done" --format json
 ## Flags worth knowing
 
 **`<target>`** follows the same resolution rules as `reply`: an id-prefix (4+
-chars) or a location string. An id-prefix that matches more than one record,
+chars) or a location string. Locations are relative to the current
+directory; subjects are stored relative to the project root. A location
+never resolves to a `resolve` record. An id-prefix that matches more than one record,
 or a location with multiple tied active records, surfaces a disambiguation
 list and exits without writing.
 
@@ -62,9 +64,15 @@ useful context — the message ends up in the annotation history visible to
 the resolution record. This is useful when you want reviewers to be able to
 jump to the exact commit that addressed the issue.
 
-**`--issuer-type ai`** should be set whenever you do close a record on
-behalf of the user, so the resolution is attributable to a machine rather
-than a human and the user can review what their agent closed.
+**`--issuer` / `--issuer-type`**: as an agent, leave `--issuer` and `--issuer-type` unset; see `qualifier agents concepts` for
+defaults (`QUALIFIER_*` variables, agent-harness detection). The
+defaults already mark a resolution written from an agent session as `ai`,
+so the user can review what their agent closed.
+
+**`--reason fixed|wontfix|duplicate|invalid|obsolete`** adds the tag
+`reason:<value>`. A resolve carries at most one `reason:*` tag, and its
+value must be one of these; `resolve` rejects anything else. It is a tag
+convention (§2.12), not a body field.
 
 ## Gotchas
 
@@ -73,7 +81,13 @@ than a human and the user can review what their agent closed.
   default view, but `qualifier show --all` still shows it.
 - Cross-subject supersession is rejected: the target and the new resolve
   record must share the same subject.
-- If the target was already resolved (already superseded), the supersession
-  cycle check may reject the new record. Inspect with
-  `qualifier show --all <artifact>` first.
+- A target that is already resolved is refused (see below). Inspect with
+  `qualifier threads --all` first.
 - The minimum id-prefix is 4 characters, same as `reply`.
+
+## Superseded targets
+
+If the target has been superseded, the command fails and names the live
+record — resolve that one instead. If the target was already resolved, the
+command reports it as closed and names the closing `resolve` record; there
+is nothing left to close. To add context, reply to the closing record.
