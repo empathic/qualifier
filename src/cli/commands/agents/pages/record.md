@@ -116,13 +116,20 @@ Behaviour:
 - One stdout line is emitted per recorded entry (compact summary + id, or a
   full JSONL record under `--format json`). Trailing summary goes to
   **stderr** so a `--format json` pipe stays clean.
-- Validation, IO, and parse errors are reported as
+- Parse, resolution, and validation errors are reported as
   `stdin line N: <reason>: <input>` (the offending input is echoed so you
   can see what was sent without re-piping).
-- **Without `--continue-on-error`, the batch is all-or-nothing:** every
-  line is parsed, resolved, and validated before any record is written.
-  If any line fails, every failing line is reported and *nothing* is
-  written — including lines before the failure.
+- **Without `--continue-on-error`, the batch is all-or-nothing for
+  parse/resolve/validation failures:** every line is parsed, resolved,
+  and validated before any record is written. If any line fails that way,
+  every failing line is reported and *nothing* is written — including
+  lines before the failure.
+- This guarantee does not cover I/O failures while writing. Planning
+  happens first and in full, but the write itself still happens line by
+  line; if appending a planned record to disk fails partway through (disk
+  full, permissions revoked mid-run, etc.), the lines already written stay
+  written. The error message names how many: `wrote N of M records before
+  an I/O error appending stdin line L: <cause>`.
 
 **`--continue-on-error`** collects every failed line, writes the records
 that did pass, and exits non-zero with a final count. Use this when an

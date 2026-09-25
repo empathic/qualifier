@@ -2,22 +2,67 @@
 //! and the liveness check that keeps writes off superseded records.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::annotation::{self, Kind, Record, Span};
 use crate::compact::filter_superseded;
 use crate::qual_file::{self, QualFile};
 
-/// Discover every `.qual` file under the project root (or the current
-/// directory outside a repository).
-pub(crate) fn discover_project(respect_ignore: bool) -> crate::Result<Vec<QualFile>> {
+/// The project root discovery walks from: the nearest VCS root above the
+/// current directory, or the current directory itself outside a
+/// repository. Always absolute, so it stays meaningful regardless of
+/// which subdirectory a command is invoked from.
+pub(crate) fn project_root() -> crate::Result<PathBuf> {
     // Resolve from an absolute CWD so the upward walk in find_project_root
     // works from any subdirectory — relative-path arithmetic on `.` doesn't
     // traverse up.
     let cwd = std::env::current_dir()?;
-    let root = qual_file::find_project_root(&cwd);
-    let discover_root = root.as_deref().unwrap_or(cwd.as_path());
-    qual_file::discover(discover_root, respect_ignore)
+    Ok(qual_file::find_project_root(&cwd).unwrap_or(cwd))
+}
+
+/// Discover every `.qual` file under the project root (or the current
+/// directory outside a repository).
+pub(crate) fn discover_project(respect_ignore: bool) -> crate::Result<Vec<QualFile>> {
+    qual_file::discover(&project_root()?, respect_ignore)
+}
+
+/// Resolve the `.qual` file that should receive a new record for an
+/// **existing** record's subject (a `reply` or `resolve` target, single
+/// or batch). Unlike `qual_file::resolve_qual_path`, this is rooted at
+/// the project root rather than the current working directory: the
+/// target's subject was recorded relative to the project root, so the
+/// write must land next to the rest of that subject's history regardless
+/// of the subdirectory the command was invoked from. An explicit `--file`
+/// keeps its current, CWD-relative meaning.
+pub(crate) fn resolve_existing_target_path(
+    root: &Path,
+    subject: &str,
+    explicit_path: Option<&Path>,
+) -> crate::Result<PathBuf> {
+    if explicit_path.is_some() {
+        return qual_file::resolve_qual_path(subject, explicit_path);
+    }
+
+    // 1. Check for an existing 1:1 file, rooted at the project root.
+    let one_to_one = root.join(format!("{subject}.qual"));
+    if one_to_one.exists() {
+        return Ok(one_to_one);
+    }
+
+    // 2. Default to the directory-level `.qual`, rooted at the project root.
+    let subject_path = Path::new(subject);
+    let dir_qual = match subject_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => root.join(parent).join(".qual"),
+        _ => root.join(".qual"),
+    };
+
+    if let Some(dir) = dir_qual.parent()
+        && !dir.exists()
+    {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    Ok(dir_qual)
 }
 
 /// First eight characters of an ID, for messages.

@@ -43,6 +43,15 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   line is resolved and validated first, every failing line is reported,
   and nothing is written if any line fails. Previously lines before the
   first failure were written.
+- `record --stdin` overrides lines (`supersedes`/`references`) now resolve
+  ID prefixes and require a live, existing target, matching the non-batch
+  `--supersedes`/`--references` flags. Previously these fields were stored
+  verbatim with no resolution or liveness check.
+- Commands now discover the whole project when run from a subdirectory,
+  not just that subdirectory's `.qual` files. `reply` and `resolve`
+  (single and batch) write next to the rest of the target's history at
+  the project root, regardless of the subdirectory the command was run
+  from; `--file` still resolves relative to the current directory.
 
 ## [0.7.0] — unreleased
 

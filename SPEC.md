@@ -981,11 +981,16 @@ the same forms plus column granularity:
 resolved with the same rules as the `reply`/`resolve` commands (§6.3, §6.4)
 — including against records created earlier in the same batch.
 
-Without `--continue-on-error`, batch mode is all-or-nothing: every line is
-parsed, resolved, and validated before any record is written, every failing
-line is reported, and nothing is written if any line fails. Pass
-`--continue-on-error` to collect every error, write the lines that
-succeeded, and exit non-zero if any line failed.
+Without `--continue-on-error`, batch mode is all-or-nothing with respect to
+parse, target-resolution, and validation failures: every line is parsed,
+resolved, and validated before any record is written, every failing line
+is reported, and nothing is written if any line fails that way. This
+guarantee does not cover I/O failures while writing: if appending a
+planned record to disk fails partway through (e.g., the filesystem fills
+up), the lines written before the failure stay written; the error message
+reports how many. Pass `--continue-on-error` to collect every
+parse/resolve/validation error, write the lines that succeeded, and exit
+non-zero if any line failed.
 
 ### 6.3 `qualifier reply`
 

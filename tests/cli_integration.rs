@@ -3221,6 +3221,60 @@ fn test_record_stdin_reply_and_resolve_keys_conflict() {
     assert!(stderr.contains("both 'reply' and 'resolve'"), "{stderr}");
 }
 
+#[test]
+fn test_record_stdin_continue_on_error_writes_valid_reply_and_resolve_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "a is racy"]);
+    let b = write_id(dir.path(), &["record", "concern", "b.rs", "b leaks"]);
+    write_id(dir.path(), &["resolve", &b[..8], "already fixed"]);
+
+    // Line 1 is a valid reply; line 2 resolves an already-closed target.
+    let input = format!(
+        "{{\"reply\":\"{}\",\"message\":\"confirmed\"}}\n{{\"resolve\":\"{}\",\"reason\":\"fixed\"}}\n",
+        &a[..8],
+        &b[..8]
+    );
+    let (_, stderr, code) = run_qualifier_stdin(
+        dir.path(),
+        &["record", "--stdin", "--continue-on-error"],
+        &input,
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("closed"), "{stderr}");
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(
+        qual.contains("confirmed"),
+        "the valid reply line is still written under --continue-on-error: {qual}"
+    );
+}
+
+#[test]
+fn test_record_stdin_json_summary_written_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let ok_input = "{\"kind\":\"pass\",\"location\":\"a.rs\",\"message\":\"ok\"}\n";
+    let (_, stderr, code) = run_qualifier_stdin(
+        dir.path(),
+        &["record", "--stdin", "--format", "json"],
+        ok_input,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let summary: serde_json::Value =
+        serde_json::from_str(stderr.lines().next_back().unwrap()).unwrap();
+    assert_eq!(summary["summary"]["written"], true, "{summary}");
+
+    let dir2 = tempfile::tempdir().unwrap();
+    let bad_input = "{\"kind\":\"pass\",\"location\":\"a.rs\",\"message\":\"ok\"}\n{\"kind\":\"oops\",\"location\":\"b.rs\"}\n";
+    let (_, stderr2, code2) = run_qualifier_stdin(
+        dir2.path(),
+        &["record", "--stdin", "--format", "json"],
+        bad_input,
+    );
+    assert_ne!(code2, 0);
+    let summary2: serde_json::Value =
+        serde_json::from_str(stderr2.lines().next_back().unwrap()).unwrap();
+    assert_eq!(summary2["summary"]["written"], false, "{summary2}");
+}
+
 // --- diff: merge-base default ---
 
 /// Set up a repo where `main` advances *after* a feature branch has been
@@ -4800,6 +4854,53 @@ fn test_threads_and_reply_discover_project_from_subdirectory() {
     );
     assert_eq!(code, 0, "{stderr}");
     assert!(stdout.contains("a.rs"), "{stdout}");
+
+    // The reply targets a record whose subject was recorded relative to
+    // the project root, so it must land next to that record's history at
+    // the root — not in a new `.qual` under `sub/`.
+    assert!(
+        !sub.join(".qual").exists(),
+        "reply from a subdirectory must not create a .qual under sub/"
+    );
+    let root_qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(root_qual.contains("confirmed"), "{root_qual}");
+
+    // Same for resolve.
+    let b = write_id(dir.path(), &["record", "concern", "b.rs", "b leaks"]);
+    let (_, stderr, code) = run_qualifier(
+        &sub,
+        &[
+            "resolve",
+            &b[..8],
+            "fixed",
+            "--issuer",
+            "mailto:test@test.com",
+            "--reason",
+            "fixed",
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        !sub.join(".qual").exists(),
+        "resolve from a subdirectory must not create a .qual under sub/"
+    );
+    let root_qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(root_qual.contains("\"kind\":\"resolve\""), "{root_qual}");
+
+    // Same for a stdin batch reply line.
+    let c = write_id(dir.path(), &["record", "concern", "c.rs", "c waits"]);
+    let input = format!(
+        "{{\"reply\":\"{}\",\"message\":\"batch confirmed\"}}\n",
+        &c[..8]
+    );
+    let (_, stderr, code) = run_qualifier_stdin(&sub, &["record", "--stdin"], &input);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        !sub.join(".qual").exists(),
+        "batch reply from a subdirectory must not create a .qual under sub/"
+    );
+    let root_qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(root_qual.contains("batch confirmed"), "{root_qual}");
 }
 
 #[test]

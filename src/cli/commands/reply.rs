@@ -130,8 +130,12 @@ pub fn run(args: Args) -> crate::Result<()> {
         },
     )?;
 
-    let qual_path =
-        qual_file::resolve_qual_path(&att.subject, args.file.as_deref().map(Path::new))?;
+    let root = targets::project_root()?;
+    let qual_path = targets::resolve_existing_target_path(
+        &root,
+        &att.subject,
+        args.file.as_deref().map(Path::new),
+    )?;
     let record = Record::Annotation(Box::new(att.clone()));
     if record.supersedes().is_some() {
         targets::preflight_supersession(&qual_path, &record)?;

@@ -95,10 +95,13 @@ pub struct Args {
     /// Lines starting with `//` and blank lines are ignored. One record per
     /// line is emitted on stdout (id + summary, or full JSON with --format
     /// json). Errors are reported as `stdin line N: <reason>: <input>`.
-    /// Without --continue-on-error the batch is all-or-nothing: every line
-    /// is resolved and validated first, and nothing is written if any line
-    /// fails. Pass `--continue-on-error` to collect every error, write the
-    /// lines that succeeded, and exit with a summary.
+    /// Without --continue-on-error the batch is all-or-nothing for
+    /// parse/resolve/validation failures: every line is resolved and
+    /// validated first, and nothing is written if any line fails that way.
+    /// This does not cover I/O failures while writing — those can leave
+    /// earlier lines written; the error reports how many. Pass
+    /// `--continue-on-error` to collect every parse/resolve/validation
+    /// error, write the lines that succeeded, and exit with a summary.
     /// See `qualifier agents record` for a worked example.
     #[arg(long)]
     pub stdin: bool,
@@ -266,8 +269,9 @@ impl BatchView {
 }
 
 fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Result<()> {
+    let root = targets::project_root()?;
     let mut view = BatchView::new(targets::discover_project(true)?);
-    let mut planned: Vec<(Record, PathBuf)> = Vec::new();
+    let mut planned: Vec<(Record, PathBuf, usize)> = Vec::new();
     let mut errors: Vec<BatchError> = Vec::new();
 
     for (line_idx, line) in io::stdin().lock().lines().enumerate() {
@@ -287,10 +291,10 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
-        match plan_one(trimmed, &view) {
+        match plan_one(trimmed, &view, &root) {
             Ok((record, path)) => {
                 view.push(record.clone());
-                planned.push((record, path));
+                planned.push((record, path, line_no));
             }
             Err(error) => errors.push(BatchError {
                 line: line_no,
@@ -308,9 +312,12 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
     let proceed = errors.is_empty() || continue_on_error;
     let mut recorded = 0usize;
     if proceed {
-        for (record, path) in &planned {
-            if !dry_run {
-                qual_file::append(path, record)?;
+        for (i, (record, path, line_no)) in planned.iter().enumerate() {
+            if !dry_run && let Err(e) = qual_file::append(path, record) {
+                return Err(crate::Error::Validation(format!(
+                    "wrote {i} of {} records before an I/O error appending stdin line {line_no}: {e}",
+                    planned.len()
+                )));
             }
             emit_batch_line(record, format, dry_run)?;
             recorded += 1;
@@ -370,24 +377,37 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
 
 /// Parse, resolve, and validate one line against `view`. Returns the record
 /// and the `.qual` path it will be appended to.
-fn plan_one(trimmed: &str, view: &BatchView) -> std::result::Result<(Record, PathBuf), String> {
+///
+/// `reply`/`resolve` lines target an existing record, so their write path
+/// is resolved against `root` — the record's subject was already recorded
+/// relative to the project root, regardless of where this batch is run
+/// from. Overrides lines and complete-record lines describe a subject that
+/// may not exist yet, so their write path stays CWD-relative, matching
+/// non-batch `record`.
+fn plan_one(
+    trimmed: &str,
+    view: &BatchView,
+    root: &Path,
+) -> std::result::Result<(Record, PathBuf), String> {
     let value: Value = serde_json::from_str(trimmed).map_err(|e| format!("invalid JSON: {e}"))?;
 
-    let record = if value.get("body").is_some() && value.get("subject").is_some() {
+    let (record, existing_target) = if value.get("body").is_some() && value.get("subject").is_some()
+    {
         let r: Record =
             serde_json::from_value(value).map_err(|e| format!("invalid record: {e}"))?;
-        annotation::finalize_record(r)
+        (annotation::finalize_record(r), false)
     } else {
         let obj = value
             .as_object()
             .ok_or_else(|| "stdin line must be a JSON object".to_string())?;
-        match (obj.contains_key("reply"), obj.contains_key("resolve")) {
-            (true, true) => return Err("line has both 'reply' and 'resolve'".into()),
-            (true, false) => build_reply_from_line(obj, view.files()),
-            (false, true) => build_resolve_from_line(obj, view.files()),
-            (false, false) => build_record_from_overrides(obj, view.files()),
-        }
-        .map_err(|e| e.to_string())?
+        let (built, existing_target) =
+            match (obj.contains_key("reply"), obj.contains_key("resolve")) {
+                (true, true) => return Err("line has both 'reply' and 'resolve'".into()),
+                (true, false) => (build_reply_from_line(obj, view.files()), true),
+                (false, true) => (build_resolve_from_line(obj, view.files()), true),
+                (false, false) => (build_record_from_overrides(obj, view.files()), false),
+            };
+        (built.map_err(|e| e.to_string())?, existing_target)
     };
 
     if let Some(att) = record.as_annotation() {
@@ -397,8 +417,12 @@ fn plan_one(trimmed: &str, view: &BatchView) -> std::result::Result<(Record, Pat
         }
     }
 
-    let qual_path =
-        qual_file::resolve_qual_path(record.subject(), None).map_err(|e| e.to_string())?;
+    let qual_path = if existing_target {
+        targets::resolve_existing_target_path(root, record.subject(), None)
+    } else {
+        qual_file::resolve_qual_path(record.subject(), None)
+    }
+    .map_err(|e| e.to_string())?;
 
     if record.supersedes().is_some() {
         targets::check_supersession(view.all_records(), &record).map_err(|e| e.to_string())?;
