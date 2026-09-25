@@ -1002,7 +1002,10 @@ the same forms plus column granularity:
 
 `<target>` in a `reply`/`resolve` line is an ID prefix or a `<location>`,
 resolved with the same rules as the `reply`/`resolve` commands (§6.3, §6.4)
-— including against records created earlier in the same batch.
+— including against records created earlier in the same batch. A
+`reply`/`resolve` line carrying any key not listed above is rejected, and
+the error names the key. `--file` and `--allow-superseded` are rejected
+with `--stdin`; set `allow_superseded` per line instead.
 
 Without `--continue-on-error`, batch mode is all-or-nothing with respect to
 parse, target-resolution, and validation failures: every line is parsed,
@@ -1026,7 +1029,9 @@ Sugar over "kind=comment + references=`<target-id>`". The default kind is
 
 `<target>` is either:
 
-- An **id-prefix** (≥ 4 characters), or
+- An **id-prefix** (≥ 4 characters). A prefix matching more than one
+  record exits non-zero with the same disambiguation list, one
+  `[id-prefix] kind location "summary"` line per candidate; or
 - A **`<location>`** (e.g., `src/auth.rs:42`). A location resolves to the
   most-recent active record at that subject and span; a `resolve` record is
   never a location target. If multiple active

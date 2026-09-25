@@ -69,6 +69,11 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 - A location target for `reply`/`resolve` never resolves to a `resolve`
   record.
 - `record --stdin --dry-run` no longer creates directories.
+- `record --stdin` rejects `--file` and `--allow-superseded` (set
+  `allow_superseded` per line) instead of silently ignoring them, and
+  rejects `reply`/`resolve` lines carrying unknown keys, naming the key.
+- An ambiguous ID prefix lists the candidates, one
+  `[id8] kind location "summary"` line each.
 
 ## [0.7.0] — unreleased
 

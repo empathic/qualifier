@@ -107,6 +107,11 @@ same way `qualifier resolve` does: `resolve` names the target, and
 `allow_superseded` mirror the `resolve` command's flags. A line must not
 set both `reply` and `resolve`.
 
+A `reply` or `resolve` line with any key not listed for its form is
+rejected, and the error names the key (`unknown key 'detail' on a resolve
+line`). `--file` and `--allow-superseded` are rejected with `--stdin`; set
+`allow_superseded` per line.
+
 For `reply`/`resolve` lines, the target may name a record created earlier
 in the same batch — targets are resolved against the records on disk plus
 everything already planned by prior lines in this batch.

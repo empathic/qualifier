@@ -166,10 +166,35 @@ pub(crate) fn resolve_id_prefix(prefix: &str, qual_files: &[QualFile]) -> crate:
             "no record found matching prefix '{prefix}'"
         ))),
         1 => Ok(matches[0].clone()),
-        n => Err(crate::Error::Validation(format!(
-            "ambiguous prefix '{prefix}' matches {n} records"
-        ))),
+        n => {
+            let mut msg = format!("ambiguous prefix '{prefix}' matches {n} records:\n");
+            for r in &matches {
+                let location = match r.as_annotation().and_then(|a| a.body.span.as_ref()) {
+                    Some(s) => format!("{}:{}", r.subject(), s.start.line),
+                    None => r.subject().to_string(),
+                };
+                msg.push_str(&candidate_line(r, &location));
+            }
+            msg.push_str("hint: use a longer ID prefix");
+            Err(crate::Error::Validation(msg))
+        }
     }
+}
+
+/// One disambiguation-list line: `  [id8] kind <where> "summary"`.
+fn candidate_line(r: &Record, place: &str) -> String {
+    let kind = r
+        .kind()
+        .map(|k| k.to_string())
+        .unwrap_or_else(|| r.record_type().to_string());
+    let summary = r
+        .as_annotation()
+        .map(|a| a.body.summary.as_str())
+        .unwrap_or("");
+    format!(
+        "  [{}] {kind:<10} {place:<8} {summary:?}\n",
+        short_id(r.id())
+    )
 }
 
 /// Decide whether a target string should be parsed as a `<location>`
@@ -327,21 +352,12 @@ fn resolve_location_target(
                 candidates.len()
             );
             for r in &candidates {
-                let kind = r
-                    .kind()
-                    .map(|k| k.to_string())
-                    .unwrap_or_else(|| r.record_type().to_string());
                 let line = r
                     .as_annotation()
                     .and_then(|a| a.body.span.as_ref())
                     .map(|s| format!("L{}", s.start.line))
                     .unwrap_or_else(|| "—".into());
-                let summary = r
-                    .as_annotation()
-                    .map(|a| a.body.summary.clone())
-                    .unwrap_or_default();
-                let prefix = short_id(r.id());
-                msg.push_str(&format!("  [{prefix}] {kind:<10} {line:<8} {summary:?}\n"));
+                msg.push_str(&candidate_line(r, &line));
             }
             msg.push_str("hint: specify a span (e.g., 'src/foo.rs:42') or use an id-prefix");
             return Err(crate::Error::Validation(msg));

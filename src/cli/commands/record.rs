@@ -64,11 +64,13 @@ pub struct Args {
     #[arg(long)]
     pub references: Option<String>,
 
-    /// Allow --supersedes / --references to name a superseded or resolved record.
+    /// Allow --supersedes / --references to name a superseded or resolved
+    /// record. Not supported with --stdin; set `allow_superseded` per line.
     #[arg(long)]
     pub allow_superseded: bool,
 
-    /// Explicit .qual file to write to (overrides layout resolution).
+    /// Explicit .qual file to write to (overrides layout resolution). Not
+    /// supported with --stdin.
     #[arg(long)]
     pub file: Option<String>,
 
@@ -89,7 +91,8 @@ pub struct Args {
     ///
     /// `<target>` is an id-prefix or a `<location>`, resolved the same way
     /// as the `reply`/`resolve` commands — including against records
-    /// created earlier in the same batch.
+    /// created earlier in the same batch. A reply or resolve line with any
+    /// other key is rejected, naming the key.
     ///
     /// Lines starting with `//` and blank lines are ignored. One record per
     /// line is emitted on stdout (id + summary, or full JSON with --format
@@ -123,6 +126,16 @@ pub struct Args {
 
 pub fn run(args: Args) -> crate::Result<()> {
     if args.stdin {
+        if args.file.is_some() {
+            return Err(crate::Error::Validation(
+                "--file is not supported with --stdin".into(),
+            ));
+        }
+        if args.allow_superseded {
+            return Err(crate::Error::Validation(
+                "--allow-superseded is not supported with --stdin; set it per line".into(),
+            ));
+        }
         return run_batch(&args.format, args.continue_on_error, args.dry_run);
     }
 
@@ -433,6 +446,48 @@ fn tags_field(obj: &Map<String, Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Keys a `reply` line may carry.
+const REPLY_KEYS: &[&str] = &[
+    "reply",
+    "message",
+    "kind",
+    "detail",
+    "suggested_fix",
+    "tags",
+    "issuer",
+    "issuer_type",
+    "ref",
+    "supersedes",
+    "allow_superseded",
+];
+
+/// Keys a `resolve` line may carry.
+const RESOLVE_KEYS: &[&str] = &[
+    "resolve",
+    "message",
+    "reason",
+    "tags",
+    "issuer",
+    "issuer_type",
+    "ref",
+    "allow_superseded",
+];
+
+/// Fail on the first key of `obj` outside `allowed`, naming it.
+fn reject_unknown_keys(
+    obj: &Map<String, Value>,
+    allowed: &[&str],
+    form: &str,
+) -> crate::Result<()> {
+    match obj.keys().find(|k| !allowed.contains(&k.as_str())) {
+        Some(key) => Err(crate::Error::Validation(format!(
+            "unknown key '{key}' on a {form} line (allowed: {})",
+            allowed.join(", ")
+        ))),
+        None => Ok(()),
+    }
+}
+
 fn allow_superseded_field(obj: &Map<String, Value>) -> bool {
     obj.get("allow_superseded")
         .and_then(|v| v.as_bool())
@@ -444,6 +499,7 @@ fn build_reply_from_line(
     files: &[QualFile],
     locator: &targets::Locator,
 ) -> crate::Result<Record> {
+    reject_unknown_keys(obj, REPLY_KEYS, "reply")?;
     let target = str_field(obj, "reply")
         .ok_or_else(|| crate::Error::Validation("'reply' must be a target string".into()))?;
     let message = str_field(obj, "message")
@@ -475,6 +531,7 @@ fn build_resolve_from_line(
     files: &[QualFile],
     locator: &targets::Locator,
 ) -> crate::Result<Record> {
+    reject_unknown_keys(obj, RESOLVE_KEYS, "resolve")?;
     let target = str_field(obj, "resolve")
         .ok_or_else(|| crate::Error::Validation("'resolve' must be a target string".into()))?;
     let target = targets::resolve_target(&target, files, allow_superseded_field(obj), locator)?;

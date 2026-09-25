@@ -4248,6 +4248,89 @@ fn write_id(dir: &Path, args: &[&str]) -> String {
 }
 
 #[test]
+fn test_ambiguous_id_prefix_lists_candidates() {
+    let dir = tempfile::tempdir().unwrap();
+    let line = |id: &str, subject: &str, summary: &str| {
+        format!(
+            "{{\"metabox\":\"1\",\"type\":\"annotation\",\"subject\":\"{subject}\",\
+             \"issuer\":\"mailto:t@t.com\",\"created_at\":\"2026-01-01T00:00:00Z\",\
+             \"id\":\"{id}\",\"body\":{{\"kind\":\"concern\",\"summary\":\"{summary}\"}}}}\n"
+        )
+    };
+    let qual = line(&format!("abcd1111{}", "0".repeat(56)), "a.rs", "first")
+        + &line(&format!("abcd2222{}", "0".repeat(56)), "b.rs", "second");
+    std::fs::write(dir.path().join(".qual"), qual).unwrap();
+
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &["reply", "abcd", "x", "--issuer", "mailto:test@test.com"],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("ambiguous prefix 'abcd'"), "{stderr}");
+    assert!(
+        stderr.contains("[abcd1111] concern")
+            && stderr.contains("a.rs")
+            && stderr.contains("\"first\""),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("[abcd2222] concern")
+            && stderr.contains("b.rs")
+            && stderr.contains("\"second\""),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn test_record_stdin_rejects_file_and_allow_superseded_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = "{\"kind\":\"concern\",\"location\":\"a.rs\",\"message\":\"x\"}\n";
+    let (_, stderr, code) = run_qualifier_stdin(
+        dir.path(),
+        &["record", "--stdin", "--file", "out.qual"],
+        input,
+    );
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("--file is not supported with --stdin"),
+        "{stderr}"
+    );
+    let (_, stderr, code) = run_qualifier_stdin(
+        dir.path(),
+        &["record", "--stdin", "--allow-superseded"],
+        input,
+    );
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("--allow-superseded is not supported with --stdin; set it per line"),
+        "{stderr}"
+    );
+    assert!(!dir.path().join(".qual").exists(), "nothing written");
+    assert!(!dir.path().join("out.qual").exists(), "nothing written");
+}
+
+#[test]
+fn test_record_stdin_rejects_unknown_keys_on_reply_and_resolve_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "a is racy"]);
+    let input = format!(
+        "{{\"reply\":\"{p}\",\"message\":\"x\",\"references\":\"{p}\"}}\n\
+         {{\"resolve\":\"{p}\",\"detail\":\"why\"}}\n",
+        p = &a[..8]
+    );
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("stdin line 1: unknown key 'references' on a reply line"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("stdin line 2: unknown key 'detail' on a resolve line"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn test_reply_to_superseded_record_names_successor() {
     let dir = tempfile::tempdir().unwrap();
     let old = write_id(
