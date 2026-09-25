@@ -114,6 +114,111 @@ err="$(PATH="$STUB_OLD:$PATH" "$ENSURE" 2>&1 >/dev/null)"
 echo "$err" | grep -q "older than" || fail "expected an old-version warning, got: $err"
 ok "warns when the binary predates MIN_VERSION"
 
+# --- SessionStart hook -----------------------------------------------------
+
+HOOK="$PWD/$PLUGIN/hooks/session-start"
+bash -n "$HOOK" || fail "session-start does not parse"
+command -v shellcheck >/dev/null 2>&1 && { shellcheck "$HOOK" || fail "shellcheck session-start"; }
+python3 -c "import json; json.load(open('$PLUGIN/hooks/hooks.json'))" || fail "hooks.json is not valid JSON"
+
+run_hook() {
+    # Runs the hook as Claude Code would, with a project directory. The
+    # plugin root is captured before the cd below: with `cd ... && env
+    # VAR="$PWD/..."`, bash expands the env command's arguments only after
+    # `cd` has already run, so an inline `$PWD` there would resolve to the
+    # project sandbox instead of the plugin directory.
+    local project="$1" plugin_root="$PWD/$PLUGIN"; shift
+    (cd "$project" && env CLAUDE_PROJECT_DIR="$project" CLAUDE_PLUGIN_ROOT="$plugin_root" "$@" "$HOOK" </dev/null)
+}
+
+context_of() {
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'
+}
+
+# H1. Silent in a repository without .qual files.
+NOQUAL="$SANDBOX/noqual"
+mkdir -p "$NOQUAL/.git"
+out="$(run_hook "$NOQUAL" PATH="$STUB1:$PATH")"
+[ -z "$out" ] || fail "hook must be silent without .qual files, got: $out"
+ok "hook is silent in repositories without .qual files"
+
+# H2. Injects the skill, binary, and summary in a repository with .qual files.
+WITHQUAL="$SANDBOX/withqual"
+mkdir -p "$WITHQUAL/.git" "$WITHQUAL/src"
+echo '{}' >"$WITHQUAL/src/.qual"
+out="$(run_hook "$WITHQUAL" PATH="$STUB1:$PATH")"
+ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not the expected JSON: $out"
+case "$ctx" in *"qual:recording-design-decisions"*) ;; *) fail "context lacks the using-qualifier map" ;; esac
+case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the thread summary: $ctx" ;; esac
+case "$ctx" in *"name: using-qualifier"*) fail "frontmatter must be stripped" ;; esac
+[ "${#ctx}" -lt 10000 ] || fail "context is ${#ctx} chars; the harness caps it at 10000"
+ok "hook injects using-qualifier and the summary (${#ctx} chars)"
+
+# H3. A binary off PATH is reached through the pre-approved wrapper.
+out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$STUB_OVERRIDE/qualifier" PATH="/usr/bin:/bin")"
+ctx="$(printf '%s' "$out" | context_of)"
+case "$ctx" in *'ensure-qualifier.sh" exec'*) ;; *) fail "context must route an off-PATH binary through the wrapper: $ctx" ;; esac
+ok "hook routes an off-PATH binary through the wrapper"
+
+# H4. No binary and no network: still exit 0 with valid JSON.
+FAILCURL="$SANDBOX/failcurl"
+mkdir -p "$FAILCURL"
+printf '#!/usr/bin/env bash\nexit 7\n' >"$FAILCURL/curl"
+chmod +x "$FAILCURL/curl"
+out="$(run_hook "$WITHQUAL" QUALIFIER_INSTALL_DIR="$SANDBOX/empty-bin" PATH="$FAILCURL:/usr/bin:/bin")" \
+    || fail "hook must exit 0 when the binary cannot be installed"
+ctx="$(printf '%s' "$out" | context_of)"
+case "$ctx" in *"cargo install qualifier"*) ;; *) fail "context must say how to install: $ctx" ;; esac
+ok "hook degrades gracefully without a binary or network"
+
+# H5. Works without VCS markers (project dir is the root).
+NOVCS="$SANDBOX/novcs"
+mkdir -p "$NOVCS"
+echo '{}' >"$NOVCS/.qual"
+out="$(run_hook "$NOVCS" PATH="$STUB1:$PATH")"
+printf '%s' "$out" | context_of >/dev/null || fail "hook must work outside a VCS"
+ok "hook works outside a VCS"
+
+# H6. Real git repositories: an untracked .qual is found; no .qual is silent.
+GITQUAL="$SANDBOX/gitqual"
+mkdir -p "$GITQUAL/src"
+git -C "$GITQUAL" init -q
+echo '{}' >"$GITQUAL/src/.qual"
+out="$(run_hook "$GITQUAL" PATH="$STUB1:$PATH")"
+printf '%s' "$out" | context_of >/dev/null || fail "an untracked .qual in a git repo must be found"
+GITNOQUAL="$SANDBOX/gitnoqual"
+mkdir -p "$GITNOQUAL"
+git -C "$GITNOQUAL" init -q
+echo "x" >"$GITNOQUAL/a.txt"
+out="$(run_hook "$GITNOQUAL" PATH="$STUB1:$PATH")"
+[ -z "$out" ] || fail "a git repo without .qual files must be silent, got: $out"
+ok "hook gates git repositories through the index"
+
+# H7. An old binary puts an upgrade note into the context.
+out="$(run_hook "$WITHQUAL" PATH="$STUB_OLD:$PATH")"
+ctx="$(printf '%s' "$out" | context_of)"
+case "$ctx" in *"older than 0.8.0"*) ;; *) fail "context must flag an old binary: $ctx" ;; esac
+ok "hook flags a binary older than MIN_VERSION"
+
+# H8. A slow summary is dropped instead of delaying the session.
+SLOW="$SANDBOX/slow"
+mkdir -p "$SLOW"
+cat >"$SLOW/qualifier" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    --version) echo "qualifier 9.9.9" ;;
+    threads) sleep 5; echo "qualifier: too late" ;;
+esac
+EOF
+chmod +x "$SLOW/qualifier"
+start="$(date +%s)"
+out="$(run_hook "$WITHQUAL" PATH="$SLOW:$PATH")"
+elapsed=$(( $(date +%s) - start ))
+[ "$elapsed" -lt 4 ] || fail "hook waited ${elapsed}s for a slow summary"
+ctx="$(printf '%s' "$out" | context_of)"
+case "$ctx" in *"too late"*) fail "a late summary must be dropped" ;; esac
+ok "hook drops a summary that misses its one-second budget"
+
 # --- stubbed download ---
 # The download tests run a copy of the wrapper pinned to a fixture release
 # (version 9.9.9 and the fixture's checksum), served by a curl stub.
