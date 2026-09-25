@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "qualifier",
+  "version": "0.1.0",
+  "description": "Qualifier — quality annotations that live next to the code. Skills that make Claude record and act on critiques, findings, decisions, and paths not taken.",
+  "owner": {
+    "name": "Empathic"
+  },
+  "plugins": [
+    {
+      "name": "qual",
+      "description": "Lifecycle skills for the qualifier CLI: record design decisions, review into qualifier, triage and escalate threads, consult threads before editing, and hand off self-sufficient threads. Installs the qualifier binary on first use.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Empathic"
+      },
+      "source": "./plugins/claude-code",
+      "category": "productivity"
+    }
+  ]
+}

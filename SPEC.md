@@ -1499,6 +1499,8 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
 - **Conventions:** `qualifier agents conventions` defines the `status:`,
   `reason:`, `session:`, `revisit:`, and `depends-on:` tag vocabulary and
   close authority.
+- **Claude Code plugin:** `plugins/claude-code/` (`qual`) packages lifecycle
+  skills and a SessionStart hook on top of these affordances.
 
 ## 10. File Discovery
 

@@ -25,6 +25,7 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 - `threads --status`, `--changed-since <ref>`, and `--summary` (a
   two-line digest for session-start hooks).
 - `qualifier agents conventions` and `qualifier agents batch`.
+- **Claude Code plugin `qual`** (`plugins/claude-code/`, plugin version 0.1.0): lifecycle skills and a SessionStart hook; install with `/plugin marketplace add empathic/qualifier`.
 
 ### Fixed
 

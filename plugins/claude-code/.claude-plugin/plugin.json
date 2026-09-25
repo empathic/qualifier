@@ -1,0 +1,9 @@
+{
+  "name": "qual",
+  "version": "0.1.0",
+  "description": "Lifecycle skills for the qualifier CLI: record design decisions, review into qualifier, triage and escalate threads, consult threads before editing, and hand off self-sufficient threads. Installs the qualifier binary on first use.",
+  "author": {
+    "name": "Empathic"
+  },
+  "keywords": ["qualifier", "annotations", "code-review", "triage", "design-decisions"]
+}

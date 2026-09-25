@@ -12,3 +12,6 @@
 
 # Claude
 /.claude/worktrees
+
+# Plugin evals
+plugins/claude-code/evals/results/
