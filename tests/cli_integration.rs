@@ -5145,6 +5145,136 @@ fn test_show_praise_compact_from_subdirectory() {
     assert!(stdout.contains("src/net/tcp.rs"), "{stdout}");
 }
 
+/// Root summaries of `threads` output, sorted.
+fn thread_summaries(threads: &[serde_json::Value]) -> Vec<String> {
+    let mut s: Vec<String> = threads
+        .iter()
+        .map(|t| t["root"]["body"]["summary"].as_str().unwrap().to_string())
+        .collect();
+    s.sort();
+    s
+}
+
+/// Threads on `src/net/tcp.rs` (spanned in and out of 40–80, span-less),
+/// on its ancestor directories, on a sibling that shares a string prefix,
+/// and on an unrelated file.
+fn location_fixture(dir: &Path) {
+    for (loc, msg) in [
+        ("src/net/tcp.rs:50", "in range"),
+        ("src/net/tcp.rs:10", "out of range"),
+        ("src/net/tcp.rs", "file level"),
+        ("src/net", "net dir"),
+        ("src", "src dir"),
+        ("src/ne", "sibling prefix"),
+        ("src/other.rs", "other file"),
+    ] {
+        write_id(dir, &["record", "concern", loc, msg]);
+    }
+}
+
+#[test]
+fn test_threads_span_filter_includes_file_level_and_ancestor_threads() {
+    let dir = tempfile::tempdir().unwrap();
+    location_fixture(dir.path());
+    let threads = threads_json(dir.path(), &["src/net/tcp.rs:40:80"]);
+    assert_eq!(
+        thread_summaries(&threads),
+        ["file level", "in range", "net dir", "src dir"],
+        "span-less roots on the file and roots on ancestor directories match"
+    );
+}
+
+#[test]
+fn test_threads_path_filter_includes_ancestor_threads() {
+    let dir = tempfile::tempdir().unwrap();
+    location_fixture(dir.path());
+    let threads = threads_json(dir.path(), &["src/net/tcp.rs"]);
+    assert_eq!(
+        thread_summaries(&threads),
+        [
+            "file level",
+            "in range",
+            "net dir",
+            "out of range",
+            "src dir"
+        ],
+    );
+    let threads = threads_json(dir.path(), &["src/net"]);
+    assert_eq!(
+        thread_summaries(&threads),
+        [
+            "file level",
+            "in range",
+            "net dir",
+            "out of range",
+            "src dir"
+        ],
+        "a directory filter matches descendants and ancestors, not siblings"
+    );
+}
+
+#[test]
+fn test_threads_id_filter_matches_every_record_role() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = write_id(dir.path(), &["record", "concern", "a.rs", "v1"]);
+    let middle = write_id(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "a.rs",
+            "v2",
+            "--supersedes",
+            &origin[..8],
+        ],
+    );
+    let root = write_id(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "a.rs",
+            "v3",
+            "--supersedes",
+            &middle[..8],
+        ],
+    );
+    let reply = write_id(dir.path(), &["reply", &root[..8], "seen"]);
+    write_id(dir.path(), &["record", "concern", "b.rs", "unrelated"]);
+
+    for (role, id) in [
+        ("origin", &origin),
+        ("history", &middle),
+        ("root", &root),
+        ("reply", &reply),
+    ] {
+        let threads = threads_json(dir.path(), &[&id[..8]]);
+        assert_eq!(threads.len(), 1, "{role}: {threads:?}");
+        assert_eq!(threads[0]["origin"], origin.as_str(), "{role}");
+    }
+
+    let closer = write_id(dir.path(), &["resolve", &root[..8], "fixed"]);
+    let threads = threads_json(dir.path(), &["--all", &closer[..8]]);
+    assert_eq!(threads.len(), 1, "closed_by: {threads:?}");
+    assert_eq!(threads[0]["origin"], origin.as_str());
+    assert!(
+        threads_json(dir.path(), &[&closer[..8]]).is_empty(),
+        "closed threads stay hidden without --all"
+    );
+}
+
+#[test]
+fn test_threads_all_tag_matches_closing_resolve() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "a is racy"]);
+    write_id(
+        dir.path(),
+        &["resolve", &a[..8], "fixed", "--tag", "session:test:s1"],
+    );
+    let threads = threads_json(dir.path(), &["--all", "--tag", "session:test:*"]);
+    assert_eq!(threads.len(), 1, "{threads:?}");
+}
+
 #[test]
 fn test_threads_all_includes_closed() {
     let dir = tempfile::tempdir().unwrap();

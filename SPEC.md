@@ -1201,7 +1201,7 @@ qualifier praise src/parser.rs --vcs
 ### 6.12 `qualifier threads`
 
 ```
-qualifier threads [LOCATION...] [--all] [--kind K[,K]] [--tag T]
+qualifier threads [LOCATION|ID...] [--all] [--kind K[,K]] [--tag T]
                   [--issuer-type TYPE] [--status needs-decision|decided|deferred]
                   [--changed-since REF] [--summary]
                   [--format human|json] [--no-ignore]
@@ -1209,10 +1209,24 @@ qualifier threads [LOCATION...] [--all] [--kind K[,K]] [--tag T]
 
 Lists threads as defined in §7 (`qualifier::threads`). By default only
 open threads and live replies are shown; `--all` adds closed threads and
-superseded replies. A location is a path, a directory, a glob (`*` does not
-cross `/`), or `path:start[:end]` matching threads whose root span
-overlaps. `--tag` matches tags on the root or a live reply; `ns:*` matches a
-namespace; repeated `--tag` flags must all match. JSON output is a single
+superseded replies. Each argument filters by location or record ID, and a
+thread matching any argument is listed:
+
+- A path or directory matches roots on that subject, below it, or on one
+  of its ancestor directories (a directory subject that is a proper,
+  `/`-bounded prefix of the path: `src/net` and `src` for
+  `src/net/tcp.rs`, never `src/ne`).
+- `path:start[:end]` matches roots on that file whose span overlaps, roots
+  on that file with no span, and roots on its ancestor directories.
+- A glob (`*` does not cross `/`) matches root subjects.
+- An argument of four or more hex characters (and so no `/`, `.`, or `:`)
+  is an ID prefix, matching threads that contain a record whose ID starts
+  with it — root, origin, history, replies, or `closed_by`. Write `./cafe`
+  to filter on a directory whose name is all hex.
+
+`--tag` matches tags on the root, a live reply, or — under `--all` — the
+`closed_by` resolve; `ns:*` matches a namespace; repeated `--tag` flags
+must all match. JSON output is a single
 array of `{origin, open, root, closed_by, history, replies: [{active,
 record}], latest_at}` with full IDs.
 

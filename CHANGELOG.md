@@ -19,8 +19,12 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 - `resolve --reason <fixed|wontfix|duplicate|invalid|obsolete>` adds the
   tag `reason:<value>`.
 - **`qualifier threads`** lists conversations across the project (root,
-  live replies, open/closed) with location, glob, span, kind, tag, and
-  issuer-type filters, and JSON output.
+  live replies, open/closed) with location, glob, span, record-ID, kind,
+  tag, and issuer-type filters, and JSON output. Path and span filters
+  also match threads on the path's ancestor directories, and a span filter
+  matches span-less threads on the same file; an ID prefix selects the
+  thread containing that record in any role; under `--all`, `--tag` also
+  matches the closing resolve.
 - `threads --status`, `--changed-since <ref>`, and `--summary` (a
   two-line digest for session-start hooks).
 - `record --stdin` accepts `{"reply": "<target>", …}` and

@@ -12,8 +12,11 @@ use crate::threads::{self, Thread};
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Filter by location: a path, a directory, a glob (`src/**/*.rs`), or
-    /// `path:start[:end]` (threads whose root span overlaps). Relative to
+    /// Filter by location or record ID: a path or directory (also matches
+    /// threads on its ancestor directories), a glob (`src/**/*.rs`),
+    /// `path:start[:end]` (root span overlaps, or the root has no span on
+    /// that file, or sits on an ancestor directory), or an ID prefix (4+
+    /// hex characters) of any record in the thread. Paths are relative to
     /// the current directory. Any match selects the thread.
     pub locations: Vec<String>,
 
@@ -25,8 +28,8 @@ pub struct Args {
     #[arg(long, value_name = "KIND[,KIND...]")]
     pub kind: Option<String>,
 
-    /// Tag on the root or a live reply; `ns:*` matches a namespace.
-    /// Repeatable; every tag must match.
+    /// Tag on the root, a live reply, or (with --all) the closing resolve;
+    /// `ns:*` matches a namespace. Repeatable; every tag must match.
     #[arg(long = "tag")]
     pub tags: Vec<String>,
 
@@ -127,7 +130,7 @@ impl Filter {
 
     fn matches(&self, t: &Thread<'_>) -> bool {
         (self.all || t.open)
-            && (self.locations.is_empty() || self.locations.iter().any(|l| l.matches(t.root)))
+            && (self.locations.is_empty() || self.locations.iter().any(|l| l.matches(t)))
             && self
                 .kinds
                 .as_ref()
@@ -153,12 +156,26 @@ impl Filter {
 
 enum LocationFilter {
     Glob(GlobMatcher),
-    Path { subject: String, span: Option<Span> },
+    Path {
+        subject: String,
+        span: Option<Span>,
+    },
+    /// Prefix of the ID of any record in the thread.
+    Id(String),
+}
+
+/// An argument of four or more hex characters (so no `/`, `.`, or `:`) is
+/// an ID prefix, not a path.
+fn looks_like_id(s: &str) -> bool {
+    s.len() >= 4 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 impl LocationFilter {
     /// Parse a CWD-relative filter into one over root-relative subjects.
     fn parse(s: &str, locator: &targets::Locator) -> crate::Result<Self> {
+        if looks_like_id(s) {
+            return Ok(Self::Id(s.to_string()));
+        }
         if s.contains(['*', '?', '[']) {
             let pattern = locator.subject(s)?;
             let glob = GlobBuilder::new(&pattern)
@@ -171,30 +188,48 @@ impl LocationFilter {
         Ok(Self::Path { subject, span })
     }
 
-    fn matches(&self, root: &Record) -> bool {
+    fn matches(&self, t: &Thread<'_>) -> bool {
+        let root = t.root;
         match self {
             Self::Glob(m) => m.is_match(root.subject()),
+            Self::Id(prefix) => thread_records(t).any(|r| r.id().starts_with(prefix.as_str())),
             Self::Path { subject, span } => {
-                let rs = root.subject();
-                let path_ok = subject.is_empty()
-                    || subject == "."
-                    || rs == subject
-                    || rs.starts_with(&format!("{subject}/"));
-                path_ok
-                    && span.as_ref().is_none_or(|s| {
-                        root.as_annotation()
-                            .and_then(|a| a.body.span.as_ref())
-                            .is_some_and(|rsp| targets::span_overlaps(rsp, s))
-                    })
+                let rs = root.subject().trim_end_matches('/');
+                let everything = subject.is_empty() || subject == ".";
+                let same = rs == subject;
+                let descendant = rs.starts_with(&format!("{subject}/"));
+                // A directory subject that is a proper `/`-bounded prefix.
+                let ancestor =
+                    !rs.is_empty() && rs != "." && subject.starts_with(&format!("{rs}/"));
+                let root_span = root.as_annotation().and_then(|a| a.body.span.as_ref());
+                match span {
+                    None => everything || same || descendant || ancestor,
+                    Some(s) => {
+                        let overlaps = root_span.is_some_and(|r| targets::span_overlaps(r, s));
+                        ancestor
+                            || (same && (root_span.is_none() || overlaps))
+                            || ((everything || descendant) && overlaps)
+                    }
+                }
             }
         }
     }
 }
 
-/// Tags on the root and on every live reply.
+/// Every record in the thread: root, history, replies, and closing resolve.
+fn thread_records<'a>(t: &Thread<'a>) -> impl Iterator<Item = &'a Record> {
+    std::iter::once(t.root)
+        .chain(t.history.iter().copied())
+        .chain(t.replies.iter().map(|e| e.record))
+        .chain(t.closed_by)
+}
+
+/// Tags on the root, every live reply, and the closing resolve (only
+/// closed threads have one, and those are listed only under `--all`).
 fn thread_tags<'a>(t: &Thread<'a>) -> impl Iterator<Item = &'a str> {
     std::iter::once(t.root)
         .chain(t.replies.iter().filter(|e| e.active).map(|e| e.record))
+        .chain(t.closed_by)
         .filter_map(|r| r.as_annotation())
         .flat_map(|a| a.body.tags.iter().map(String::as_str))
 }
