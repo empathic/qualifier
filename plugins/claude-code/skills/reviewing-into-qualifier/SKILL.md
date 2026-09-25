@@ -16,7 +16,10 @@ a count and the command that lists them.
   `reviewer-prompt.md`, filling in the scope. Each returns only the IDs it
   wrote.
 - Kinds and the bar: `qual:using-qualifier`; spellings:
-  `qualifier agents conventions`. Tag every finding `review`.
+  `qualifier agents conventions`. Tag every finding `review` and with a
+  tag scoped to this review, e.g. `review:<branch-or-date>` — pick one
+  before dispatching and give it to every reviewer subagent, so the report
+  below can list just this review's findings.
 
 ## Verify
 
@@ -40,6 +43,8 @@ issued in this session are resolved `--reason invalid`.
 ## Report
 
 "Recorded N findings (B blockers, C concerns, S suggestions); V confirmed,
-R refuted. List: `qualifier threads --tag review`."
+R refuted. List: `qualifier threads --tag review:<that>`." (`--tag review`
+alone lists every review this project has ever recorded, not just this
+one.)
 
 Next: `qual:triaging-threads`.

@@ -10,9 +10,13 @@ allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qual
 
 Reply on the thread with the question and the options:
 
-`{"reply": "<id>", "message": "Needs a decision: <question>", "detail": "Option A: … (consequence). Option B: … (consequence). Recommendation: …", "tags": ["status:needs-decision"]}`
+```bash
+qualifier reply <id> "Needs a decision: <question>" \
+  --detail "Option A: … (consequence). Option B: … (consequence). Recommendation: …" \
+  --tag status:needs-decision
+```
 
-Address a specific person with `status:needs-decision:<their issuer>`.
+Address a specific person with `--tag status:needs-decision:<their issuer>`.
 Pending decisions: `qualifier threads --status needs-decision`.
 
 ## Walk

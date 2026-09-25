@@ -252,7 +252,7 @@ ok "hook strips control characters that would break the JSON"
 # --- skills ----------------------------------------------------------------
 
 python3 - "$PLUGIN" <<'PY' || fail "skill checks"
-import os, re, sys
+import glob, os, re, sys
 
 plugin = sys.argv[1]
 skills_dir = f"{plugin}/skills"
@@ -285,6 +285,12 @@ for name in sorted(expected):
     for support in re.findall(r"`([a-z-]+-prompt\.md)`", body):
         assert os.path.exists(f"{skills_dir}/{name}/{support}"), f"{path}: missing {support}"
     assert not re.search(r"\bTBD\b|(?<!\$)\{[A-Z_ ]+\}", body), f"{path}: placeholder text"
+    for prompt_path in sorted(glob.glob(f"{skills_dir}/{name}/*-prompt.md")):
+        prompt_text = open(prompt_path).read()
+        for topic in re.findall(r"qualifier agents ([a-z_-]+)", prompt_text):
+            assert topic in topics, f"{prompt_path}: cites missing agents topic {topic!r}"
+        for ref in re.findall(r"qual:([a-z-]+)", prompt_text):
+            assert ref in expected, f"{prompt_path}: references unknown skill qual:{ref}"
 
 bootstrap = open(f"{skills_dir}/using-qualifier/SKILL.md").read()
 assert len(bootstrap) < 8000, f"using-qualifier is {len(bootstrap)} chars; keep it under 8000 (hook context cap)"

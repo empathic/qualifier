@@ -8,14 +8,21 @@ allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qual
 
 ## Read as a stranger
 
-List what this session touched:
+List what this session touched. `--tag` only matches a thread's root or a
+live reply, not the `resolve` that closed it, so a thread this session
+resolved (but didn't open or reply to) won't show up in a tag-filtered
+query — check both:
 
 ```bash
-qualifier threads --all --format json --tag 'session:claude-code:${CLAUDE_SESSION_ID}'
+qualifier threads --all --format json --tag 'session:<value>'
+qualifier threads --all --format json
 ```
 
-If `${CLAUDE_SESSION_ID}` above was not replaced with an ID, take the
-`session:claude-code:…` tag from any record you wrote this session.
+`<value>` is this session's tag — usually `claude-code:<id>`, or whatever
+`$QUALIFIER_SESSION` names if it was set; take it from any record you wrote
+this session if you're unsure. From the second, unfiltered listing, also
+count threads whose `closed_by.body.tags` include `session:<value>` — those
+were resolved by this session and are missing from the first query.
 
 For each thread, ask: would someone who never saw this session know what to
 do?

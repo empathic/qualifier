@@ -11,11 +11,15 @@ claim against the current code.
 - **refuted** — the claim does not hold. Evidence of the same kind.
 
 Write one reply per finding in a single batch (Write tool → file, then
-`qualifier record --stdin --dry-run` and the real run):
+`qualifier record --stdin --dry-run < <file>` and
+`qualifier record --stdin < <file>`):
 
 `{"reply": "<id>", "message": "confirmed: <one line>", "detail": "<evidence>", "tags": ["verified"]}`
+`{"reply": "<id>", "message": "refuted: <one line>", "detail": "<evidence>", "tags": ["verified"]}`
 
-Evidence must stand alone: repository paths and lines, not this brief.
+Evidence must stand alone: repository paths and lines, not this brief. Do
+not resolve anything yourself — the reviewing session resolves findings
+you refute, with `--reason invalid`, after reading your reply.
 
 ## Final message
 

@@ -1,7 +1,9 @@
 # Reviewer brief
 
-You are reviewing `{SCOPE}` in this repository. Write every finding to
-qualifier; do not report findings in your final message.
+You are reviewing `{SCOPE}` in this repository. Tag every finding `review`
+and `{TAG}` (a tag scoped to this review, given to you by the controller).
+Write every finding to qualifier; do not report findings in your final
+message.
 
 ## What to look for
 
@@ -13,7 +15,7 @@ change, then clarity. Skip style nits a formatter would fix.
 Collect findings, then write them as one batch:
 
 1. Write a JSONL file with the Write tool, one line per finding:
-   `{"kind": "<blocker|concern|suggestion>", "location": "<path>:<start>:<end>", "message": "<one-line claim>", "detail": "<why it matters, with evidence>", "suggested_fix": "<concrete change>", "tags": ["review"]}`
+   `{"kind": "<blocker|concern|suggestion>", "location": "<path>:<start>:<end>", "message": "<one-line claim>", "detail": "<why it matters, with evidence>", "suggested_fix": "<concrete change>", "tags": ["review", "{TAG}"]}`
 2. `qualifier record --stdin --dry-run < <file>`, fix any errors, then
    `qualifier record --stdin --format json < <file>`.
 

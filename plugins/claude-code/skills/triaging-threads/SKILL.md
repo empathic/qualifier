@@ -40,9 +40,13 @@ All writes in one batch: Write tool → `triage.jsonl`, then
 `qualifier record --stdin --dry-run < triage.jsonl`, then the real run.
 
 ```json
-{"resolve": "e52b00e4", "message": "Retry budget added in 4f1c2aa", "reason": "fixed", "ref": "git:4f1c2aa"}
+{"resolve": "e52b00e4", "message": "cargo test net::retry passes; retry budget added in 4f1c2aa", "reason": "fixed", "ref": "git:4f1c2aa"}
 {"reply": "7c1d93aa", "message": "Resolution: move the lock into ConnPool::get (src/pool.rs:88) so callers can't forget it"}
 ```
+
+A `fixed` close needs evidence in the message (a test that now passes, or a
+command and its output) and a `"ref"` naming the commit; commit the `.qual`
+change separately from the fix it references.
 
 If a target was superseded, the batch fails naming the live record —
 retarget to it.
