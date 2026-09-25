@@ -41,12 +41,18 @@ qualifier record alternative docs/design.md:40:52 "Per-session worker pool" \
 
 ## Close authority
 
-Resolve a record only when (a) your session issued it (subagents share the
-session), or (b) your own commit fixed it — and then only with evidence in
-the message (a test that now passes, or a command and its output) and
-`--ref git:<sha>`. Commit the `.qual` change separately: a resolve cannot
-live in the commit it references. Without evidence, reply with what you
-found and let a human close it. `wontfix` and decisions belong to humans.
+Resolve a record in one of two cases:
+
+- **(a) Your session issued it** (subagents share the session): resolve
+  with a message citing why — the refuting reply's ID, or the evidence
+  itself. No commit ref needed.
+- **(b) Your own commit fixed it**: resolve only with evidence in the
+  message (a test that now passes, or a command and its output) and
+  `--ref git:<sha>`. Commit the `.qual` change separately: a resolve
+  cannot live in the commit it references.
+
+Without evidence for (b), reply with what you found and let a human close
+it. `wontfix` and decisions belong to humans.
 
 ## Self-sufficient records
 

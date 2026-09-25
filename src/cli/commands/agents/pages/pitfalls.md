@@ -42,11 +42,12 @@ since = "0.5.0"
 - **Resolving annotations you were not directed to close.**
   `qualifier resolve` closes a record and hides it from active views, so
   resolving one you don't fully understand buries a concern the user may
-  still want. Resolve only (a) records your own session wrote, or (b)
-  threads your own commit fixed — and then only with evidence in the
-  message (a test that now passes, or a command and its output) and
-  `--ref git:<sha>`. Otherwise reply with what you found and let the user
-  close it.
+  still want. Resolve only (a) records your own session wrote — with a
+  message citing why (the refuting reply's ID, or the evidence itself); no
+  commit ref needed — or (b) threads your own commit fixed, and only with
+  evidence in the message (a test that now passes, or a command and its
+  output) and `--ref git:<sha>`. Otherwise reply with what you found and
+  let the user close it.
 
 - **Adding positive annotations the user did not ask for.**
   An agent volunteering `praise`, `pass`, or other positive-polarity
