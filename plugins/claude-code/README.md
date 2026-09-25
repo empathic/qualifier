@@ -17,12 +17,6 @@ it installs the qualifier release this plugin pins to `~/.local/bin` on
 first use, verified against checksums shipped in the plugin. Platforms
 without a prebuilt binary get a `cargo install qualifier --version …` line.
 
-**Before first release:** no `v0.8.0` GitHub release exists yet, so the
-wrapper's `SHA256_*` checksums are empty and it cannot self-install a
-binary. Until a maintainer tags `v0.8.0` and those checksums are filled in
-(see `AGENTS.md` "Keeping Things in Sync"), the wrapper falls back to
-`cargo install qualifier --version 0.8.0`.
-
 ## What it does
 
 In a repository that contains `.qual` files, a SessionStart hook loads the
