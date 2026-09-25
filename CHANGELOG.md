@@ -21,6 +21,8 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 - **`qualifier threads`** lists conversations across the project (root,
   live replies, open/closed) with location, glob, span, kind, tag, and
   issuer-type filters, and JSON output.
+- `threads --status`, `--changed-since <ref>`, and `--summary` (a
+  two-line digest for session-start hooks).
 
 ### Fixed
 

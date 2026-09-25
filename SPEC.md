@@ -1154,7 +1154,9 @@ qualifier praise src/parser.rs --vcs
 
 ```
 qualifier threads [LOCATION...] [--all] [--kind K[,K]] [--tag T]
-                  [--issuer-type TYPE] [--format human|json] [--no-ignore]
+                  [--issuer-type TYPE] [--status needs-decision|decided|deferred]
+                  [--changed-since REF] [--summary]
+                  [--format human|json] [--no-ignore]
 ```
 
 Lists threads as defined in §7 (`qualifier::threads`). By default only
@@ -1165,6 +1167,17 @@ overlaps. `--tag` matches tags on the root or a live reply; `ns:*` matches a
 namespace; repeated `--tag` flags must all match. JSON output is a single
 array of `{origin, open, root, closed_by, history, replies: [{active,
 record}], latest_at}` with full IDs.
+
+`--status needs-decision|decided|deferred` matches the thread's latest
+`status:*` tag by `created_at` (an addressee suffix such as
+`status:needs-decision:<issuer>` still matches). `--changed-since REF`
+keeps threads whose root subject changed between the merge base of HEAD
+and REF and the working tree, including untracked files (git only).
+`--summary` prints at most two lines — open blockers and concerns on files
+changed since `main` (or `master`, or the `--changed-since` ref), and
+threads waiting on a decision — and nothing when both counts are zero.
+On the base branch, or outside git, the first line counts project-wide and
+ends with `(project-wide)`.
 
 ## 7. Library API
 

@@ -22,8 +22,11 @@ qualifier threads 'src/**/*.rs'             # glob (* does not cross /)
 qualifier threads src/net/tcp.rs:40:80      # root span overlaps 40–80
 qualifier threads --kind blocker,concern
 qualifier threads --tag 'status:*'          # tag on root or a live reply
+qualifier threads --status needs-decision   # latest status:* tag on the thread
+qualifier threads --changed-since main      # root subject changed vs. main (git only)
 qualifier threads --all                     # include closed threads
 qualifier threads --format json             # one JSON array
+qualifier threads --summary                 # 0-2 line digest for session-start hooks
 ```
 
 ## JSON shape

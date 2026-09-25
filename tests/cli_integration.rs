@@ -4786,3 +4786,142 @@ fn test_threads_history_shows_superseded_root_chain() {
         "{stdout}"
     );
 }
+
+// --- threads --status / --changed-since / --summary ---
+
+#[test]
+fn test_threads_status_uses_latest_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = write_id(dir.path(), &["record", "concern", "a.rs", "sync or async?"]);
+    write_id(
+        dir.path(),
+        &[
+            "reply",
+            &c[..8],
+            "owner should decide",
+            "--tag",
+            "status:needs-decision:mailto:owner@example.com",
+        ],
+    );
+    assert_eq!(
+        threads_json(dir.path(), &["--status", "needs-decision"]).len(),
+        1,
+        "addressee suffix still matches"
+    );
+
+    write_id(
+        dir.path(),
+        &["reply", &c[..8], "async", "--tag", "status:decided"],
+    );
+    assert_eq!(
+        threads_json(dir.path(), &["--status", "needs-decision"]).len(),
+        0,
+        "a later status wins"
+    );
+    assert_eq!(threads_json(dir.path(), &["--status", "decided"]).len(), 1);
+}
+
+/// Repo on `main` with concerns on a.rs and b.rs committed, then a `feat`
+/// branch that modifies a.rs.
+fn changed_since_setup(dir: &Path) {
+    git_init(dir);
+    std::fs::write(dir.join("a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(dir.join("b.rs"), "fn b() {}\n").unwrap();
+    write_id(dir, &["record", "blocker", "a.rs", "a must fix"]);
+    write_id(dir, &["record", "concern", "b.rs", "b smells"]);
+    git_commit_all(dir, "init");
+    Command::new("git")
+        .args(["checkout", "-q", "-b", "feat"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    std::fs::write(dir.join("a.rs"), "fn a() { todo!() }\n").unwrap();
+}
+
+#[test]
+fn test_threads_changed_since() {
+    let dir = tempfile::tempdir().unwrap();
+    changed_since_setup(dir.path());
+    let threads = threads_json(dir.path(), &["--changed-since", "main"]);
+    let summaries: Vec<&str> = threads
+        .iter()
+        .map(|t| t["root"]["body"]["summary"].as_str().unwrap())
+        .collect();
+    assert_eq!(summaries, vec!["a must fix"]);
+}
+
+#[test]
+fn test_threads_changed_since_outside_git_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier(dir.path(), &["threads", "--changed-since", "main"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("git"), "{stderr}");
+}
+
+#[test]
+fn test_threads_summary_silent_when_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--summary"]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "");
+}
+
+#[test]
+fn test_threads_summary_counts_changed_files_and_decisions() {
+    let dir = tempfile::tempdir().unwrap();
+    changed_since_setup(dir.path());
+    let b = threads_json(dir.path(), &["b.rs"])[0]["root"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    write_id(
+        dir.path(),
+        &[
+            "reply",
+            &b[..8],
+            "needs a call",
+            "--tag",
+            "status:needs-decision",
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["threads", "--summary"]);
+    assert_eq!(code, 0, "{stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert_eq!(
+        lines[0],
+        "qualifier: 1 blocker and 0 concerns open on files changed since main"
+    );
+    assert_eq!(
+        lines[1],
+        "qualifier: 1 thread waiting on a decision (qualifier threads --status needs-decision)"
+    );
+}
+
+#[test]
+fn test_threads_summary_outside_git_counts_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(dir.path(), &["record", "concern", "a.rs", "x"]);
+    let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--summary"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        stdout.trim(),
+        "qualifier: 0 blockers and 1 concern open (project-wide)"
+    );
+}
+
+#[test]
+fn test_threads_summary_on_base_branch_counts_project_wide() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+    write_id(dir.path(), &["record", "blocker", "a.rs", "a must fix"]);
+    git_commit_all(dir.path(), "init");
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["threads", "--summary"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "qualifier: 1 blocker and 0 concerns open (project-wide)"
+    );
+}
