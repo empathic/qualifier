@@ -43,12 +43,12 @@ TMPDIR_CLEANUP=""
 log() { echo "$@" >&2; }
 
 is_qualifier() {
-    [ -x "$1" ] && [ "$("$1" --version 2>/dev/null | awk '{print $1}')" = "qualifier" ]
+    [ -x "$1" ] && [ "$("$1" --version </dev/null 2>/dev/null | awk '{print $1}')" = "qualifier" ]
 }
 
 warn_if_old() {
     local version
-    version="$("$1" --version 2>/dev/null | awk '{print $2}')" || return 0
+    version="$("$1" --version </dev/null 2>/dev/null | awk '{print $2}')" || return 0
     [ -n "$version" ] || return 0
     if [ "$(printf '%s\n%s\n' "$MIN_VERSION" "$version" | sort -V | head -1)" != "$MIN_VERSION" ]; then
         log "warning: qualifier ${version} is older than ${MIN_VERSION}; some qual skills may not work."
@@ -59,21 +59,37 @@ warn_if_old() {
 resolve_existing() {
     local candidate dir
     if [ -n "${QUALIFIER_BIN:-}" ]; then
-        if is_qualifier "$QUALIFIER_BIN"; then
-            echo "$QUALIFIER_BIN"
-            return 0
-        fi
+        # Only an absolute path is eligible; a relative one is treated the
+        # same as an unusable one below (its meaning depends on $PWD).
+        case "$QUALIFIER_BIN" in
+            /*)
+                if is_qualifier "$QUALIFIER_BIN"; then
+                    echo "$QUALIFIER_BIN"
+                    return 0
+                fi
+                ;;
+        esac
         log "warning: \$QUALIFIER_BIN is set to '${QUALIFIER_BIN}' but is not a usable qualifier; ignoring it."
     fi
-    # Walk every `qualifier` on PATH, skipping foreign binaries with the same name.
+    # Walk every `qualifier` on PATH, skipping foreign binaries with the same
+    # name and any non-absolute entry (including a bare `.`), so the printed
+    # path is always absolute. Globbing is disabled so an unquoted $PATH
+    # entry containing a glob character is never expanded.
     local IFS=:
+    set -f
     for dir in $PATH; do
+        case "$dir" in
+            /*) ;;
+            *) continue ;;
+        esac
         candidate="$dir/qualifier"
         if is_qualifier "$candidate"; then
+            set +f
             echo "$candidate"
             return 0
         fi
     done
+    set +f
     if is_qualifier "$INSTALL_DIR/qualifier"; then
         echo "$INSTALL_DIR/qualifier"
         return 0
@@ -99,6 +115,14 @@ cargo_fallback() {
     log "Error: $1."
     log "Install qualifier manually instead: cargo install qualifier --version ${PINNED_VERSION}"
     exit 1
+}
+
+refuse_if_install_dir_occupied() {
+    if [ -e "${INSTALL_DIR}/qualifier" ]; then
+        log "Error: ${INSTALL_DIR}/qualifier already exists and is not a usable qualifier."
+        log "Set QUALIFIER_INSTALL_DIR to a different directory, or remove ${INSTALL_DIR}/qualifier, then retry."
+        exit 1
+    fi
 }
 
 resolve_target() {
@@ -160,6 +184,7 @@ path_hint() {
 # Sets $RESOLVED_BIN. Not called via $(...): subshells don't inherit `set -e`
 # on macOS's bash 3.2, and a failed download or checksum must abort.
 install_qualifier() {
+    refuse_if_install_dir_occupied
     check_dependencies
     local target
     target="$(resolve_target)"
@@ -171,6 +196,7 @@ install_qualifier() {
     mkdir -p "$INSTALL_DIR"
     mv "${TMPDIR_CLEANUP}/qualifier" "${INSTALL_DIR}/qualifier"
     chmod +x "${INSTALL_DIR}/qualifier"
+    rm -rf "$TMPDIR_CLEANUP"
 
     log "Installed qualifier ${PINNED_VERSION} to ${INSTALL_DIR}/qualifier"
     path_hint "$INSTALL_DIR"

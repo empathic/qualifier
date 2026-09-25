@@ -150,7 +150,8 @@ pinned_copy() {
     sed -e 's/^PINNED_VERSION=.*/PINNED_VERSION="9.9.9"/' \
         -e "s/^${SHAVAR}=.*/${SHAVAR}=\"${sha}\"/" "$ENSURE" >"$dest"
     chmod +x "$dest"
-    # shellcheck disable=SC2015 # fail-fast check, not if/then/else: either grep failing should fail.
+    # Fail-fast check, not if/then/else: either grep failing should fail.
+    # shellcheck disable=SC2015
     grep -q '^PINNED_VERSION="9.9.9"$' "$dest" && grep -q "^${SHAVAR}=\"${sha}\"$" "$dest" \
         || fail "could not pin a wrapper copy"
 }
@@ -185,31 +186,53 @@ if PATH="/usr/bin:/bin:/usr/sbin:/sbin" command -v qualifier >/dev/null 2>&1; th
     exit 0
 fi
 
-# 7. No embedded checksum for this target: refuse to download, point at cargo.
+# 7. A foreign binary already at $QUALIFIER_INSTALL_DIR/qualifier is never
+#    overwritten by an install.
+make_fake_qualifier "$QUALIFIER_INSTALL_DIR/qualifier" "1.0" "something-else"
+pinned_copy "$SANDBOX/ensure-foreign-install.sh" "$FIXTURE_SHA"
+err="$(PATH="$SAFE_PATH" "$SANDBOX/ensure-foreign-install.sh" 2>&1 >/dev/null)" && fail "must refuse to overwrite a foreign binary"
+case "$err" in *"QUALIFIER_INSTALL_DIR"*) ;; *) fail "expected an error naming QUALIFIER_INSTALL_DIR, got: $err" ;; esac
+[ "$("$QUALIFIER_INSTALL_DIR/qualifier" --version)" = "something-else 1.0" ] || fail "the foreign binary must be left unchanged"
+rm -f "$QUALIFIER_INSTALL_DIR/qualifier"
+ok "refuses to overwrite a foreign binary in QUALIFIER_INSTALL_DIR"
+
+# 8. No embedded checksum for this target: refuse to download, point at cargo.
 pinned_copy "$SANDBOX/ensure-unverified.sh" ""
 err="$(PATH="$SAFE_PATH" "$SANDBOX/ensure-unverified.sh" 2>&1 >/dev/null)" && fail "an unverified target must not install"
 case "$err" in *"cargo install qualifier --version 9.9.9"*) ;; *) fail "expected the cargo fallback, got: $err" ;; esac
+case "$err" in *"no verified"*) ;; *) fail "expected a 'no verified' message, got: $err" ;; esac
 [ ! -e "$QUALIFIER_INSTALL_DIR/qualifier" ] || fail "nothing may be installed without a checksum"
 ok "refuses to download a target without an embedded checksum"
 
-# 8. Download the pinned release, verify, install.
+# 9. Download the pinned release, verify, install.
 pinned_copy "$SANDBOX/ensure-pinned.sh" "$FIXTURE_SHA"
 out="$(PATH="$SAFE_PATH" "$SANDBOX/ensure-pinned.sh" 2>/dev/null)"
 [ "$out" = "$QUALIFIER_INSTALL_DIR/qualifier" ] || fail "expected install to $QUALIFIER_INSTALL_DIR, got $out"
 [ "$("$out" --version)" = "qualifier 9.9.9" ] || fail "installed binary does not run"
 ok "downloads, verifies, and installs the pinned release"
 
-# 9. A second run finds the installed binary without downloading.
-out="$(PATH="/usr/bin:/bin" "$SANDBOX/ensure-pinned.sh" 2>/dev/null)"
+# 10. A second run finds the installed binary without touching the network.
+NOACCESS_STUB="$SANDBOX/curl-noaccess"
+mkdir -p "$NOACCESS_STUB"
+NOACCESS_MARKER="$SANDBOX/curl-was-called"
+cat >"$NOACCESS_STUB/curl" <<EOF
+#!/usr/bin/env bash
+touch "$NOACCESS_MARKER"
+echo "curl stub: unexpected network access" >&2
+exit 1
+EOF
+chmod +x "$NOACCESS_STUB/curl"
+rm -f "$NOACCESS_MARKER"
+out="$(PATH="$NOACCESS_STUB:/usr/bin:/bin" "$SANDBOX/ensure-pinned.sh" 2>/dev/null)"
 [ "$out" = "$QUALIFIER_INSTALL_DIR/qualifier" ] || fail "expected the installed binary, got $out"
-ok "reuses the installed binary"
+[ ! -e "$NOACCESS_MARKER" ] || fail "reuse must not touch the network (curl was invoked)"
+ok "reuses the installed binary without touching the network"
 
-# 10. A checksum mismatch aborts and installs nothing.
+# 11. A checksum mismatch aborts and installs nothing.
 rm -f "$QUALIFIER_INSTALL_DIR/qualifier"
 pinned_copy "$SANDBOX/ensure-wrong-sha.sh" "0000000000000000000000000000000000000000000000000000000000000000"
-if PATH="$SAFE_PATH" "$SANDBOX/ensure-wrong-sha.sh" >/dev/null 2>&1; then
-    fail "a checksum mismatch must fail"
-fi
+err="$(PATH="$SAFE_PATH" "$SANDBOX/ensure-wrong-sha.sh" 2>&1 >/dev/null)" && fail "a checksum mismatch must fail"
+case "$err" in *"checksum mismatch"*) ;; *) fail "expected a checksum mismatch message, got: $err" ;; esac
 [ ! -e "$QUALIFIER_INSTALL_DIR/qualifier" ] || fail "nothing may be installed on checksum mismatch"
 ok "checksum mismatch aborts the install"
 
