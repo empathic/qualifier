@@ -9,9 +9,6 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 
 ### Added
 
-- `--supersedes` and `--references` accept ID prefixes (≥ 4 characters),
-  resolved like `reply`/`resolve` targets. Editing a reply is
-  `qualifier reply <target> "…" --supersedes <prefix>`.
 - Write commands read `QUALIFIER_ISSUER`, `QUALIFIER_ISSUER_TYPE`, and
   `QUALIFIER_SESSION`, and detect Claude Code (`CLAUDECODE=1`): records
   written there default to `issuer_type: ai` and carry the tag
@@ -27,9 +24,6 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   matches the closing resolve.
 - `threads --status`, `--changed-since <ref>`, and `--summary` (a
   two-line digest for session-start hooks).
-- `record --stdin` accepts `{"reply": "<target>", …}` and
-  `{"resolve": "<target>", …}` lines with the same target resolution as
-  the single commands, including records created earlier in the batch.
 - `qualifier agents conventions` and `qualifier agents batch`.
 
 ### Fixed
@@ -40,28 +34,29 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 ### Changed
 
 - `show` marks records whose issuer type is not `human`, e.g. `alex (ai)`.
-- **`reply` and `resolve` refuse superseded targets.** An ID prefix that
-  matches a superseded record now fails, naming the live record at the tip
-  of its chain, or reporting the record as closed when the chain ends in a
-  `resolve`. `--allow-superseded` restores the old behavior for deliberate
-  annotation of history.
+- **`reply` and `resolve` refuse superseded and closed targets.** A target
+  that has been superseded fails, naming the live record at the tip of its
+  chain. A target whose chain ends in a `resolve` fails as closed, naming
+  the closing record: reply to that record to comment on the closed
+  thread, or record a new record that supersedes it to reopen the thread.
 - `record --stdin` without `--continue-on-error` is all-or-nothing: every
-  line is resolved and validated first, every failing line is reported,
-  and nothing is written if any line fails. Previously lines before the
-  first failure were written.
-- Non-batch `record --supersedes`/`--references` resolve ID prefixes and
-  reject unknown or superseded IDs (unless `--allow-superseded`).
+  line is validated first, every failing line is reported, and nothing is
+  written if any line fails. Previously lines before the first failure
+  were written.
+- **`supersedes`/`references` pointers must name a live record by full
+  ID.** `record --supersedes`/`--references`, `reply --supersedes`, and
+  the `supersedes`/`references` keys on `record --stdin` overrides lines
+  take the full 64-character ID of a record that exists (for batch lines,
+  on disk or on an earlier line) and is neither superseded nor closed.
   Previously the value was stored verbatim.
-- `record --stdin` overrides lines (`supersedes`/`references`) now resolve
-  ID prefixes and require a live, existing target, matching the non-batch
-  `--supersedes`/`--references` flags. Previously these fields were stored
-  verbatim with no resolution or liveness check.
+- A `kind: "resolve"` line in `record --stdin` carries at most one
+  `reason:*` tag, from the same vocabulary as `resolve --reason`.
 - Commands now discover the whole project when run from a subdirectory,
   not just that subdirectory's `.qual` files.
 - **Locations are relative to the current directory; subjects are stored
   relative to the project root.** `record` (single and `--stdin`
-  `location` values), `reply`/`resolve` location targets (single and
-  batch), `threads` filters, and the `show`, `praise`, and `compact`
+  `location` values), `reply`/`resolve` location targets, `threads`
+  filters, and the `show`, `praise`, and `compact`
   artifacts join the argument to the current directory's path below the
   project root and normalize it; an argument that leaves the project root
   is an error. Every write lands in a `.qual` file under the project root;
@@ -72,9 +67,7 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 - A location target for `reply`/`resolve` never resolves to a `resolve`
   record.
 - `record --stdin --dry-run` no longer creates directories.
-- `record --stdin` rejects `--file` and `--allow-superseded` (set
-  `allow_superseded` per line) instead of silently ignoring them, and
-  rejects `reply`/`resolve` lines carrying unknown keys, naming the key.
+- `record --stdin` rejects `--file` instead of silently ignoring it.
 - An ambiguous ID prefix lists the candidates, one
   `[id8] kind location "summary"` line each.
 

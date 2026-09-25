@@ -951,12 +951,13 @@ qualifier record concern src/parser.rs:42:58 "Panics on malformed input" \
 **Flags:** `--detail TEXT`, `--ref REF`, `--tag T1 --tag T2 ...`,
 `--suggested-fix TEXT`, `--issuer URI`, `--issuer-type {human|ai|tool|unknown}`,
 `--file PATH`, `--span SPEC` (overrides any span in `<location>`),
-`--supersedes ID`, `--references ID`, `--allow-superseded`, `--stdin` (batch
-JSONL).
+`--supersedes ID`, `--references ID`, `--stdin` (batch JSONL).
 
-`--supersedes` and `--references` each take an ID or ID prefix
-(≥ 4 characters) of a prior record; must name a live record unless
-`--allow-superseded`.
+`--supersedes` and `--references` each take the full ID (64 lowercase hex
+characters) of a record that exists in the project and is live: not
+superseded, and not closed by a `resolve`. A prefix or location is
+rejected. A superseded target fails, naming the live record at the tip of
+its chain; a closed target fails, naming the closing `resolve` record.
 
 **Defaults:**
 
@@ -986,37 +987,41 @@ the same forms plus column granularity:
 
 #### 6.2.2 Batch Mode
 
-`qualifier record --stdin` reads JSONL from stdin. Each line is one of:
+`qualifier record --stdin` reads JSONL from stdin. Each line describes one
+new record and is one of:
 
 - An overrides object: `{"kind":"...","location":"...","message":"...", ...}`
   with optional `detail`, `ref`, `tags`, `issuer`, `issuer_type`,
-  `span`, `supersedes`, `references`, `suggested_fix`, `allow_superseded`.
-- A reply line: `{"reply":"<target>","message":"...","kind"?,"detail"?,
-  "suggested_fix"?,"tags"?,"issuer"?,"issuer_type"?,"ref"?,"supersedes"?,
-  "allow_superseded"?}` — same shape and defaults as `qualifier reply`.
-- A resolve line: `{"resolve":"<target>","message"?,"reason"?,"tags"?,
-  "issuer"?,"issuer_type"?,"ref"?,"allow_superseded"?}` — same shape and
-  defaults as `qualifier resolve`. A line may not set both `reply` and
-  `resolve`.
-- A complete record (envelope + body), accepted for forward-compat.
+  `span`, `supersedes`, `references`, `suggested_fix`. `location` is
+  required.
+- A complete record (envelope + body), accepted for forward-compat. Its
+  pointers are stored as given.
 
-`<target>` in a `reply`/`resolve` line is an ID prefix or a `<location>`,
-resolved with the same rules as the `reply`/`resolve` commands (§6.3, §6.4)
-— including against records created earlier in the same batch. A
-`reply`/`resolve` line carrying any key not listed above is rejected, and
-the error names the key. `--file` and `--allow-superseded` are rejected
-with `--stdin`; set `allow_superseded` per line instead.
+There are no reply or resolve line shapes. A reply is an overrides line
+whose `references` is the target's ID; a resolve is an overrides line with
+`"kind":"resolve"` whose `supersedes` is the target's ID:
+
+```
+{"kind":"comment","location":"src/auth.rs","references":"<id>","message":"Confirmed"}
+{"kind":"resolve","location":"src/auth.rs","supersedes":"<id>","message":"Fixed","tags":["reason:fixed"]}
+```
+
+`supersedes` and `references` on an overrides line follow the same rule as
+the `--supersedes`/`--references` flags: the full ID of a live record,
+which may be on disk or on an earlier line of the same batch. A
+`"kind":"resolve"` line carries at most one `reason:*` tag, and its value
+must be one of the `resolve --reason` values (§6.4). `--file` is rejected
+with `--stdin`.
 
 Without `--continue-on-error`, batch mode is all-or-nothing with respect to
-parse, target-resolution, and validation failures: every line is parsed,
-resolved, and validated before any record is written, every failing line
-is reported, and nothing is written if any line fails that way. This
-guarantee does not cover I/O failures while writing: if appending a
-planned record to disk fails partway through (e.g., the filesystem fills
-up), the lines written before the failure stay written; the error message
-reports how many. Pass `--continue-on-error` to collect every
-parse/resolve/validation error, write the lines that succeeded, and exit
-non-zero if any line failed.
+parse and validation failures: every line is parsed and validated before
+any record is written, every failing line is reported, and nothing is
+written if any line fails that way. This guarantee does not cover I/O
+failures while writing: if appending a planned record to disk fails
+partway through (e.g., the filesystem fills up), the lines written before
+the failure stay written; the error message reports how many. Pass
+`--continue-on-error` to collect every parse/validation error, write the
+lines that succeeded, and exit non-zero if any line failed.
 
 ### 6.3 `qualifier reply`
 
@@ -1038,12 +1043,16 @@ Sugar over "kind=comment + references=`<target-id>`". The default kind is
   records share the most-recent timestamp, exit non-zero with a
   disambiguation list of `[id-prefix] kind L<line> "summary"`.
 
-A target that has been superseded is rejected. The error names the live
-record at the tip of its supersession chain, or reports the target as
-closed when that chain ends in a `resolve`. Pass `--allow-superseded` to
-annotate a superseded or closed record deliberately.
+A target that has been superseded is rejected; the error names the live
+record at the tip of its supersession chain. A target whose chain ends in a
+`resolve` is rejected as closed; the error names the closing `resolve`
+record. To comment on a closed thread, reply to that `resolve` record: the
+reply joins the thread (§6.12), which stays closed. To reopen the thread,
+record a new non-reply record on the same subject that supersedes the
+`resolve` record; it becomes the thread's root.
 
-Same body flags as `qualifier record`.
+Same body flags as `qualifier record`. `--supersedes` (for editing an
+earlier reply) takes a full, live record ID, as in §6.2.
 
 ### 6.4 `qualifier resolve`
 
@@ -1053,9 +1062,9 @@ qualifier resolve <target> [message]
 
 Sugar over "kind=resolve + supersedes=`<target-id>`". `<target>` follows
 the same id-prefix-or-location rules as `qualifier reply`. The default
-summary is "Resolved" when `[message]` is omitted.
-`--allow-superseded` behaves as for `reply`; without it, resolving an
-already-closed record fails.
+summary is "Resolved" when `[message]` is omitted. Superseded and closed
+targets are rejected as for `reply`; resolving an already-closed record
+fails, naming the closing record.
 
 `--reason fixed|wontfix|duplicate|invalid|obsolete` adds the tag
 `reason:<value>`. A resolve carries at most one `reason:*` tag, and its
@@ -1453,8 +1462,9 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
 - **Structured output:** `--format json` on `show` and `ls` commands.
 - **Batch annotation:** `qualifier record --stdin` reads JSONL from stdin
   (overrides objects or full records). For non-annotation record types,
-  `qualifier emit --stdin` accepts complete records. Lines can also reply
-  to or resolve existing records by ID prefix or location; without
+  `qualifier emit --stdin` accepts complete records. A batch reply or
+  resolve is a record line whose `references` or `supersedes` is the
+  target's full ID (from `qualifier threads --format json`); without
   `--continue-on-error` a batch writes nothing unless every line validates.
 - **Suggested fixes:** The `suggested_fix` body field gives agents a concrete
   action to take.
