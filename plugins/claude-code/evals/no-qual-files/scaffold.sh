@@ -3,6 +3,8 @@
 # plugin's skills stay quiet when there is nothing for them to consult.
 set -euo pipefail
 git init -q --initial-branch=main
+# Never sign in the scratch repo, whatever the host's global config says.
+git config commit.gpgsign false
 mkdir -p src
 cat > src/net.rs <<'RUST'
 pub fn connect(addr: &str) -> std::io::Result<std::net::TcpStream> {

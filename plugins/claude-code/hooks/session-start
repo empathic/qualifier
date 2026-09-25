@@ -98,11 +98,13 @@ skill_body="$(awk '
 BIN="$("$WRAPPER" 2>/dev/null)" || BIN=""
 on_path="$(command -v qualifier 2>/dev/null || true)"
 min_version="$("$WRAPPER" min-version 2>/dev/null || true)"
+pinned_version="$("$WRAPPER" pinned-version 2>/dev/null || true)"
+install_cmd="cargo install qualifier${pinned_version:+ --version $pinned_version}"
 
 note=""
 summary=""
 if [ -z "$BIN" ]; then
-    call_line="qualifier is not installed and the pinned release could not be installed here. Ask the user to run \`cargo install qualifier\`."
+    call_line="qualifier is not installed and the pinned release could not be installed here. Ask the user to run \`${install_cmd}\`."
 else
     if [ "$BIN" = "$on_path" ]; then
         call_line="Call it as \`qualifier\`."

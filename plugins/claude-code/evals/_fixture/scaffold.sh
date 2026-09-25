@@ -5,6 +5,9 @@ set -euo pipefail
 git init -q --initial-branch=main
 git config user.email eval@example.com
 git config user.name eval
+# The scratch repo commits under the host's global config; signing there
+# would fail (or prompt) with no key.
+git config commit.gpgsign false
 mkdir -p src docs
 cat > docs/cache-design.md <<'EOF'
 # Cache design

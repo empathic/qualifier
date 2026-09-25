@@ -172,7 +172,7 @@ chmod +x "$FAILCURL/curl"
 out="$(run_hook "$WITHQUAL" QUALIFIER_INSTALL_DIR="$SANDBOX/empty-bin" PATH="$FAILCURL:/usr/bin:/bin")" \
     || fail "hook must exit 0 when the binary cannot be installed"
 ctx="$(printf '%s' "$out" | context_of)"
-case "$ctx" in *"cargo install qualifier"*) ;; *) fail "context must say how to install: $ctx" ;; esac
+case "$ctx" in *"cargo install qualifier --version 0.8.0"*) ;; *) fail "context must give the pinned install command: $ctx" ;; esac
 ok "hook degrades gracefully without a binary or network"
 
 # H5. Works without VCS markers (project dir is the root).
@@ -306,6 +306,10 @@ ok "skills: frontmatter, cited topics, cross-references, supporting files, size"
 out="$("$ENSURE" min-version)"
 [ "$out" = "0.8.0" ] || fail "min-version: expected 0.8.0, got $out"
 ok "min-version reports MIN_VERSION without resolving a binary"
+
+out="$("$ENSURE" pinned-version)"
+[ "$out" = "0.8.0" ] || fail "pinned-version: expected 0.8.0, got $out"
+ok "pinned-version reports PINNED_VERSION without resolving a binary"
 
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)              TARGET="aarch64-apple-darwin";      SHAVAR="SHA256_AARCH64_APPLE_DARWIN" ;;

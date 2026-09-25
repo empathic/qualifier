@@ -5,6 +5,7 @@
 #   ensure-qualifier.sh                 print the absolute binary path on stdout
 #   ensure-qualifier.sh exec <args...>  resolve, then run `qualifier <args...>`
 #   ensure-qualifier.sh min-version     print MIN_VERSION (resolves nothing)
+#   ensure-qualifier.sh pinned-version  print PINNED_VERSION (resolves nothing)
 #
 # Everything except the resolved path / exec'd command output goes to stderr.
 #
@@ -204,10 +205,16 @@ install_qualifier() {
 }
 
 main() {
-    if [ "${1:-}" = "min-version" ]; then
-        echo "$MIN_VERSION"
-        return 0
-    fi
+    case "${1:-}" in
+        min-version)
+            echo "$MIN_VERSION"
+            return 0
+            ;;
+        pinned-version)
+            echo "$PINNED_VERSION"
+            return 0
+            ;;
+    esac
 
     local bin
     if ! bin="$(resolve_existing)"; then
@@ -225,7 +232,7 @@ main() {
             echo "$bin"
             ;;
         *)
-            log "usage: ensure-qualifier.sh [exec <args...> | min-version]"
+            log "usage: ensure-qualifier.sh [exec <args...> | min-version | pinned-version]"
             exit 2
             ;;
     esac
