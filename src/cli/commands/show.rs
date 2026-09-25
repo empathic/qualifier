@@ -1,6 +1,7 @@
 use clap::Args as ClapArgs;
 use std::path::Path;
 
+use crate::annotation::IssuerType;
 use crate::annotation::Kind;
 use crate::cli::output;
 use crate::cli::span_context;
@@ -155,10 +156,14 @@ fn print_record(
             .strip_prefix("mailto:")
             .and_then(|e| e.split('@').next())
             .unwrap_or(&att.issuer);
+        let issuer_label = match &att.issuer_type {
+            Some(t) if *t != IssuerType::Human => format!("{issuer_short} ({t})"),
+            _ => issuer_short.to_string(),
+        };
         let id_short = &att.id[..8.min(att.id.len())];
         println!(
             "{line_prefix}{}  {:?}  {}  {}  {}",
-            att.body.kind, att.body.summary, issuer_short, date, id_short,
+            att.body.kind, att.body.summary, issuer_label, date, id_short,
         );
         if args.pretty
             && let Some(ref span) = att.body.span

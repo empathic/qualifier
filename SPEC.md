@@ -1107,6 +1107,8 @@ qualifier show src/parser.rs
 When annotations have spans, the line range is displayed. Use
 `--line <n>` to filter to annotations overlapping a specific line.
 
+Human output shows the issuer type after the issuer name when it is set and not `human` (e.g. `alex (ai)`).
+
 `--all` shows all records including resolved/superseded ones (default hides
 them). `--pretty` forces colored output when piped.
 

@@ -5216,3 +5216,43 @@ fn test_threads_summary_on_base_branch_counts_project_wide() {
         "qualifier: 1 blocker and 0 concerns open (project-wide)"
     );
 }
+
+#[test]
+fn test_show_marks_non_human_issuer_type() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "from an agent",
+            "--issuer-type",
+            "ai",
+        ],
+    );
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "from a person",
+            "--issuer-type",
+            "human",
+        ],
+    );
+    write_id(dir.path(), &["record", "concern", "lib.rs", "unspecified"]);
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", "lib.rs"]);
+    assert_eq!(code, 0);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|l| l.contains(needle))
+            .unwrap()
+            .to_string()
+    };
+    assert!(line("from an agent").contains("test (ai)"), "{stdout}");
+    assert!(!line("from a person").contains('('), "{stdout}");
+    assert!(!line("unspecified").contains('('), "{stdout}");
+}

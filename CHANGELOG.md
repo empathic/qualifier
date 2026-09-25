@@ -35,6 +35,7 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 
 ### Changed
 
+- `show` marks records whose issuer type is not `human`, e.g. `alex (ai)`.
 - **`reply` and `resolve` refuse superseded targets.** An ID prefix that
   matches a superseded record now fails, naming the live record at the tip
   of its chain, or reporting the record as closed when the chain ends in a
