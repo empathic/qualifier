@@ -1,5 +1,5 @@
 ---
 type: tool_used
 tool: Bash
-input_match: 'qualifier (record|reply|resolve)'
+input_match: '(?:\bqualifier\b|ensure-qualifier\.sh(?:\\?")?\s+exec)\s+(record|reply|resolve)'
 ---

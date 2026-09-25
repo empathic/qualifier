@@ -44,17 +44,26 @@ spec, a source file, and open qualifier threads including a blocker on
 `no-qual-files` case that must not fire any `qual:` skill at all. Running
 evals calls the model and costs money — confirm before running.
 
-Requires `qualifier` >= 0.8.0 on `PATH`, or `QUALIFIER_BIN` exported to a
-built binary, since the scaffold script and case prompts both invoke
-`qualifier`. `Bash`, `Write`, and `Edit` are gated tools: listing them in a
-case's `allowed_tools` is not enough, they also need an operator grant on
-the command line. Smoke-test one case first, then run the full suite:
+Requires `qualifier` >= 0.8.0. Build it and put it on `PATH`, not just in
+`QUALIFIER_BIN`: each run's agent session is isolated and inherits only an
+allowlist of environment variables (`PATH`, locale, provider credentials,
+`EVAL_*`) — `QUALIFIER_BIN` does not reach it, and with no real qualifier
+release published yet the wrapper's embedded checksums are empty, so a
+sandboxed session that falls back to the wrapper would report qualifier as
+not installed. The `scaffold_script` runs on the host, outside that
+sandbox, and does see `QUALIFIER_BIN` if you set it (`scaffold.sh` falls
+back to `qualifier` on `PATH` otherwise), so set `QUALIFIER_BIN` too only
+if you want the scaffold to use a different binary than the one on `PATH`.
+`Bash`, `Write`, and `Edit` are gated tools: listing them in a case's
+`allowed_tools` is not enough, they also need an operator grant on the
+command line. Smoke-test one case first, then run the full suite:
 
 ```bash
-QUALIFIER_BIN=$PWD/target/debug/qualifier claude plugin eval plugins/claude-code \
+cargo build --bin qualifier
+PATH="$PWD/target/debug:$PATH" claude plugin eval plugins/claude-code \
   --case design-rejects-option --runs 1 --scaffold --allow-tools Write Edit Bash
 
-QUALIFIER_BIN=$PWD/target/debug/qualifier claude plugin eval plugins/claude-code \
+PATH="$PWD/target/debug:$PATH" claude plugin eval plugins/claude-code \
   --runs 3 --scaffold --allow-tools Write Edit Bash
 ```
 
@@ -67,7 +76,10 @@ directory to the `plugins:` list in each case (`prompt.md` frontmatter, or
 `case.yaml`; it defaults to just the enclosing `qual` plugin) — for example
 `plugins: ["../..", "/path/to/superpowers"]` — then run the same command
 again. `claude plugin eval` has no flag for adding a second plugin to a run;
-`plugins:` is the documented way to list more than one.
+`plugins:` is the documented way to list more than one. This two-plugin
+form of `plugins:` has not been run yet — smoke-test it on one case first
+(`--case <name> --runs 1`) and confirm both skills are actually available
+before trusting a full-suite comparison.
 
 Expected: each positive case passes `skill-fired` in at least 2 of 3 runs.
 `review-spec` accepts either `recording-design-decisions` or
