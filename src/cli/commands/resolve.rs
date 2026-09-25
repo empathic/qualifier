@@ -7,6 +7,49 @@ use crate::cli::provenance;
 use crate::cli::targets;
 use crate::qual_file;
 
+/// Close reasons accepted by `--reason`; each becomes the tag `reason:<value>`.
+pub const CLOSE_REASONS: &[&str] = &["fixed", "wontfix", "duplicate", "invalid", "obsolete"];
+
+/// Add `reason:<reason>` to `tags` unless present. Rejects unknown reasons,
+/// a `reason:*` tag that conflicts with `reason`, and more than one
+/// `reason:*` tag.
+pub(crate) fn with_reason(
+    mut tags: Vec<String>,
+    reason: Option<&str>,
+) -> crate::Result<Vec<String>> {
+    if let Some(r) = reason {
+        if !CLOSE_REASONS.contains(&r) {
+            return Err(crate::Error::Validation(format!(
+                "unknown close reason '{r}' (expected one of: {})",
+                CLOSE_REASONS.join(", ")
+            )));
+        }
+        let tag = format!("reason:{r}");
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    let reasons: Vec<&str> = tags
+        .iter()
+        .filter_map(|t| t.strip_prefix("reason:"))
+        .collect();
+    if reasons.len() > 1 {
+        return Err(crate::Error::Validation(format!(
+            "a resolve takes one reason; got reason:{}",
+            reasons.join(", reason:")
+        )));
+    }
+    if let Some(r) = reasons.first()
+        && !CLOSE_REASONS.contains(r)
+    {
+        return Err(crate::Error::Validation(format!(
+            "unknown close reason '{r}' (expected one of: {})",
+            CLOSE_REASONS.join(", ")
+        )));
+    }
+    Ok(tags)
+}
+
 #[derive(ClapArgs)]
 pub struct Args {
     /// Target — either an id-prefix (≥4 chars) or a `<location>`
@@ -44,6 +87,11 @@ pub struct Args {
     /// Allow targeting a superseded or resolved record (annotating history)
     #[arg(long)]
     pub allow_superseded: bool,
+
+    /// Why the record is closed: fixed, wontfix, duplicate, invalid, or
+    /// obsolete. Adds the tag `reason:<value>`.
+    #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(CLOSE_REASONS.iter().copied()))]
+    pub reason: Option<String>,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
@@ -77,7 +125,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             suggested_fix: None,
             summary: message,
             supersedes: Some(target_id.clone()),
-            tags: provenance::with_session_tag(args.tags),
+            tags: provenance::with_session_tag(with_reason(args.tags, args.reason.as_deref())?),
         },
     });
 

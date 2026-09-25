@@ -16,6 +16,8 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   `QUALIFIER_SESSION`, and detect Claude Code (`CLAUDECODE=1`): records
   written there default to `issuer_type: ai` and carry the tag
   `session:claude-code:<session id>`. Explicit flags still win.
+- `resolve --reason <fixed|wontfix|duplicate|invalid|obsolete>` adds the
+  tag `reason:<value>`.
 
 ### Fixed
 

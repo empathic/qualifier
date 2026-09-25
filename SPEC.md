@@ -1005,6 +1005,11 @@ summary is "Resolved" when `[message]` is omitted.
 `--allow-superseded` behaves as for `reply`; without it, resolving an
 already-closed record fails.
 
+`--reason fixed|wontfix|duplicate|invalid|obsolete` adds the tag
+`reason:<value>`. A resolve carries at most one `reason:*` tag, and its
+value must be one of these; `resolve` rejects anything else. It is a tag
+convention (§2.12), not a body field.
+
 ### 6.5 `qualifier emit`
 
 ```

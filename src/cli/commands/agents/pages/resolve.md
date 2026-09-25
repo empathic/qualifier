@@ -66,6 +66,11 @@ jump to the exact commit that addressed the issue.
 behalf of the user, so the resolution is attributable to a machine rather
 than a human and the user can review what their agent closed.
 
+**`--reason fixed|wontfix|duplicate|invalid|obsolete`** adds the tag
+`reason:<value>`. A resolve carries at most one `reason:*` tag, and its
+value must be one of these; `resolve` rejects anything else. It is a tag
+convention (§2.12), not a body field.
+
 ## Gotchas
 
 - `resolve` writes a *new* record with `body.supersedes`; it does not modify

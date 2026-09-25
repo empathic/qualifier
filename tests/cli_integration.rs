@@ -4167,6 +4167,104 @@ fn test_reply_allow_superseded_annotates_history() {
     assert!(qual.contains(&format!("\"references\":\"{id}\"")), "{qual}");
 }
 
+// --- resolve --reason ---
+
+#[test]
+fn test_resolve_reason_adds_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(
+        dir.path(),
+        &["record", "concern", "lib.rs", "dup of another"],
+    );
+    write_id(
+        dir.path(),
+        &["resolve", &id[..8], "same as 1a2b", "--reason", "duplicate"],
+    );
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(qual.contains("\"reason:duplicate\""), "{qual}");
+}
+
+#[test]
+fn test_resolve_reason_rejects_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(dir.path(), &["record", "concern", "lib.rs", "x"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "resolve",
+            &id[..8],
+            "--reason",
+            "meh",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("fixed") && stderr.contains("wontfix"),
+        "should list valid reasons: {stderr}"
+    );
+}
+
+#[test]
+fn test_resolve_reason_not_duplicated_with_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(dir.path(), &["record", "concern", "lib.rs", "x"]);
+    write_id(
+        dir.path(),
+        &[
+            "resolve",
+            &id[..8],
+            "--reason",
+            "fixed",
+            "--tag",
+            "reason:fixed",
+        ],
+    );
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert_eq!(qual.matches("reason:fixed").count(), 1, "{qual}");
+}
+
+#[test]
+fn test_resolve_rejects_conflicting_reason_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(dir.path(), &["record", "concern", "lib.rs", "x"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "resolve",
+            &id[..8],
+            "--reason",
+            "fixed",
+            "--tag",
+            "reason:duplicate",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("one reason"), "{stderr}");
+}
+
+#[test]
+fn test_resolve_rejects_unknown_reason_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(dir.path(), &["record", "concern", "lib.rs", "x"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "resolve",
+            &id[..8],
+            "--tag",
+            "reason:meh",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("unknown close reason"), "{stderr}");
+}
+
 // --- ID prefixes in --supersedes / --references ---
 
 #[test]
