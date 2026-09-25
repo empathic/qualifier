@@ -63,4 +63,10 @@ since = "0.5.0"
   `--issuer "mailto:agent@example.com"`. If your agent has an HTTP identity,
   use that directly: `--issuer "https://agents.example.com/review-bot"`.
 
+- **Replying to a superseded record.**
+  A re-recorded annotation supersedes the old one, and replies to the old ID
+  attach to a dead record that never shows on the live thread. `reply` and
+  `resolve` refuse superseded targets and name the live record: retarget to
+  it rather than passing `--allow-superseded`.
+
 <!-- Add new pitfalls here as we observe them. -->

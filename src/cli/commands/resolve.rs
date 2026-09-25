@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
 use crate::cli::commands::record::{detect_issuer, normalize_issuer_uri};
-use crate::cli::commands::reply;
+use crate::cli::targets;
 use crate::qual_file;
 
 #[derive(ClapArgs)]
@@ -40,14 +40,16 @@ pub struct Args {
     /// Classification tags (repeatable)
     #[arg(long = "tag")]
     pub tags: Vec<String>,
+
+    /// Allow targeting a superseded or resolved record (annotating history)
+    #[arg(long)]
+    pub allow_superseded: bool,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
-    let root = qual_file::find_project_root(Path::new("."));
-    let discover_root = root.as_deref().unwrap_or(Path::new("."));
-    let all_qual_files = qual_file::discover(discover_root, true)?;
+    let all_qual_files = targets::discover_project(true)?;
 
-    let target = reply::resolve_target(&args.target, &all_qual_files)?;
+    let target = targets::resolve_target(&args.target, &all_qual_files, args.allow_superseded)?;
     let subject = target.subject().to_string();
     let target_id = target.id().to_string();
 

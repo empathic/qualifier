@@ -77,3 +77,10 @@ than a human and the user can review what their agent closed.
   cycle check may reject the new record. Inspect with
   `qualifier show --all <artifact>` first.
 - The minimum id-prefix is 4 characters, same as `reply`.
+
+## Superseded targets
+
+If the target has been superseded, the command fails and names the live
+record — reply to that one instead. If the target was resolved, the command
+reports it as closed. `--allow-superseded` overrides both checks; use it
+only to add context to history.

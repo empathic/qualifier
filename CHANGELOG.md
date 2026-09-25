@@ -5,6 +5,16 @@ All notable changes to this project are documented here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (with
 the pre-1.0 caveat that any breaking change bumps the minor version).
 
+## [0.8.0] — unreleased
+
+### Changed
+
+- **`reply` and `resolve` refuse superseded targets.** An ID prefix that
+  matches a superseded record now fails, naming the live record at the tip
+  of its chain, or reporting the record as closed when the chain ends in a
+  `resolve`. `--allow-superseded` restores the old behavior for deliberate
+  annotation of history.
+
 ## [0.7.0] — unreleased
 
 ### Added

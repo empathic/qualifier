@@ -4,6 +4,7 @@ pub mod commands;
 pub mod config;
 pub mod output;
 pub mod span_context;
+pub mod targets;
 
 // Clap doesn't natively group subcommands into headed sections in the
 // parent --help, so we render the Commands block ourselves via a custom

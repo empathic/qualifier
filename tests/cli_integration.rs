@@ -3982,3 +3982,152 @@ fn test_init_dry_run_writes_nothing() {
         "dry-run must not create AGENTS.md"
     );
 }
+
+// --- superseded-target safety ---
+
+/// Run a write command (with a fixed issuer) and return the new record's full ID.
+fn write_id(dir: &Path, args: &[&str]) -> String {
+    let mut full: Vec<&str> = args.to_vec();
+    full.extend_from_slice(&["--issuer", "mailto:test@test.com"]);
+    let (stdout, stderr, code) = run_qualifier(dir, &full);
+    assert_eq!(code, 0, "{args:?} failed: {stderr}");
+    stdout
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("id:"))
+        .map(|s| s.trim().to_string())
+        .expect("id: line in output")
+}
+
+#[test]
+fn test_reply_to_superseded_record_names_successor() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = write_id(
+        dir.path(),
+        &["record", "concern", "lib.rs", "original wording"],
+    );
+    let new = write_id(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "better wording",
+            "--supersedes",
+            &old,
+        ],
+    );
+
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            &old[..8],
+            "agreed",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0, "reply to a superseded record must fail");
+    assert!(stderr.contains("superseded by"), "{stderr}");
+    assert!(
+        stderr.contains(&new[..8]),
+        "error should name the live record: {stderr}"
+    );
+    assert!(stderr.contains("better wording"), "{stderr}");
+}
+
+#[test]
+fn test_reply_to_superseded_chain_names_tip() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "lib.rs", "v1"]);
+    let b = write_id(
+        dir.path(),
+        &["record", "concern", "lib.rs", "v2", "--supersedes", &a],
+    );
+    let c = write_id(
+        dir.path(),
+        &["record", "concern", "lib.rs", "v3", "--supersedes", &b],
+    );
+
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &["reply", &a[..8], "late", "--issuer", "mailto:test@test.com"],
+    );
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains(&c[..8]),
+        "error should name the chain tip: {stderr}"
+    );
+}
+
+#[test]
+fn test_reply_to_resolved_record_says_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(
+        dir.path(),
+        &["record", "concern", "lib.rs", "leaks a handle"],
+    );
+    let closer = write_id(dir.path(), &["resolve", &id[..8], "fixed"]);
+
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            &id[..8],
+            "late reply",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("closed"), "{stderr}");
+    assert!(stderr.contains(&closer[..8]), "{stderr}");
+    assert!(
+        !stderr.contains("superseded by"),
+        "a resolve closes a record; it is not a successor to reply to: {stderr}"
+    );
+}
+
+#[test]
+fn test_resolve_twice_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(dir.path(), &["record", "concern", "lib.rs", "flaky test"]);
+    write_id(dir.path(), &["resolve", &id[..8], "fixed"]);
+
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "resolve",
+            &id[..8],
+            "fixed again",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0, "second resolve must fail");
+    assert!(stderr.contains("closed"), "{stderr}");
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert_eq!(qual.matches("\"kind\":\"resolve\"").count(), 1, "{qual}");
+}
+
+#[test]
+fn test_reply_allow_superseded_annotates_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(dir.path(), &["record", "concern", "lib.rs", "old finding"]);
+    write_id(dir.path(), &["resolve", &id[..8], "fixed"]);
+
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            &id[..8],
+            "context for the record",
+            "--allow-superseded",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(qual.contains(&format!("\"references\":\"{id}\"")), "{qual}");
+}

@@ -1,6 +1,6 @@
 # Qualifier Specification
 
-**Version:** 0.4.2
+**Version:** 0.5.0
 **Status:** Draft
 **Authors:** Alex Kesling
 
@@ -981,6 +981,11 @@ Sugar over "kind=comment + references=`<target-id>`". The default kind is
   records share the most-recent timestamp, exit non-zero with a
   disambiguation list of `[id-prefix] kind L<line> "summary"`.
 
+A target that has been superseded is rejected. The error names the live
+record at the tip of its supersession chain, or reports the target as
+closed when that chain ends in a `resolve`. Pass `--allow-superseded` to
+annotate a superseded or closed record deliberately.
+
 Same body flags as `qualifier record`.
 
 ### 6.4 `qualifier resolve`
@@ -992,6 +997,8 @@ qualifier resolve <target> [message]
 Sugar over "kind=resolve + supersedes=`<target-id>`". `<target>` follows
 the same id-prefix-or-location rules as `qualifier reply`. The default
 summary is "Resolved" when `[message]` is omitted.
+`--allow-superseded` behaves as for `reply`; without it, resolving an
+already-closed record fails.
 
 ### 6.5 `qualifier emit`
 
