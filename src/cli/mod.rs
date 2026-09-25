@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 pub mod commands;
 pub mod config;
 pub mod output;
+pub mod provenance;
 pub mod span_context;
 pub mod targets;
 

@@ -12,6 +12,15 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 - `--supersedes` and `--references` accept ID prefixes (≥ 4 characters),
   resolved like `reply`/`resolve` targets. Editing a reply is
   `qualifier reply <target> "…" --supersedes <prefix>`.
+- Write commands read `QUALIFIER_ISSUER`, `QUALIFIER_ISSUER_TYPE`, and
+  `QUALIFIER_SESSION`, and detect Claude Code (`CLAUDECODE=1`): records
+  written there default to `issuer_type: ai` and carry the tag
+  `session:claude-code:<session id>`. Explicit flags still win.
+
+### Fixed
+
+- `record --stdin` detects the VCS issuer once per run instead of once per
+  line.
 
 ### Changed
 

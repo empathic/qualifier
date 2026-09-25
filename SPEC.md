@@ -1305,11 +1305,20 @@ Delegates to the underlying VCS blame/annotate command:
 
 ### 8.4 Issuer Defaults
 
-When `--issuer` is omitted:
+Each value resolves in order: explicit flag, `QUALIFIER_*` environment
+variable, detected agent harness, then the fallback below. Empty variables
+count as unset.
 
-- Git: `git config user.email`
-- Mercurial: `hg config ui.username`
-- Fallback: `mailto:$USER@localhost`
+| value | flag | variable | harness (Claude Code: `CLAUDECODE=1`) | fallback |
+|---|---|---|---|---|
+| issuer | `--issuer` | `QUALIFIER_ISSUER` | — | `git config user.email`, then `hg config ui.username`, then `mailto:$USER@localhost` |
+| issuer type | `--issuer-type` | `QUALIFIER_ISSUER_TYPE` | `ai` | none |
+| session tag | — | `QUALIFIER_SESSION` | `claude-code:$CLAUDE_CODE_SESSION_ID` | none |
+
+When a session is known, `record`, `reply`, and `resolve` add the tag
+`session:<value>`. `emit` applies the issuer defaults but writes bodies
+verbatim. A human running `qualifier` inside an agent harness is detected
+as the agent; pass `--issuer-type human` to override.
 
 ## 9. Agent Integration
 

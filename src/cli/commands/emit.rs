@@ -4,7 +4,7 @@ use std::io::{self, BufRead};
 use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Record};
-use crate::cli::commands::record::{detect_issuer, normalize_issuer_uri};
+use crate::cli::provenance;
 use crate::qual_file;
 
 #[derive(ClapArgs)]
@@ -64,16 +64,8 @@ pub fn run(args: Args) -> crate::Result<()> {
     let body_value: serde_json::Value = serde_json::from_str(body_str)
         .map_err(|e| crate::Error::Validation(format!("--body must be valid JSON: {e}")))?;
 
-    let issuer = normalize_issuer_uri(
-        args.issuer
-            .or_else(detect_issuer)
-            .unwrap_or_else(|| "mailto:unknown@localhost".into()),
-    );
-
-    let issuer_type = match &args.issuer_type {
-        Some(s) => Some(s.parse::<IssuerType>().map_err(crate::Error::Validation)?),
-        None => None,
-    };
+    let issuer = provenance::issuer(args.issuer.as_deref());
+    let issuer_type = provenance::issuer_type(args.issuer_type.as_deref())?;
 
     let record = build_record(record_type, &subject, issuer, issuer_type, body_value)?;
 

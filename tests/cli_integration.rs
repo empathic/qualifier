@@ -15,9 +15,44 @@ fn qualifier_bin() -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// Environment variables that change write defaults. Removed from every
+/// spawned `qualifier` so results don't depend on who runs the suite (an
+/// agent harness sets `CLAUDECODE` for its own tool calls).
+const PROVENANCE_ENV: &[&str] = &[
+    "QUALIFIER_ISSUER",
+    "QUALIFIER_ISSUER_TYPE",
+    "QUALIFIER_SESSION",
+    "CLAUDECODE",
+    "CLAUDE_CODE_SESSION_ID",
+];
+
+/// A `qualifier` command with provenance variables scrubbed.
+fn qualifier_cmd() -> Command {
+    let mut cmd = Command::new(qualifier_bin());
+    for var in PROVENANCE_ENV {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
+/// Like `run_qualifier`, with extra environment variables.
+fn run_qualifier_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> (String, String, i32) {
+    let output = qualifier_cmd()
+        .args(args)
+        .envs(env.iter().copied())
+        .current_dir(dir)
+        .output()
+        .expect("failed to run qualifier binary");
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code().unwrap_or(-1),
+    )
+}
+
 /// Run qualifier in a given directory with args, return (stdout, stderr, exit code).
 fn run_qualifier(dir: &Path, args: &[&str]) -> (String, String, i32) {
-    let output = Command::new(qualifier_bin())
+    let output = qualifier_cmd()
         .args(args)
         .current_dir(dir)
         .output()
@@ -497,7 +532,7 @@ fn test_record_batch_validates() {
         "message": ""
     });
 
-    let output = std::process::Command::new(qualifier_bin())
+    let output = qualifier_cmd()
         .args(["record", "--stdin"])
         .current_dir(dir.path())
         .stdin(std::process::Stdio::piped())
@@ -534,7 +569,7 @@ fn test_record_batch_full_record_form() {
         "created_at": "2026-01-01T00:00:00Z"
     });
 
-    let output = std::process::Command::new(qualifier_bin())
+    let output = qualifier_cmd()
         .args(["record", "--stdin"])
         .current_dir(dir.path())
         .stdin(std::process::Stdio::piped())
@@ -2523,7 +2558,7 @@ fn test_agents_orientation_summaries_match_pages() {
 /// Pipe `input` to `qualifier <args>` and return (stdout, stderr, code).
 fn run_qualifier_stdin(dir: &Path, args: &[&str], input: &str) -> (String, String, i32) {
     use std::io::Write;
-    let mut child = Command::new(qualifier_bin())
+    let mut child = qualifier_cmd()
         .args(args)
         .current_dir(dir)
         .stdin(std::process::Stdio::piped())
@@ -3538,7 +3573,7 @@ fn test_diff_drift_includes_span_snippet() {
 
 /// Run qualifier with `COLUMNS` set to override stdout width detection.
 fn run_qualifier_with_columns(dir: &Path, args: &[&str], columns: usize) -> (String, String, i32) {
-    let output = Command::new(qualifier_bin())
+    let output = qualifier_cmd()
         .args(args)
         .current_dir(dir)
         .env("COLUMNS", columns.to_string())
@@ -4247,5 +4282,229 @@ fn test_record_supersedes_short_prefix_rejected() {
     assert!(
         stderr.contains("--supersedes") && stderr.contains("at least 4"),
         "{stderr}"
+    );
+}
+
+// --- provenance defaults ---
+
+fn qual_contents(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join(".qual")).unwrap()
+}
+
+#[test]
+fn test_env_issuer_and_type_apply() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier_env(
+        dir.path(),
+        &["record", "concern", "lib.rs", "from env"],
+        &[
+            ("QUALIFIER_ISSUER", "mailto:bot@example.com"),
+            ("QUALIFIER_ISSUER_TYPE", "ai"),
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let qual = qual_contents(dir.path());
+    assert!(
+        qual.contains("\"issuer\":\"mailto:bot@example.com\""),
+        "{qual}"
+    );
+    assert!(qual.contains("\"issuer_type\":\"ai\""), "{qual}");
+}
+
+#[test]
+fn test_flags_override_env() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier_env(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "flags win",
+            "--issuer",
+            "mailto:human@example.com",
+            "--issuer-type",
+            "human",
+        ],
+        &[
+            ("QUALIFIER_ISSUER", "mailto:bot@example.com"),
+            ("QUALIFIER_ISSUER_TYPE", "ai"),
+            ("CLAUDECODE", "1"),
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let qual = qual_contents(dir.path());
+    assert!(
+        qual.contains("\"issuer\":\"mailto:human@example.com\""),
+        "{qual}"
+    );
+    assert!(qual.contains("\"issuer_type\":\"human\""), "{qual}");
+}
+
+#[test]
+fn test_claude_code_harness_detected_on_every_write_verb() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = [("CLAUDECODE", "1"), ("CLAUDE_CODE_SESSION_ID", "sess-42")];
+    let args_issuer = ["--issuer", "mailto:test@test.com"];
+
+    let mut record_args = vec!["record", "concern", "lib.rs", "root"];
+    record_args.extend_from_slice(&args_issuer);
+    let (out, stderr, code) = run_qualifier_env(dir.path(), &record_args, &env);
+    assert_eq!(code, 0, "{stderr}");
+    let id = out
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("id:"))
+        .unwrap()
+        .trim()
+        .to_string();
+
+    let mut reply_args = vec!["reply", &id[..8], "a reply"];
+    reply_args.extend_from_slice(&args_issuer);
+    assert_eq!(run_qualifier_env(dir.path(), &reply_args, &env).2, 0);
+
+    let mut resolve_args = vec!["resolve", &id[..8], "done"];
+    resolve_args.extend_from_slice(&args_issuer);
+    assert_eq!(run_qualifier_env(dir.path(), &resolve_args, &env).2, 0);
+
+    let qual = qual_contents(dir.path());
+    assert_eq!(qual.matches("\"issuer_type\":\"ai\"").count(), 3, "{qual}");
+    assert_eq!(
+        qual.matches("session:claude-code:sess-42").count(),
+        3,
+        "{qual}"
+    );
+}
+
+#[test]
+fn test_qualifier_session_overrides_harness_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier_env(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "x",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+        &[
+            ("CLAUDECODE", "1"),
+            ("CLAUDE_CODE_SESSION_ID", "sess-42"),
+            ("QUALIFIER_SESSION", "ci:run-7"),
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let qual = qual_contents(dir.path());
+    assert!(qual.contains("\"session:ci:run-7\""), "{qual}");
+    assert!(!qual.contains("sess-42"), "{qual}");
+}
+
+#[test]
+fn test_session_tag_not_duplicated() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier_env(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "x",
+            "--issuer",
+            "mailto:test@test.com",
+            "--tag",
+            "session:claude-code:sess-42",
+        ],
+        &[("CLAUDECODE", "1"), ("CLAUDE_CODE_SESSION_ID", "sess-42")],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        qual_contents(dir.path())
+            .matches("session:claude-code:sess-42")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn test_empty_env_vars_are_unset() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier_env(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "x",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+        &[
+            ("QUALIFIER_ISSUER_TYPE", ""),
+            ("QUALIFIER_SESSION", " "),
+            ("CLAUDECODE", ""),
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let qual = qual_contents(dir.path());
+    assert!(!qual.contains("issuer_type"), "{qual}");
+    assert!(!qual.contains("session:"), "{qual}");
+}
+
+#[test]
+fn test_invalid_env_issuer_type_names_variable() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier_env(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "x",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+        &[("QUALIFIER_ISSUER_TYPE", "robot")],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("QUALIFIER_ISSUER_TYPE"), "{stderr}");
+}
+
+#[test]
+fn test_stdin_batch_uses_env_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = "{\"kind\":\"concern\",\"location\":\"a.rs\",\"message\":\"batched\"}\n";
+    let mut child = qualifier_cmd()
+        .args(["record", "--stdin"])
+        .envs([
+            ("QUALIFIER_ISSUER", "mailto:bot@example.com"),
+            ("CLAUDECODE", "1"),
+            ("CLAUDE_CODE_SESSION_ID", "s1"),
+        ])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let qual = qual_contents(dir.path());
+    assert!(
+        qual.contains("mailto:bot@example.com")
+            && qual.contains("\"issuer_type\":\"ai\"")
+            && qual.contains("session:claude-code:s1"),
+        "{qual}"
     );
 }

@@ -2,8 +2,8 @@ use chrono::Utc;
 use clap::Args as ClapArgs;
 use std::path::Path;
 
-use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
-use crate::cli::commands::record::{detect_issuer, normalize_issuer_uri};
+use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record};
+use crate::cli::provenance;
 use crate::cli::targets;
 use crate::qual_file;
 
@@ -71,16 +71,8 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     let kind: Kind = args.kind.as_deref().unwrap_or("comment").parse().unwrap();
 
-    let issuer = normalize_issuer_uri(
-        args.issuer
-            .or_else(detect_issuer)
-            .unwrap_or_else(|| "mailto:unknown@localhost".into()),
-    );
-
-    let issuer_type = match &args.issuer_type {
-        Some(s) => Some(s.parse::<IssuerType>().map_err(crate::Error::Validation)?),
-        None => None,
-    };
+    let issuer = provenance::issuer(args.issuer.as_deref());
+    let issuer_type = provenance::issuer_type(args.issuer_type.as_deref())?;
 
     let supersedes = args
         .supersedes
@@ -109,7 +101,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             suggested_fix: args.suggested_fix,
             summary: args.message,
             supersedes,
-            tags: args.tags,
+            tags: provenance::with_session_tag(args.tags),
         },
     });
 

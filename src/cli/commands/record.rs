@@ -3,7 +3,8 @@ use clap::Args as ClapArgs;
 use std::io::{self, BufRead};
 use std::path::Path;
 
-use crate::annotation::{self, Annotation, AnnotationBody, IssuerType, Kind, Record};
+use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record};
+use crate::cli::provenance;
 use crate::cli::targets;
 use crate::content_hash;
 use crate::qual_file;
@@ -137,16 +138,8 @@ pub fn run(args: Args) -> crate::Result<()> {
         s.content_hash = Some(hash);
     }
 
-    let issuer = normalize_issuer_uri(
-        args.issuer
-            .or_else(detect_issuer)
-            .unwrap_or_else(|| "mailto:unknown@localhost".into()),
-    );
-
-    let issuer_type = match &args.issuer_type {
-        Some(s) => Some(s.parse::<IssuerType>().map_err(crate::Error::Validation)?),
-        None => None,
-    };
+    let issuer = provenance::issuer(args.issuer.as_deref());
+    let issuer_type = provenance::issuer_type(args.issuer_type.as_deref())?;
 
     let (supersedes, references) = if args.supersedes.is_some() || args.references.is_some() {
         let qual_files = targets::discover_project(true)?;
@@ -183,7 +176,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             suggested_fix: args.suggested_fix,
             summary: message,
             supersedes,
-            tags: args.tags,
+            tags: provenance::with_session_tag(args.tags),
         },
     });
 
@@ -497,18 +490,8 @@ fn build_record_from_overrides(value: serde_json::Value) -> crate::Result<Record
         s.content_hash = Some(hash);
     }
 
-    let issuer = normalize_issuer_uri(
-        obj.get("issuer")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .or_else(detect_issuer)
-            .unwrap_or_else(|| "mailto:unknown@localhost".into()),
-    );
-
-    let issuer_type = match obj.get("issuer_type").and_then(|v| v.as_str()) {
-        Some(s) => Some(s.parse::<IssuerType>().map_err(crate::Error::Validation)?),
-        None => None,
-    };
+    let issuer = provenance::issuer(obj.get("issuer").and_then(|v| v.as_str()));
+    let issuer_type = provenance::issuer_type(obj.get("issuer_type").and_then(|v| v.as_str()))?;
 
     let detail = obj.get("detail").and_then(|v| v.as_str()).map(String::from);
     let suggested_fix = obj
@@ -551,48 +534,9 @@ fn build_record_from_overrides(value: serde_json::Value) -> crate::Result<Record
             suggested_fix,
             summary: message.to_string(),
             supersedes,
-            tags,
+            tags: provenance::with_session_tag(tags),
         },
     });
 
     Ok(Record::Annotation(Box::new(att)))
-}
-
-/// Detect the issuer identity from VCS configuration.
-pub fn detect_issuer() -> Option<String> {
-    // Try git first
-    std::process::Command::new("git")
-        .args(["config", "user.email"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(|email| format!("mailto:{email}"))
-        .or_else(|| {
-            // Try hg
-            std::process::Command::new("hg")
-                .args(["config", "ui.username"])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .filter(|s| !s.is_empty())
-                .map(|email| format!("mailto:{email}"))
-        })
-        .or_else(|| {
-            // Fallback: $USER@localhost
-            let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
-            Some(format!("mailto:{user}@localhost"))
-        })
-}
-
-/// Normalize an issuer value to a URI. Bare emails get `mailto:` prefix;
-/// values already containing `:` are assumed to be valid URIs.
-pub fn normalize_issuer_uri(issuer: String) -> String {
-    if issuer.contains(':') {
-        issuer
-    } else {
-        format!("mailto:{issuer}")
-    }
 }
