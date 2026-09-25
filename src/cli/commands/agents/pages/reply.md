@@ -60,6 +60,9 @@ meaningful to tools that consume the annotation graph.
 
 **`--supersedes <ID>`** replaces an earlier reply. It takes that reply's
 full 64-character ID (no prefix), and the reply must still be live.
+Get full IDs from `qualifier threads --format json` (`root.id`,
+`closed_by.id`), `qualifier show --format json`, or the `id:` line that
+`record`/`reply`/`resolve` print.
 
 **`--format json`** prints the emitted record as JSON on stdout, which is
 useful when you need to capture the new record's ID for a subsequent
@@ -81,9 +84,10 @@ useful when you need to capture the new record's ID for a subsequent
 
 If the target has been superseded, the command fails and names the live
 record — reply to that one instead. If the target was resolved, the command
-reports it as closed and names the `resolve` record that closed it. To
-comment on the closed thread, reply to that `resolve` record (by its ID
-prefix); the reply joins the thread, which stays closed. To reopen the
-thread, record a new record on the same subject that supersedes the
-`resolve` record (`qualifier record <kind> <location> "…" --supersedes
-<resolve-id>`).
+reports it as closed and prints the full ID of the `resolve` record that
+closed it. To comment on the closed thread, reply to that `resolve` record;
+the reply joins the thread, which stays closed. To reopen the thread,
+record a new record on the same subject that supersedes the `resolve`
+record (`qualifier record <kind> <location> "…" --supersedes
+<resolve-id>`, with the full ID from the error or from `closed_by.id` in
+`qualifier threads --all --format json`).

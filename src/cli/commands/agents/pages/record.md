@@ -59,7 +59,10 @@ visible — the superseded record is filtered out by `show`, `praise`, and
 `review`. Takes the full 64-character ID of an existing record, which must
 be live (not superseded, not closed); a prefix or location is rejected.
 `--references <ID>` takes the same full-ID form for its target. A stale
-pointer fails and names the live record, or the `resolve` that closed it.
+pointer fails and prints the full ID of the live record, or of the
+`resolve` that closed it. Get full IDs from `qualifier threads --format json` (`root.id`,
+`closed_by.id`), `qualifier show --format json`, or the `id:` line that
+`record`/`reply`/`resolve` print.
 
 **`--issuer` / `--issuer-type`**: as an agent, leave `--issuer` and `--issuer-type` unset; see `qualifier agents concepts` for
 defaults (`QUALIFIER_*` variables, agent-harness detection).
@@ -89,7 +92,9 @@ Recognized keys on the **overrides** form:
   optional, all match their `--flag` equivalents on the non-batch CLI.
   `supersedes` and `references` take a full record ID that exists on disk
   or on an earlier line of the same batch and is live, exactly like the
-  `--supersedes`/`--references` flags.
+  `--supersedes`/`--references` flags. Only complete-envelope lines have
+  IDs known in advance (overrides lines are stamped at planning time), so
+  in practice an in-batch pointer names an envelope line.
 - On a `kind: "resolve"` line, `tags` may carry at most one `reason:*`
   tag, and its value must be one of `fixed`, `wontfix`, `duplicate`,
   `invalid`, `obsolete` — the same rule as for `record resolve …` and

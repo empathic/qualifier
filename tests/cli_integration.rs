@@ -3305,6 +3305,26 @@ fn test_record_stdin_pointers_must_be_full_ids() {
 }
 
 #[test]
+fn test_record_stdin_dry_run_rejects_bad_pointer_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "x"]);
+    let input = format!(
+        "{{\"kind\":\"comment\",\"location\":\"a.rs\",\"message\":\"m\",\"references\":\"{}\"}}\n\
+         {{\"kind\":\"comment\",\"location\":\"a.rs\",\"message\":\"m\",\"references\":\"{}\"}}\n",
+        &a[..8],
+        "0".repeat(64)
+    );
+    let (_, stderr, code) =
+        run_qualifier_stdin(dir.path(), &["record", "--stdin", "--dry-run"], &input);
+    assert_ne!(code, 0);
+    assert_eq!(
+        stderr.matches("must be a full record ID").count(),
+        2,
+        "{stderr}"
+    );
+}
+
+#[test]
 fn test_record_stdin_resolve_line_reason_tags_validated() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_id(dir.path(), &["record", "concern", "a.rs", "x"]);
@@ -4423,6 +4443,10 @@ fn test_reply_to_superseded_record_names_successor() {
     );
     assert!(stderr.contains("better wording"), "{stderr}");
     assert!(
+        stderr.contains(&format!("target the live record {new}")),
+        "error prints the live record's full ID: {stderr}"
+    );
+    assert!(
         !stderr.contains("allow"),
         "no override flag exists: {stderr}"
     );
@@ -4472,14 +4496,14 @@ fn test_reply_to_resolved_record_says_closed() {
         ],
     );
     assert_ne!(code, 0);
-    let c = &closer[..8];
     assert!(
         stderr.contains(&format!(
-            "target {} is closed (resolved by {c}); reply to {c} to comment on the \
-             closed thread, or record a new record that supersedes {c} to reopen it",
-            &id[..8]
+            "target {} is closed (resolved by {}); reply to {closer} to comment on the \
+             closed thread, or record a new record that supersedes {closer} to reopen it",
+            &id[..8],
+            &closer[..8],
         )),
-        "{stderr}"
+        "error prints the closer's full ID: {stderr}"
     );
     assert!(
         !stderr.contains("allow"),
@@ -4488,6 +4512,72 @@ fn test_reply_to_resolved_record_says_closed() {
     assert!(
         !stderr.contains("superseded by"),
         "a resolve closes a record; it is not a successor to reply to: {stderr}"
+    );
+}
+
+/// The first full (64-hex) ID in `text` following `marker`.
+fn full_id_after(text: &str, marker: &str) -> String {
+    let rest = &text[text.find(marker).expect(marker) + marker.len()..];
+    let id: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+    assert_eq!(id.len(), 64, "expected a full ID after {marker:?}: {text}");
+    id
+}
+
+#[test]
+fn test_closed_and_superseded_errors_print_usable_full_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(dir.path(), &["record", "concern", "lib.rs", "leaks"]);
+    write_id(dir.path(), &["resolve", &id[..8], "fixed"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            &id[..8],
+            "late",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0);
+
+    // Follow the advice verbatim: reply to the printed ID, then reopen by
+    // superseding it.
+    let closer = full_id_after(&stderr, "reply to ");
+    write_id(dir.path(), &["reply", &closer, "context"]);
+    let closer2 = full_id_after(&stderr, "supersedes ");
+    assert_eq!(closer, closer2);
+    let reopened = write_id(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "still leaks",
+            "--supersedes",
+            &closer,
+        ],
+    );
+
+    // A stale pointer to the original now names the reopened record.
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "lib.rs",
+            "re",
+            "--references",
+            &id,
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0);
+    let live = full_id_after(&stderr, "target the live record ");
+    assert_eq!(live, reopened);
+    write_id(
+        dir.path(),
+        &["record", "comment", "lib.rs", "re", "--references", &live],
     );
 }
 

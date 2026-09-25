@@ -258,12 +258,14 @@ pub(crate) fn ensure_live(record: &Record, qual_files: &[QualFile]) -> crate::Re
         tip = next;
     }
 
+    // Advice names the full ID: pointer fields accept nothing shorter.
     if tip.kind() == Some(&Kind::Resolve) {
-        let closer = short_id(tip.id());
+        let closer = tip.id();
         return Err(crate::Error::Validation(format!(
-            "target {} is closed (resolved by {closer}); reply to {closer} to comment on \
+            "target {} is closed (resolved by {}); reply to {closer} to comment on \
              the closed thread, or record a new record that supersedes {closer} to reopen it",
             short_id(record.id()),
+            short_id(closer),
         )));
     }
     let kind = tip
@@ -275,9 +277,10 @@ pub(crate) fn ensure_live(record: &Record, qual_files: &[QualFile]) -> crate::Re
         .map(|a| a.body.summary.as_str())
         .unwrap_or("");
     Err(crate::Error::Validation(format!(
-        "target {} is superseded by {} ({kind} {summary:?}); target the live record",
+        "target {} is superseded by {} ({kind} {summary:?}); target the live record {}",
         short_id(record.id()),
         short_id(tip.id()),
+        tip.id(),
     )))
 }
 

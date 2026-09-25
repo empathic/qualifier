@@ -31,8 +31,13 @@ location.
 - `supersedes` / `references` take a **full** 64-character record ID — no
   prefixes, no locations. The record must exist (on disk or on an earlier
   line of the same batch) and be live: not superseded and not closed. A
-  stale pointer fails and names the live record, or the `resolve` that
-  closed it.
+  stale pointer fails and prints the full ID of the live record, or of the
+  `resolve` that closed it.
+- Only complete-envelope lines (`subject` + `body`) have IDs known in
+  advance; an overrides line is stamped when it is planned. In practice an
+  in-batch pointer names an envelope line; everything else comes from
+  `threads --format json`, `show --format json`, or the `id:` line a write
+  command prints.
 - A `kind: "resolve"` line carries at most one `reason:*` tag, one of
   `fixed`, `wontfix`, `duplicate`, `invalid`, `obsolete`.
 - To comment on a closed thread, reference its `closed_by.id` (from

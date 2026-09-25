@@ -956,8 +956,12 @@ qualifier record concern src/parser.rs:42:58 "Panics on malformed input" \
 `--supersedes` and `--references` each take the full ID (64 lowercase hex
 characters) of a record that exists in the project and is live: not
 superseded, and not closed by a `resolve`. A prefix or location is
-rejected. A superseded target fails, naming the live record at the tip of
-its chain; a closed target fails, naming the closing `resolve` record.
+rejected. A superseded target fails, printing the full ID of the live
+record at the tip of its chain; a closed target fails, printing the full ID
+of the closing `resolve` record. Full IDs are available from
+`qualifier threads --format json` (`root.id`, `closed_by.id`),
+`qualifier show --format json`, or the `id:` line that
+`record`/`reply`/`resolve` print.
 
 A record of kind `resolve` carries at most one `reason:*` tag, and its
 value must be one of the `resolve --reason` values (§6.4). The CLI rejects
@@ -1013,7 +1017,10 @@ whose `references` is the target's ID; a resolve is an overrides line with
 
 `supersedes` and `references` on an overrides line follow the same rule as
 the `--supersedes`/`--references` flags: the full ID of a live record,
-which may be on disk or on an earlier line of the same batch. A
+which may be on disk or on an earlier line of the same batch. Only
+complete-envelope lines have IDs known in advance (an overrides line is
+stamped with the time it is planned), so in practice an in-batch pointer
+names an envelope line. A
 `"kind":"resolve"` line follows the `reason:*` tag rule above. `--file` is
 rejected with `--stdin`.
 
@@ -1047,10 +1054,10 @@ Sugar over "kind=comment + references=`<target-id>`". The default kind is
   records share the most-recent timestamp, exit non-zero with a
   disambiguation list of `[id-prefix] kind L<line> "summary"`.
 
-A target that has been superseded is rejected; the error names the live
-record at the tip of its supersession chain. A target whose chain ends in a
-`resolve` is rejected as closed; the error names the closing `resolve`
-record. To comment on a closed thread, reply to that `resolve` record: the
+A target that has been superseded is rejected; the error prints the full
+ID of the live record at the tip of its supersession chain. A target whose
+chain ends in a `resolve` is rejected as closed; the error prints the full
+ID of the closing `resolve` record. To comment on a closed thread, reply to that `resolve` record: the
 reply joins the thread (§6.12), which stays closed. To reopen the thread,
 record a new non-reply record on the same subject that supersedes the
 `resolve` record; it becomes the thread's root.
