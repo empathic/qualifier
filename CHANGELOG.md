@@ -49,6 +49,9 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   line is resolved and validated first, every failing line is reported,
   and nothing is written if any line fails. Previously lines before the
   first failure were written.
+- Non-batch `record --supersedes`/`--references` resolve ID prefixes and
+  reject unknown or superseded IDs (unless `--allow-superseded`).
+  Previously the value was stored verbatim.
 - `record --stdin` overrides lines (`supersedes`/`references`) now resolve
   ID prefixes and require a live, existing target, matching the non-batch
   `--supersedes`/`--references` flags. Previously these fields were stored

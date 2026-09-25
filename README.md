@@ -128,7 +128,7 @@ appends don't collide.
 - `qualifier record --stdin` and `qualifier emit --stdin` accept JSONL on stdin
 - `body.suggested_fix` carries actionable remediation
 - `body.span` targets specific line ranges
-- `--issuer-type ai` distinguishes agent-authored records in display
+- `issuer_type: ai` marks agent-authored records; it is set automatically under a detected agent harness or `QUALIFIER_ISSUER_TYPE`
 
 ## Documentation
 

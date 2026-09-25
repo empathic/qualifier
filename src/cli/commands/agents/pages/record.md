@@ -32,10 +32,8 @@ qualifier record concern src/auth.rs:42 "Null check missing" \
   --detail "The function returns early but does not reset the session token." \
   --suggested-fix "Add session.reset() before the return."
 
-# Record a suggestion with explicit AI issuer identity
-qualifier record suggestion src/auth.rs "Replace inline regex with a named constant" \
-  --issuer "mailto:agent@ci.example.com" \
-  --issuer-type ai
+# Record a suggestion
+qualifier record suggestion src/auth.rs "Replace inline regex with a named constant"
 
 # Batch-record from a JSONL file
 cat findings.jsonl | qualifier record --stdin
@@ -62,9 +60,8 @@ visible — the superseded record is filtered out by `show`, `praise`, and
 record unless `--allow-superseded` is also passed. `--references <ID>` takes
 the same ID-or-prefix form for its target.
 
-**`--issuer-type <TYPE>`** takes `human`, `ai`, `tool`, or `unknown`. Always
-set `--issuer-type ai` when writing from an agent; this lets human reviewers
-distinguish machine-generated annotations from their own.
+**`--issuer` / `--issuer-type`**: as an agent, leave `--issuer` and `--issuer-type` unset; see `qualifier agents concepts` for
+defaults (`QUALIFIER_*` variables, agent-harness detection).
 
 **`--stdin`** switches to batch mode. This is the path agents should reach
 for when emitting more than one annotation in a session — it collapses many
@@ -73,7 +70,7 @@ sequential `qualifier record` invocations into a single pipe.
 Each stdin line is one of four shapes:
 
 ```jsonl
-{"kind":"concern","location":"src/auth.rs:42:58","message":"Token comparison is timing-unsafe","detail":"Uses == on session_token; replace with constant-time compare.","suggested_fix":"Use subtle::ConstantTimeEq.","tags":["security"],"issuer":"mailto:agent@ci.example.com","issuer_type":"ai"}
+{"kind":"concern","location":"src/auth.rs:42:58","message":"Token comparison is timing-unsafe","detail":"Uses == on session_token; replace with constant-time compare.","suggested_fix":"Use subtle::ConstantTimeEq.","tags":["security"]}
 {"kind":"suggestion","location":"src/auth.rs:88","message":"Extract magic constant","supersedes":"<id-or-prefix>"}
 {"reply":"<id-prefix-or-location>","message":"Confirmed, tracking in #482","tags":["triage"]}
 {"resolve":"<id-prefix-or-location>","message":"Fixed in 1a2b3c4","reason":"fixed","ref":"git:1a2b3c4"}
@@ -92,8 +89,9 @@ Recognized keys on the **overrides** form:
   `allow_superseded` is set.
 - `span` — optional. Same syntax as the `--span` flag (e.g. `"42:58"`).
   Overrides any span parsed from `location`.
-- `issuer`, `issuer_type` — optional. Default to the same VCS detection
-  used in non-batch mode. **Always set `"issuer_type":"ai"` from agent code.**
+- `issuer`, `issuer_type` — optional, with the same defaults as non-batch
+  mode. As an agent, leave them unset; see `qualifier agents concepts` for
+  defaults (`QUALIFIER_*` variables, agent-harness detection).
 
 The **reply** form (has a `reply` key) responds to an existing thread the
 same way `qualifier reply` does: `reply` names the target (an ID prefix or
@@ -179,10 +177,10 @@ record types (epoch, dependency, custom URIs).
 - All three positional arguments (`<kind>`, `<location>`, `<message>`) are
   required in non-batch mode. Missing any one of them produces a validation
   error rather than a prompt.
-- The issuer defaults to your VCS user email wrapped in `mailto:`. If running
-  in a CI environment with no git config, the fallback is
-  `mailto:unknown@localhost` — set `--issuer` explicitly so records are
-  attributable.
+- Issuer defaults come from `QUALIFIER_*` variables, agent-harness
+  detection, then your VCS identity (`qualifier agents concepts`). In CI,
+  set `QUALIFIER_ISSUER` in the environment rather than passing `--issuer`
+  on each call.
 - Cross-subject supersession is rejected: a new record can only supersede a
   record with the same subject.
 - Span lines are 1-indexed. Passing `--span 0` or `--span 0:5` will store

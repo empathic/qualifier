@@ -16,10 +16,11 @@ after future edits, and `--suggested-fix` if you know what to do.
 qualifier record concern src/auth.rs:42:58 \
   "Token validation skips expiry check when issuer is internal" \
   --suggested-fix "Check exp claim unconditionally; remove the issuer shortcut" \
-  --tag security \
-  --issuer "mailto:review-agent@example.com" \
-  --issuer-type ai
+  --tag security
 ```
+
+Leave `--issuer` and `--issuer-type` unset; see `qualifier agents concepts`
+for defaults (`QUALIFIER_*` variables, agent-harness detection).
 
 The CLI writes to `src/.qual` (or `src/auth.rs.qual` if it exists), prints
 the new record's id, and exits zero. Use `qualifier show src/auth.rs` to
@@ -38,15 +39,11 @@ conversation together.
 ```bash
 # The original concern has id starting with a1b2c3d4
 qualifier reply a1b2 \
-  "Root cause: the issuer allow-list is populated from an env var that CI never sets" \
-  --issuer "mailto:review-agent@example.com" \
-  --issuer-type ai
+  "Root cause: the issuer allow-list is populated from an env var that CI never sets"
 
 # Or target by location if you know the span
 qualifier reply src/auth.rs:42 \
-  "Root cause: the issuer allow-list is populated from an env var that CI never sets" \
-  --issuer "mailto:review-agent@example.com" \
-  --issuer-type ai
+  "Root cause: the issuer allow-list is populated from an env var that CI never sets"
 ```
 
 The id-prefix form matches by prefix. The location form resolves to the most-recent active record at that location.

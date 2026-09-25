@@ -576,7 +576,7 @@ A tag in a reserved namespace must follow its rule.
 | `reason:` | `reason:fixed`, `reason:wontfix`, `reason:duplicate`, `reason:invalid`, `reason:obsolete` | Why a `resolve` closed its target. At most one per record. |
 | `session:` | `session:<harness>:<id>` | The agent session whose reasoning produced the record. A pointer for readers who have the transcript; the record must stand alone without it. |
 | `revisit:` | `revisit:<condition>` | On an `alternative` annotation: the observable condition under which to reconsider the option. |
-| `depends-on:` | `depends-on:<record id>` | On a reply in a thread: the thread cannot land before the thread whose root has this full ID. |
+| `depends-on:` | `depends-on:<record id>` | On a reply in a thread: the thread cannot land before the thread whose `origin` (§7, `qualifier::threads`) has this full ID. The origin, unlike the root, is stable when the root is edited or re-anchored. |
 
 ## 3. Record Type Specifications
 
@@ -1464,7 +1464,9 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
   agents a worklist of issues to address.
 - **Continuous interaction:** `qualifier reply <id> <message>` lets agents
   respond to human signals with threaded follow-ups. `qualifier resolve <id>`
-  lets agents close issues after fixes are applied.
+  closes a thread; an agent resolves only within close authority
+  (`qualifier agents conventions`) and otherwise replies and leaves the
+  close to a human.
 - **Threading:** The `references` field enables agents to thread follow-up
   observations to prior signals, creating navigable conversation histories.
 - **Thread queries:** `qualifier threads --format json` lists every open
@@ -1473,7 +1475,8 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
 - **Provenance:** records written inside a detected agent harness default to
   `issuer_type: ai` and carry a `session:` tag (§8.4).
 - **Conventions:** `qualifier agents conventions` defines the `status:`,
-  `reason:`, `session:`, and `revisit:` tag vocabulary and close authority.
+  `reason:`, `session:`, `revisit:`, and `depends-on:` tag vocabulary and
+  close authority.
 
 ## 10. File Discovery
 

@@ -64,9 +64,10 @@ useful context — the message ends up in the annotation history visible to
 the resolution record. This is useful when you want reviewers to be able to
 jump to the exact commit that addressed the issue.
 
-**`--issuer-type ai`** should be set whenever you do close a record on
-behalf of the user, so the resolution is attributable to a machine rather
-than a human and the user can review what their agent closed.
+**`--issuer` / `--issuer-type`**: as an agent, leave `--issuer` and `--issuer-type` unset; see `qualifier agents concepts` for
+defaults (`QUALIFIER_*` variables, agent-harness detection). The
+defaults already mark a resolution written from an agent session as `ai`,
+so the user can review what their agent closed.
 
 **`--reason fixed|wontfix|duplicate|invalid|obsolete`** adds the tag
 `reason:<value>`. A resolve carries at most one `reason:*` tag, and its

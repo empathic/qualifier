@@ -31,10 +31,9 @@ qualifier reply a1b2c3d4 "Confirmed — also affects the logout path"
 # Reply to the most-recent active annotation at a location
 qualifier reply src/auth.rs:42 "Fixed in PR #88 but needs backport to v2"
 
-# Reply with a suggested fix and ai issuer-type
+# Reply with a suggested fix
 qualifier reply a1b2c3d4 "Here is a safer pattern" \
-  --suggested-fix "Use constant-time comparison: crypto.timingSafeEqual(a, b)" \
-  --issuer-type ai
+  --suggested-fix "Use constant-time comparison: crypto.timingSafeEqual(a, b)"
 
 # Reply with a non-default kind
 qualifier reply src/auth.rs "This is intentional per security policy" \

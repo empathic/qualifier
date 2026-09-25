@@ -20,7 +20,7 @@ fields. Tools and agents rely on the exact spellings.
 | `reason:fixed` `reason:wontfix` `reason:duplicate` `reason:invalid` `reason:obsolete` | Why a `resolve` closed its target. `qualifier resolve --reason <r>` adds it. |
 | `session:<harness>:<id>` | The session whose reasoning produced the record. Added automatically (see `qualifier agents concepts`, issuer defaults). |
 | `revisit:<condition>` | On an `alternative`: when to reconsider it. |
-| `depends-on:<id>` | On a reply in thread B: B cannot land before the thread whose root has this full ID. List with `qualifier threads --tag 'depends-on:*'`. |
+| `depends-on:<id>` | On a reply in thread B: B cannot land before the thread whose `origin` has this full ID (the origin is stable when the root is edited or re-anchored). List with `qualifier threads --tag 'depends-on:*'`; fetch the other thread with `qualifier threads <id>`. |
 
 A thread's status is its *latest* `status:*` tag. Find open decisions with
 `qualifier threads --status needs-decision`.
