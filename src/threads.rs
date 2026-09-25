@@ -3,8 +3,12 @@
 //! A thread starts at an *origin* annotation. Records join it by
 //! `references` (replies) or by `supersedes` (edits and resolutions of a
 //! record already in the thread). The *root chain* is the origin plus the
-//! non-reply records that supersede it in turn; its live head is the
-//! thread's root. A thread is open while that head is not a `resolve`.
+//! non-reply records that supersede it in turn. A chain member no other
+//! chain member supersedes is a *tip* (a chain can fork into more than
+//! one). If any tip is not a `resolve`, the thread is open and its root is
+//! the newest such tip; otherwise it is closed by the newest resolve tip,
+//! and the root is whatever non-resolve chain member that resolve targets,
+//! falling back to the newest non-resolve chain member.
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,8 +27,11 @@ pub struct Thread<'a> {
     pub root: &'a Record,
     /// The `resolve` record that closed the thread, if any.
     pub closed_by: Option<&'a Record>,
-    /// Every other record in the thread, oldest first.
+    /// Records outside the root chain (replies and anything hanging from
+    /// them), oldest first.
     pub replies: Vec<ThreadEntry<'a>>,
+    /// Root-chain members other than `root` and `closed_by`, oldest first.
+    pub history: Vec<&'a Record>,
     /// True while the root chain's live head is not a `resolve`.
     pub open: bool,
     /// Newest `created_at` across every record in the thread.
@@ -113,23 +120,44 @@ fn assemble<'a>(
         .collect();
 
     let is_resolve = |r: &Record| r.kind() == Some(&Kind::Resolve);
-    let head = chain
+
+    // A tip is a chain member no other chain member supersedes. `chain` is
+    // sorted oldest first, so among tips, the last matching one is newest.
+    let tips: Vec<&Record> = chain
         .iter()
-        .rev()
         .copied()
-        .find(|r| active.contains(r.id()));
-    let (root, closed_by, open) = match head {
-        Some(h) if !is_resolve(h) => (h, None, true),
-        _ => {
-            let root = chain
+        .filter(|r| {
+            !chain
                 .iter()
-                .rev()
-                .copied()
-                .find(|r| !is_resolve(r))
-                .unwrap_or(chain[0]);
-            (root, head.filter(|h| is_resolve(h)), false)
+                .any(|other| other.id() != r.id() && other.supersedes() == Some(r.id()))
+        })
+        .collect();
+
+    let (root, closed_by, open) = match tips.iter().copied().rfind(|r| !is_resolve(r)) {
+        Some(root) => (root, None, true),
+        None => {
+            // Every tip is a resolve: the thread is closed by the newest one.
+            let closer = tips.last().copied().unwrap_or(chain[0]);
+            let target = closer
+                .supersedes()
+                .and_then(|id| by_id.get(id).copied())
+                .filter(|r| chain_ids.contains(r.id()) && !is_resolve(r));
+            let root = target.unwrap_or_else(|| {
+                chain
+                    .iter()
+                    .copied()
+                    .rfind(|r| !is_resolve(r))
+                    .unwrap_or(chain[0])
+            });
+            (root, Some(closer), false)
         }
     };
+
+    let history: Vec<&Record> = chain
+        .iter()
+        .copied()
+        .filter(|r| r.id() != root.id() && closed_by.map(|c| c.id()) != Some(r.id()))
+        .collect();
 
     let latest_at = members
         .iter()
@@ -142,6 +170,7 @@ fn assemble<'a>(
         root,
         closed_by,
         replies,
+        history,
         open,
         latest_at,
     }

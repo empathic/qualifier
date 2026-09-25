@@ -1277,7 +1277,8 @@ pub struct Thread<'a> {
     pub origin: &'a str,                 // oldest record in the root chain
     pub root: &'a Record,                // live head (closed: newest non-resolve)
     pub closed_by: Option<&'a Record>,   // the closing resolve, if any
-    pub replies: Vec<ThreadEntry<'a>>,   // everything else, oldest first
+    pub replies: Vec<ThreadEntry<'a>>,   // records outside the root chain, oldest first
+    pub history: Vec<&'a Record>,        // superseded root-chain records, oldest first
     pub open: bool,
     pub latest_at: DateTime<Utc>,
 }
@@ -1287,10 +1288,14 @@ pub fn build_threads(records: &[Record]) -> Vec<Thread<'_>>;
 
 A thread starts at an origin annotation. Records join it through
 `references` (replies) or `supersedes` (edits and resolutions). The root
-chain is the origin plus the non-reply records that supersede it in turn;
-its live head is the thread's root, and the thread is open while that head
-is not a `resolve`. Resolving a reply does not close the thread.
-Non-annotation records are ignored.
+chain is the origin plus the non-reply records that supersede it in turn.
+A chain member no other chain member supersedes is a tip (a chain can fork
+into more than one). If any tip is not a `resolve`, the thread is open and
+its root is the newest such tip; otherwise the thread is closed by the
+newest resolve tip, and the root is the non-resolve chain member that
+resolve targets, falling back to the newest non-resolve chain member.
+Resolving a reply does not close the thread. `history` holds the root
+chain's other members, oldest first. Non-annotation records are ignored.
 
 The library is the source of truth. The CLI is a thin wrapper around it.
 

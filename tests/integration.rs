@@ -540,6 +540,8 @@ fn test_threads_rerecorded_root_keeps_replies() {
     assert_eq!(threads[0].root.id(), b.id(), "root is the live head");
     assert_eq!(threads[0].origin, a.id());
     assert_eq!(threads[0].replies.len(), 1);
+    let history_ids: Vec<&str> = threads[0].history.iter().map(|r| r.id()).collect();
+    assert_eq!(history_ids, vec![a.id()]);
 }
 
 #[test]
@@ -600,12 +602,10 @@ fn test_threads_ignore_epochs() {
     let mut records = snap.records.clone();
     records.push(ann("a.rs", Kind::Blocker, "after snapshot", 20, None, None));
     let threads = build_threads(&records);
-    assert!(threads.iter().all(|t| t.root.as_annotation().is_some()));
-    assert!(
-        threads
-            .iter()
-            .any(|t| summary_of(t.root) == "after snapshot")
-    );
+    assert_eq!(threads.len(), 1);
+    assert_eq!(summary_of(threads[0].root), "after snapshot");
+    assert!(threads[0].replies.is_empty());
+    assert!(threads[0].history.is_empty());
 }
 
 #[test]
@@ -625,4 +625,98 @@ fn test_threads_ordered_by_subject_then_line() {
     let threads = build_threads(&records);
     let order: Vec<&str> = threads.iter().map(|t| summary_of(t.root)).collect();
     assert_eq!(order, vec!["a line 5", "a line 20", "b"]);
+}
+
+#[test]
+fn test_threads_reply_supersedes_root_stays_a_reply() {
+    // A reply that also supersedes its parent is still a reply (it
+    // `references` an existing record), so it never joins the root chain.
+    let a = ann("a.rs", Kind::Concern, "root", 0, None, None);
+    let r = ann(
+        "a.rs",
+        Kind::Comment,
+        "reply that supersedes",
+        10,
+        Some(a.id()),
+        Some(a.id()),
+    );
+    let records = vec![a.clone(), r.clone()];
+    let threads = build_threads(&records);
+    assert_eq!(threads.len(), 1);
+    assert!(threads[0].open);
+    assert_eq!(threads[0].root.id(), a.id());
+    assert_eq!(threads[0].replies.len(), 1);
+    assert!(threads[0].history.is_empty());
+}
+
+#[test]
+fn test_threads_fork_open_when_any_non_resolve_tip() {
+    let a = ann("a.rs", Kind::Concern, "a", 0, None, None);
+    let b = ann("a.rs", Kind::Concern, "b", 10, None, Some(a.id()));
+    let c = ann("a.rs", Kind::Resolve, "c", 20, None, Some(a.id()));
+    let records = vec![a.clone(), b.clone(), c.clone()];
+    let threads = build_threads(&records);
+    assert_eq!(threads.len(), 1);
+    assert!(
+        threads[0].open,
+        "a live non-resolve tip keeps the thread open"
+    );
+    assert_eq!(threads[0].root.id(), b.id());
+    assert!(threads[0].closed_by.is_none());
+    let history_ids: Vec<&str> = threads[0].history.iter().map(|r| r.id()).collect();
+    assert_eq!(history_ids, vec![a.id(), c.id()]);
+}
+
+#[test]
+fn test_threads_closed_when_all_tips_resolve() {
+    let a = ann("a.rs", Kind::Concern, "a", 0, None, None);
+    let b = ann("a.rs", Kind::Concern, "b", 10, None, Some(a.id()));
+    let r1 = ann("a.rs", Kind::Resolve, "closed", 20, None, Some(b.id()));
+    let records = vec![a.clone(), b.clone(), r1.clone()];
+    let threads = build_threads(&records);
+    assert_eq!(threads.len(), 1);
+    assert!(!threads[0].open);
+    assert_eq!(threads[0].closed_by.map(|r| r.id()), Some(r1.id()));
+    assert_eq!(threads[0].root.id(), b.id());
+    let history_ids: Vec<&str> = threads[0].history.iter().map(|r| r.id()).collect();
+    assert_eq!(history_ids, vec![a.id()]);
+}
+
+#[test]
+fn test_threads_dangling_targets_form_own_thread() {
+    let fake_id = "nonexistent_id_12345";
+    let r = ann(
+        "a.rs",
+        Kind::Comment,
+        "orphan",
+        0,
+        Some(fake_id),
+        Some(fake_id),
+    );
+    let records = vec![r.clone()];
+    let threads = build_threads(&records);
+    assert_eq!(threads.len(), 1);
+    assert_eq!(threads[0].origin, r.id());
+    assert_eq!(threads[0].root.id(), r.id());
+    assert!(threads[0].replies.is_empty());
+    assert!(threads[0].history.is_empty());
+}
+
+#[test]
+fn test_threads_tie_break_by_origin_id_is_deterministic() {
+    // Same subject, same (absent) span line, same created_at: only the
+    // origin ID orders them, and it must not depend on input order.
+    let a = ann("a.rs", Kind::Concern, "root one", 0, None, None);
+    let b = ann("a.rs", Kind::Concern, "root two", 0, None, None);
+    let forward = vec![a.clone(), b.clone()];
+    let backward = vec![b.clone(), a.clone()];
+
+    let order_forward: Vec<&str> = build_threads(&forward).iter().map(|t| t.origin).collect();
+    let threads_backward = build_threads(&backward);
+    let order_backward: Vec<&str> = threads_backward.iter().map(|t| t.origin).collect();
+
+    let mut expected = vec![a.id(), b.id()];
+    expected.sort();
+    assert_eq!(order_forward, expected);
+    assert_eq!(order_backward, expected);
 }
