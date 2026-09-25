@@ -64,11 +64,13 @@ distinguish machine-generated annotations from their own.
 for when emitting more than one annotation in a session — it collapses many
 sequential `qualifier record` invocations into a single pipe.
 
-Each stdin line is one of two shapes:
+Each stdin line is one of four shapes:
 
 ```jsonl
 {"kind":"concern","location":"src/auth.rs:42:58","message":"Token comparison is timing-unsafe","detail":"Uses == on session_token; replace with constant-time compare.","suggested_fix":"Use subtle::ConstantTimeEq.","tags":["security"],"issuer":"mailto:agent@ci.example.com","issuer_type":"ai"}
-{"kind":"suggestion","location":"src/auth.rs:88","message":"Extract magic constant","supersedes":"<full-64-char-id>"}
+{"kind":"suggestion","location":"src/auth.rs:88","message":"Extract magic constant","supersedes":"<id-or-prefix>"}
+{"reply":"<id-prefix-or-location>","message":"Confirmed, tracking in #482","tags":["triage"]}
+{"resolve":"<id-prefix-or-location>","message":"Fixed in 1a2b3c4","reason":"fixed","ref":"git:1a2b3c4"}
 ```
 
 Recognized keys on the **overrides** form:
@@ -76,15 +78,32 @@ Recognized keys on the **overrides** form:
 - `kind` — required. Any built-in kind or a custom string.
 - `location` — required. `path` or `path:line` or `path:start:end`.
 - `message` — required. Becomes `body.summary`.
-- `detail`, `suggested_fix`, `tags`, `ref`, `references`, `supersedes` —
-  optional, all match their `--flag` equivalents on the non-batch CLI.
-  Unlike the non-batch `--supersedes`/`--references` flags, `supersedes`
-  and `references` in stdin mode are stored verbatim — pass the full
-  64-character ID; prefix resolution is not performed here.
+- `detail`, `suggested_fix`, `tags`, `ref`, `references`, `supersedes`,
+  `allow_superseded` — optional, all match their `--flag` equivalents on
+  the non-batch CLI. `supersedes` and `references` accept an ID or an ID
+  prefix (≥ 4 characters), resolved the same way as the non-batch
+  `--supersedes`/`--references` flags; the target must be live unless
+  `allow_superseded` is set.
 - `span` — optional. Same syntax as the `--span` flag (e.g. `"42:58"`).
   Overrides any span parsed from `location`.
 - `issuer`, `issuer_type` — optional. Default to the same VCS detection
   used in non-batch mode. **Always set `"issuer_type":"ai"` from agent code.**
+
+The **reply** form (has a `reply` key) responds to an existing thread the
+same way `qualifier reply` does: `reply` names the target (an ID prefix or
+a `<location>`), `message` is required, and `kind`, `detail`,
+`suggested_fix`, `tags`, `issuer`, `issuer_type`, `ref`, `supersedes`, and
+`allow_superseded` mirror the `reply` command's flags.
+
+The **resolve** form (has a `resolve` key) closes an existing thread the
+same way `qualifier resolve` does: `resolve` names the target, and
+`message`, `reason`, `tags`, `issuer`, `issuer_type`, `ref`, and
+`allow_superseded` mirror the `resolve` command's flags. A line must not
+set both `reply` and `resolve`.
+
+For `reply`/`resolve` lines, the target may name a record created earlier
+in the same batch — targets are resolved against the records on disk plus
+everything already planned by prior lines in this batch.
 
 The **complete record** form is recognized when an object carries both
 `subject` and `body` keys; it is taken as a fully-formed envelope and only
@@ -99,8 +118,11 @@ Behaviour:
   **stderr** so a `--format json` pipe stays clean.
 - Validation, IO, and parse errors are reported as
   `stdin line N: <reason>: <input>` (the offending input is echoed so you
-  can see what was sent without re-piping). The batch aborts on the first
-  error by default.
+  can see what was sent without re-piping).
+- **Without `--continue-on-error`, the batch is all-or-nothing:** every
+  line is parsed, resolved, and validated before any record is written.
+  If any line fails, every failing line is reported and *nothing* is
+  written — including lines before the failure.
 
 **`--continue-on-error`** collects every failed line, writes the records
 that did pass, and exits non-zero with a final count. Use this when an
@@ -113,7 +135,8 @@ cat findings.jsonl | qualifier record --stdin --continue-on-error
 #          Recorded 12 of 13 records from stdin, 1 failed
 ```
 
-**`--dry-run`** validates every line but writes nothing. Output uses the
+**`--dry-run`** validates every line (resolving `reply`/`resolve` targets
+and `supersedes`/`references` in full) but writes nothing. Output uses the
 verb `would-record` so a glance at stdout confirms nothing was committed.
 Combine with `--continue-on-error` to find every bad line in a batch:
 
@@ -126,7 +149,7 @@ cat candidates.jsonl | qualifier record --stdin --dry-run --continue-on-error
 - *stdout* — one JSONL record per processed line.
 - *stderr* — one JSON object per failed line (`{"line":N,"error":"...","input":"..."}`)
   followed by a final summary trailer
-  (`{"summary":{"recorded":N,"failed":M,"total":N+M,"dry_run":bool}}`).
+  (`{"summary":{"recorded":N,"failed":M,"total":N+M,"dry_run":bool,"written":bool}}`).
   The top-level `qualifier:` text line is suppressed so consumers can
   parse stderr line-by-line.
 

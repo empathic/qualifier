@@ -7,6 +7,50 @@ use crate::cli::provenance;
 use crate::cli::targets;
 use crate::qual_file;
 
+/// Inputs for a reply after target resolution.
+pub(crate) struct ReplyInput {
+    pub message: String,
+    pub kind: Option<String>,
+    pub detail: Option<String>,
+    pub suggested_fix: Option<String>,
+    pub tags: Vec<String>,
+    pub issuer: Option<String>,
+    pub issuer_type: Option<String>,
+    pub r#ref: Option<String>,
+    /// Full ID of the reply this one replaces.
+    pub supersedes: Option<String>,
+}
+
+/// Build a validated reply annotation to `target`.
+pub(crate) fn build_reply(target: &Record, input: ReplyInput) -> crate::Result<Annotation> {
+    let kind: Kind = input.kind.as_deref().unwrap_or("comment").parse().unwrap();
+    let att = annotation::finalize(Annotation {
+        metabox: "1".into(),
+        record_type: "annotation".into(),
+        subject: target.subject().to_string(),
+        issuer: provenance::issuer(input.issuer.as_deref()),
+        issuer_type: provenance::issuer_type(input.issuer_type.as_deref())?,
+        created_at: Utc::now(),
+        id: String::new(),
+        body: AnnotationBody {
+            detail: input.detail,
+            kind,
+            r#ref: input.r#ref,
+            references: Some(target.id().to_string()),
+            span: None,
+            suggested_fix: input.suggested_fix,
+            summary: input.message,
+            supersedes: input.supersedes,
+            tags: provenance::with_session_tag(input.tags),
+        },
+    });
+    let errors = annotation::validate(&att);
+    if !errors.is_empty() {
+        return Err(crate::Error::Validation(errors.join("; ")));
+    }
+    Ok(att)
+}
+
 #[derive(ClapArgs)]
 pub struct Args {
     /// Target — either an id-prefix (≥4 chars) or a `<location>`
@@ -63,76 +107,43 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
-    let all_qual_files = targets::discover_project(true)?;
-
-    let target = targets::resolve_target(&args.target, &all_qual_files, args.allow_superseded)?;
-    let subject = target.subject().to_string();
-    let target_id = target.id().to_string();
-
-    let kind: Kind = args.kind.as_deref().unwrap_or("comment").parse().unwrap();
-
-    let issuer = provenance::issuer(args.issuer.as_deref());
-    let issuer_type = provenance::issuer_type(args.issuer_type.as_deref())?;
-
+    let qual_files = targets::discover_project(true)?;
+    let target = targets::resolve_target(&args.target, &qual_files, args.allow_superseded)?;
     let supersedes = args
         .supersedes
         .as_deref()
-        .map(|v| {
-            targets::resolve_id_flag("--supersedes", v, &all_qual_files, args.allow_superseded)
-        })
+        .map(|v| targets::resolve_id_flag("--supersedes", v, &qual_files, args.allow_superseded))
         .transpose()?;
 
-    let qual_path = qual_file::resolve_qual_path(&subject, args.file.as_deref().map(Path::new))?;
-
-    let att = annotation::finalize(Annotation {
-        metabox: "1".into(),
-        record_type: "annotation".into(),
-        subject,
-        issuer,
-        issuer_type,
-        created_at: Utc::now(),
-        id: String::new(),
-        body: AnnotationBody {
+    let att = build_reply(
+        &target,
+        ReplyInput {
+            message: args.message,
+            kind: args.kind,
             detail: args.detail,
-            kind,
-            r#ref: args.r#ref,
-            references: Some(target_id),
-            span: None,
             suggested_fix: args.suggested_fix,
-            summary: args.message,
+            tags: args.tags,
+            issuer: args.issuer,
+            issuer_type: args.issuer_type,
+            r#ref: args.r#ref,
             supersedes,
-            tags: provenance::with_session_tag(args.tags),
         },
-    });
+    )?;
 
-    let errors = annotation::validate(&att);
-    if !errors.is_empty() {
-        return Err(crate::Error::Validation(errors.join("; ")));
-    }
-
-    if att.body.supersedes.is_some() {
-        let existing = if qual_path.exists() {
-            qual_file::parse(&qual_path)?.records
-        } else {
-            Vec::new()
-        };
-        let mut all = existing;
-        all.push(Record::Annotation(Box::new(att.clone())));
-        annotation::check_supersession_cycles(&all)?;
-        annotation::validate_supersession_targets(&all)?;
-    }
-
+    let qual_path =
+        qual_file::resolve_qual_path(&att.subject, args.file.as_deref().map(Path::new))?;
     let record = Record::Annotation(Box::new(att.clone()));
-
+    if record.supersedes().is_some() {
+        targets::preflight_supersession(&qual_path, &record)?;
+    }
     qual_file::append(qual_path.as_ref(), &record)?;
 
     if args.format == "json" {
         println!("{}", serde_json::to_string(&record)?);
     } else {
-        println!("{} {} {}", att.body.kind, att.subject, att.body.summary,);
+        println!("{} {} {}", att.body.kind, att.subject, att.body.summary);
         println!("  id: {}", att.id);
-        println!("  re: {}", &att.body.references.as_ref().unwrap()[..8]);
+        println!("  re: {}", targets::short_id(target.id()));
     }
-
     Ok(())
 }

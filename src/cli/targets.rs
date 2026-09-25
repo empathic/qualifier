@@ -8,11 +8,15 @@ use crate::annotation::{self, Kind, Record, Span};
 use crate::compact::filter_superseded;
 use crate::qual_file::{self, QualFile};
 
-/// Discover every `.qual` file under the project root (or `.` outside a
-/// repository).
+/// Discover every `.qual` file under the project root (or the current
+/// directory outside a repository).
 pub(crate) fn discover_project(respect_ignore: bool) -> crate::Result<Vec<QualFile>> {
-    let root = qual_file::find_project_root(Path::new("."));
-    let discover_root = root.as_deref().unwrap_or(Path::new("."));
+    // Resolve from an absolute CWD so the upward walk in find_project_root
+    // works from any subdirectory — relative-path arithmetic on `.` doesn't
+    // traverse up.
+    let cwd = std::env::current_dir()?;
+    let root = qual_file::find_project_root(&cwd);
+    let discover_root = root.as_deref().unwrap_or(cwd.as_path());
     qual_file::discover(discover_root, respect_ignore)
 }
 
@@ -231,6 +235,24 @@ pub(crate) fn resolve_id_flag(
         ensure_live(&record, qual_files).map_err(prefixed)?;
     }
     Ok(record.id().to_string())
+}
+
+/// Check that adding `record` to `existing` keeps supersession acyclic and
+/// same-subject.
+pub(crate) fn check_supersession(mut existing: Vec<Record>, record: &Record) -> crate::Result<()> {
+    existing.push(record.clone());
+    annotation::check_supersession_cycles(&existing)?;
+    annotation::validate_supersession_targets(&existing)
+}
+
+/// [`check_supersession`] against the records already in `qual_path`.
+pub(crate) fn preflight_supersession(qual_path: &Path, record: &Record) -> crate::Result<()> {
+    let existing = if qual_path.exists() {
+        qual_file::parse(qual_path)?.records
+    } else {
+        Vec::new()
+    };
+    check_supersession(existing, record)
 }
 
 pub(crate) fn record_created_at(r: &Record) -> chrono::DateTime<chrono::Utc> {

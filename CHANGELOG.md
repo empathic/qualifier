@@ -23,6 +23,9 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   issuer-type filters, and JSON output.
 - `threads --status`, `--changed-since <ref>`, and `--summary` (a
   two-line digest for session-start hooks).
+- `record --stdin` accepts `{"reply": "<target>", …}` and
+  `{"resolve": "<target>", …}` lines with the same target resolution as
+  the single commands, including records created earlier in the batch.
 
 ### Fixed
 
@@ -36,6 +39,10 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   of its chain, or reporting the record as closed when the chain ends in a
   `resolve`. `--allow-superseded` restores the old behavior for deliberate
   annotation of history.
+- `record --stdin` without `--continue-on-error` is all-or-nothing: every
+  line is resolved and validated first, every failing line is reported,
+  and nothing is written if any line fails. Previously lines before the
+  first failure were written.
 
 ## [0.7.0] — unreleased
 

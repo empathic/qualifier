@@ -967,8 +967,25 @@ the same forms plus column granularity:
 
 - An overrides object: `{"kind":"...","location":"...","message":"...", ...}`
   with optional `detail`, `ref`, `tags`, `issuer`, `issuer_type`,
-  `span`, `supersedes`, `references`, `suggested_fix`.
+  `span`, `supersedes`, `references`, `suggested_fix`, `allow_superseded`.
+- A reply line: `{"reply":"<target>","message":"...","kind"?,"detail"?,
+  "suggested_fix"?,"tags"?,"issuer"?,"issuer_type"?,"ref"?,"supersedes"?,
+  "allow_superseded"?}` — same shape and defaults as `qualifier reply`.
+- A resolve line: `{"resolve":"<target>","message"?,"reason"?,"tags"?,
+  "issuer"?,"issuer_type"?,"ref"?,"allow_superseded"?}` — same shape and
+  defaults as `qualifier resolve`. A line may not set both `reply` and
+  `resolve`.
 - A complete record (envelope + body), accepted for forward-compat.
+
+`<target>` in a `reply`/`resolve` line is an ID prefix or a `<location>`,
+resolved with the same rules as the `reply`/`resolve` commands (§6.3, §6.4)
+— including against records created earlier in the same batch.
+
+Without `--continue-on-error`, batch mode is all-or-nothing: every line is
+parsed, resolved, and validated before any record is written, every failing
+line is reported, and nothing is written if any line fails. Pass
+`--continue-on-error` to collect every error, write the lines that
+succeeded, and exit non-zero if any line failed.
 
 ### 6.3 `qualifier reply`
 
@@ -1386,7 +1403,9 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
 - **Structured output:** `--format json` on `show` and `ls` commands.
 - **Batch annotation:** `qualifier record --stdin` reads JSONL from stdin
   (overrides objects or full records). For non-annotation record types,
-  `qualifier emit --stdin` accepts complete records.
+  `qualifier emit --stdin` accepts complete records. Lines can also reply
+  to or resolve existing records by ID prefix or location; without
+  `--continue-on-error` a batch writes nothing unless every line validates.
 - **Suggested fixes:** The `suggested_fix` body field gives agents a concrete
   action to take.
 - **Span precision:** The `span` body field lets agents target specific line
