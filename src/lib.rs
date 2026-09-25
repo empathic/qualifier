@@ -2,6 +2,7 @@ pub mod annotation;
 pub mod compact;
 pub mod content_hash;
 pub mod qual_file;
+pub mod threads;
 
 #[cfg(feature = "cli")]
 pub mod cli;

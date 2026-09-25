@@ -1,6 +1,7 @@
 use qualifier::annotation::{self, Annotation, AnnotationBody, Kind, Record};
 use qualifier::compact::{self, filter_superseded};
 use qualifier::qual_file::{self, QualFile};
+use qualifier::threads::build_threads;
 
 use chrono::Utc;
 use std::path::PathBuf;
@@ -451,4 +452,177 @@ fn test_supersession_filter() {
     let active = filter_superseded(&all);
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].id(), replacement.id());
+}
+
+// --- threads ---
+
+fn at(secs: i64) -> chrono::DateTime<Utc> {
+    chrono::DateTime::from_timestamp(1_780_000_000 + secs, 0).unwrap()
+}
+
+/// An annotation at `secs` with optional references/supersedes.
+fn ann(
+    subject: &str,
+    kind: Kind,
+    summary: &str,
+    secs: i64,
+    references: Option<&str>,
+    supersedes: Option<&str>,
+) -> Record {
+    let mut a = make_att(subject, kind, summary);
+    a.created_at = at(secs);
+    a.body.references = references.map(String::from);
+    a.body.supersedes = supersedes.map(String::from);
+    Record::Annotation(Box::new(annotation::finalize(a)))
+}
+
+fn summary_of(r: &Record) -> &str {
+    &r.as_annotation().unwrap().body.summary
+}
+
+#[test]
+fn test_threads_single_open_root() {
+    let root = ann("a.rs", Kind::Concern, "root", 0, None, None);
+    let records = vec![root.clone()];
+    let threads = build_threads(&records);
+    assert_eq!(threads.len(), 1);
+    assert!(threads[0].open);
+    assert_eq!(threads[0].origin, root.id());
+    assert!(threads[0].replies.is_empty());
+    assert!(threads[0].closed_by.is_none());
+}
+
+#[test]
+fn test_threads_nested_replies_join_root() {
+    let root = ann("a.rs", Kind::Concern, "root", 0, None, None);
+    let r1 = ann("a.rs", Kind::Comment, "reply", 10, Some(root.id()), None);
+    let r2 = ann(
+        "a.rs",
+        Kind::Comment,
+        "reply to reply",
+        20,
+        Some(r1.id()),
+        None,
+    );
+    let records = vec![r2, root, r1];
+    let threads = build_threads(&records);
+    assert_eq!(threads.len(), 1);
+    let summaries: Vec<&str> = threads[0]
+        .replies
+        .iter()
+        .map(|e| summary_of(e.record))
+        .collect();
+    assert_eq!(summaries, vec!["reply", "reply to reply"], "oldest first");
+    assert_eq!(threads[0].latest_at, at(20));
+}
+
+#[test]
+fn test_threads_resolved_root_is_closed() {
+    let root = ann("a.rs", Kind::Concern, "root", 0, None, None);
+    let fix = ann("a.rs", Kind::Resolve, "fixed", 10, None, Some(root.id()));
+    let records = vec![root.clone(), fix.clone()];
+    let threads = build_threads(&records);
+    assert_eq!(threads.len(), 1);
+    assert!(!threads[0].open);
+    assert_eq!(threads[0].root.id(), root.id());
+    assert_eq!(threads[0].closed_by.map(|r| r.id()), Some(fix.id()));
+}
+
+#[test]
+fn test_threads_rerecorded_root_keeps_replies() {
+    let a = ann("a.rs", Kind::Concern, "v1", 0, None, None);
+    let reply = ann("a.rs", Kind::Comment, "on v1", 5, Some(a.id()), None);
+    let b = ann("a.rs", Kind::Concern, "v2", 10, None, Some(a.id()));
+    let records = vec![a.clone(), reply, b.clone()];
+    let threads = build_threads(&records);
+    assert_eq!(threads.len(), 1, "a re-recorded root stays one thread");
+    assert!(threads[0].open);
+    assert_eq!(threads[0].root.id(), b.id(), "root is the live head");
+    assert_eq!(threads[0].origin, a.id());
+    assert_eq!(threads[0].replies.len(), 1);
+}
+
+#[test]
+fn test_threads_edited_reply_marks_old_inactive() {
+    let root = ann("a.rs", Kind::Concern, "root", 0, None, None);
+    let r1 = ann("a.rs", Kind::Comment, "draft", 10, Some(root.id()), None);
+    let r2 = ann(
+        "a.rs",
+        Kind::Comment,
+        "final",
+        20,
+        Some(root.id()),
+        Some(r1.id()),
+    );
+    let records = vec![root, r1, r2];
+    let threads = build_threads(&records);
+    let entries: Vec<(&str, bool)> = threads[0]
+        .replies
+        .iter()
+        .map(|e| (summary_of(e.record), e.active))
+        .collect();
+    assert_eq!(entries, vec![("draft", false), ("final", true)]);
+}
+
+#[test]
+fn test_threads_resolving_a_reply_keeps_thread_open() {
+    let root = ann("a.rs", Kind::Concern, "root", 0, None, None);
+    let r1 = ann(
+        "a.rs",
+        Kind::Comment,
+        "wrong claim",
+        10,
+        Some(root.id()),
+        None,
+    );
+    let close_reply = ann("a.rs", Kind::Resolve, "retracted", 20, None, Some(r1.id()));
+    let records = vec![root, r1, close_reply];
+    let threads = build_threads(&records);
+    assert_eq!(threads.len(), 1);
+    assert!(
+        threads[0].open,
+        "resolving a reply must not close the thread"
+    );
+    assert_eq!(threads[0].replies.len(), 2);
+}
+
+#[test]
+fn test_threads_ignore_epochs() {
+    let qf = QualFile {
+        path: PathBuf::from("a.rs.qual"),
+        subject: "a.rs".into(),
+        records: vec![
+            ann("a.rs", Kind::Concern, "one", 0, None, None),
+            ann("a.rs", Kind::Suggestion, "two", 10, None, None),
+        ],
+    };
+    let (snap, _) = compact::snapshot(&qf);
+    let mut records = snap.records.clone();
+    records.push(ann("a.rs", Kind::Blocker, "after snapshot", 20, None, None));
+    let threads = build_threads(&records);
+    assert!(threads.iter().all(|t| t.root.as_annotation().is_some()));
+    assert!(
+        threads
+            .iter()
+            .any(|t| summary_of(t.root) == "after snapshot")
+    );
+}
+
+#[test]
+fn test_threads_ordered_by_subject_then_line() {
+    let mut b = make_att("b.rs", Kind::Concern, "b");
+    b.created_at = at(0);
+    let mut a2 = make_att("a.rs", Kind::Concern, "a line 20");
+    a2.created_at = at(1);
+    a2.body.span = Some(annotation::parse_span("20").unwrap());
+    let mut a1 = make_att("a.rs", Kind::Concern, "a line 5");
+    a1.created_at = at(2);
+    a1.body.span = Some(annotation::parse_span("5").unwrap());
+    let records: Vec<Record> = [b, a2, a1]
+        .into_iter()
+        .map(|a| Record::Annotation(Box::new(annotation::finalize(a))))
+        .collect();
+    let threads = build_threads(&records);
+    let order: Vec<&str> = threads.iter().map(|t| summary_of(t.root)).collect();
+    assert_eq!(order, vec!["a line 5", "a line 20", "b"]);
 }
