@@ -36,8 +36,11 @@ Apply only the rows they approve.
 
 ## Writing
 
-All writes in one batch: Write tool → `triage.jsonl`, then
-`qualifier record --stdin --dry-run < triage.jsonl`, then the real run.
+All writes in one batch, written outside the working tree so it can't be
+committed by accident: Write tool → `<scratch>/triage.jsonl`, where
+`<scratch>` is your scratch directory or a `mktemp -d` directory, then
+`qualifier record --stdin --dry-run < <scratch>/triage.jsonl`, then the
+real run.
 
 ```json
 {"resolve": "e52b00e4", "message": "cargo test net::retry passes; retry budget added in 4f1c2aa", "reason": "fixed", "ref": "git:4f1c2aa"}

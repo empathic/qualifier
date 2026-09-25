@@ -1,8 +1,8 @@
 # Verifier brief
 
-You are verifying these qualifier findings: `{IDS}`. For each, read the
-root with `qualifier threads --format json` (match `root.id`) and check the
-claim against the current code.
+You are verifying these qualifier findings: `{IDS}`. For each, read its
+thread with `qualifier threads <id> --format json` (one thread per ID; read
+`root`) and check the claim against the current code.
 
 ## Verdict per finding
 

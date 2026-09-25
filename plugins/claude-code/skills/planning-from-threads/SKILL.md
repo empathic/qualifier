@@ -25,10 +25,13 @@ allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qual
 When thread B cannot land before thread A, reply on B:
 
 ```json
-{"reply": "<B prefix>", "message": "Depends on <A prefix>: <one-line reason>", "tags": ["depends-on:<full ID of A's root>"]}
+{"reply": "<B prefix>", "message": "Depends on <A prefix>: <one-line reason>", "tags": ["depends-on:<A's origin>"]}
 ```
 
-A reply's `references` already points into B, so the tag carries the edge.
+Use A's `origin` (full ID), not `root.id`: the origin stays the same when
+A's root is edited or re-anchored, so the edge never points at a
+superseded record. A reply's `references` already points into B, so the
+tag carries the edge.
 List them with `qualifier threads --tag 'depends-on:*'`. The plan may repeat
 the dependency; the record is authoritative because it survives the plan
 document.
