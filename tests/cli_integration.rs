@@ -4387,26 +4387,6 @@ fn test_record_stdin_rejects_file_flag() {
 }
 
 #[test]
-fn test_allow_superseded_flag_does_not_exist() {
-    let dir = tempfile::tempdir().unwrap();
-    let a = write_id(dir.path(), &["record", "concern", "a.rs", "x"]);
-    for args in [
-        vec!["record", "comment", "a.rs", "y", "--allow-superseded"],
-        vec!["reply", &a[..8], "y", "--allow-superseded"],
-        vec!["resolve", &a[..8], "y", "--allow-superseded"],
-    ] {
-        let (_, stderr, code) = run_qualifier(dir.path(), &args);
-        assert_ne!(code, 0, "{args:?}");
-        assert!(
-            stderr.contains("unexpected argument '--allow-superseded'"),
-            "{args:?}: {stderr}"
-        );
-    }
-    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
-    assert_eq!(qual.lines().count(), 1, "{qual}");
-}
-
-#[test]
 fn test_reply_to_superseded_record_names_successor() {
     let dir = tempfile::tempdir().unwrap();
     let old = write_id(
@@ -4694,6 +4674,59 @@ fn test_resolve_rejects_unknown_reason_tag() {
     );
     assert_ne!(code, 0);
     assert!(stderr.contains("unknown close reason"), "{stderr}");
+}
+
+#[test]
+fn test_record_resolve_kind_validates_reason_tags() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(dir.path(), &["record", "concern", "lib.rs", "x"]);
+    for (tags, needle) in [
+        (vec!["reason:meh"], "unknown close reason 'meh'"),
+        (vec!["reason:fixed", "reason:duplicate"], "one reason"),
+    ] {
+        let mut args = vec!["record", "resolve", "lib.rs", "closed", "--supersedes", &id];
+        for t in &tags {
+            args.extend_from_slice(&["--tag", t]);
+        }
+        args.extend_from_slice(&["--issuer", "mailto:test@test.com"]);
+        let (_, stderr, code) = run_qualifier(dir.path(), &args);
+        assert_ne!(code, 0, "{tags:?}");
+        assert!(stderr.contains(needle), "{tags:?}: {stderr}");
+    }
+    // A reply of kind resolve gets the same check.
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "reply",
+            &id[..8],
+            "closing",
+            "--kind",
+            "resolve",
+            "--tag",
+            "reason:meh",
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("unknown close reason 'meh'"), "{stderr}");
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(!qual.contains("\"kind\":\"resolve\""), "{qual}");
+
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "resolve",
+            "lib.rs",
+            "closed",
+            "--supersedes",
+            &id,
+            "--tag",
+            "reason:fixed",
+        ],
+    );
+    assert!(qual_contents(dir.path()).contains("reason:fixed"));
 }
 
 // --- --supersedes / --references take full, live record IDs ---

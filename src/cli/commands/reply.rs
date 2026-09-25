@@ -3,6 +3,7 @@ use clap::Args as ClapArgs;
 use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record};
+use crate::cli::commands::resolve;
 use crate::cli::provenance;
 use crate::cli::targets;
 
@@ -23,6 +24,7 @@ pub(crate) struct ReplyInput {
 /// Build a validated reply annotation to `target`.
 pub(crate) fn build_reply(target: &Record, input: ReplyInput) -> crate::Result<Annotation> {
     let kind: Kind = input.kind.as_deref().unwrap_or("comment").parse().unwrap();
+    let tags = resolve::checked_reason_tags(&kind, input.tags)?;
     let att = annotation::finalize(Annotation {
         metabox: "1".into(),
         record_type: "annotation".into(),
@@ -40,7 +42,7 @@ pub(crate) fn build_reply(target: &Record, input: ReplyInput) -> crate::Result<A
             suggested_fix: input.suggested_fix,
             summary: input.message,
             supersedes: input.supersedes,
-            tags: provenance::with_session_tag(input.tags),
+            tags: provenance::with_session_tag(tags),
         },
     });
     let errors = annotation::validate(&att);

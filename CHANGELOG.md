@@ -49,8 +49,9 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   take the full 64-character ID of a record that exists (for batch lines,
   on disk or on an earlier line) and is neither superseded nor closed.
   Previously the value was stored verbatim.
-- A `kind: "resolve"` line in `record --stdin` carries at most one
-  `reason:*` tag, from the same vocabulary as `resolve --reason`.
+- Every `resolve` the CLI writes (`record resolve`, a `kind: "resolve"`
+  line in `record --stdin`, `reply --kind resolve`, `resolve`) carries at
+  most one `reason:*` tag, from the same vocabulary as `resolve --reason`.
 - Commands now discover the whole project when run from a subdirectory,
   not just that subdirectory's `.qual` files.
 - **Locations are relative to the current directory; subjects are stored

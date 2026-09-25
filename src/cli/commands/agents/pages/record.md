@@ -92,7 +92,8 @@ Recognized keys on the **overrides** form:
   `--supersedes`/`--references` flags.
 - On a `kind: "resolve"` line, `tags` may carry at most one `reason:*`
   tag, and its value must be one of `fixed`, `wontfix`, `duplicate`,
-  `invalid`, `obsolete`.
+  `invalid`, `obsolete` — the same rule as for `record resolve …` and
+  every other `resolve` the CLI writes.
 - `span` — optional. Same syntax as the `--span` flag (e.g. `"42:58"`).
   Overrides any span parsed from `location`.
 - `issuer`, `issuer_type` — optional, with the same defaults as non-batch

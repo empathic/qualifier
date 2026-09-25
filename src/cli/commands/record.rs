@@ -160,6 +160,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     let issuer = provenance::issuer(args.issuer.as_deref());
     let issuer_type = provenance::issuer_type(args.issuer_type.as_deref())?;
+    let tags = resolve::checked_reason_tags(&kind, args.tags)?;
 
     let (supersedes, references) = if args.supersedes.is_some() || args.references.is_some() {
         let qual_files = targets::discover_project(true)?;
@@ -196,7 +197,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             suggested_fix: args.suggested_fix,
             summary: message,
             supersedes,
-            tags: provenance::with_session_tag(args.tags),
+            tags: provenance::with_session_tag(tags),
         },
     });
 
@@ -556,11 +557,7 @@ fn build_record_from_overrides(
     let references = str_field(obj, "references")
         .map(|v| targets::require_live_id("references", &v, files))
         .transpose()?;
-    let mut tags = tags_field(obj);
-    if kind == Kind::Resolve {
-        // At most one `reason:*` tag, from the close-reason vocabulary.
-        tags = resolve::with_reason(tags, None)?;
-    }
+    let tags = resolve::checked_reason_tags(&kind, tags_field(obj))?;
 
     let att = annotation::finalize(Annotation {
         metabox: "1".into(),

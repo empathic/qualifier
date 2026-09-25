@@ -49,6 +49,16 @@ pub(crate) fn with_reason(
     Ok(tags)
 }
 
+/// For a record of kind `resolve`, check that `tags` carry at most one
+/// `reason:*` tag from [`CLOSE_REASONS`]; other kinds pass unchanged.
+pub(crate) fn checked_reason_tags(kind: &Kind, tags: Vec<String>) -> crate::Result<Vec<String>> {
+    if *kind == Kind::Resolve {
+        with_reason(tags, None)
+    } else {
+        Ok(tags)
+    }
+}
+
 /// Inputs for a resolve after target resolution.
 pub(crate) struct ResolveInput {
     pub message: Option<String>,

@@ -959,6 +959,11 @@ superseded, and not closed by a `resolve`. A prefix or location is
 rejected. A superseded target fails, naming the live record at the tip of
 its chain; a closed target fails, naming the closing `resolve` record.
 
+A record of kind `resolve` carries at most one `reason:*` tag, and its
+value must be one of the `resolve --reason` values (§6.4). The CLI rejects
+anything else on every `resolve` it writes: `record resolve …`, a
+`"kind":"resolve"` batch line, `reply --kind resolve`, and `resolve`.
+
 **Defaults:**
 
 - When `--issuer` is omitted, defaults to the VCS user identity (see §8.4).
@@ -1009,9 +1014,8 @@ whose `references` is the target's ID; a resolve is an overrides line with
 `supersedes` and `references` on an overrides line follow the same rule as
 the `--supersedes`/`--references` flags: the full ID of a live record,
 which may be on disk or on an earlier line of the same batch. A
-`"kind":"resolve"` line carries at most one `reason:*` tag, and its value
-must be one of the `resolve --reason` values (§6.4). `--file` is rejected
-with `--stdin`.
+`"kind":"resolve"` line follows the `reason:*` tag rule above. `--file` is
+rejected with `--stdin`.
 
 Without `--continue-on-error`, batch mode is all-or-nothing with respect to
 parse and validation failures: every line is parsed and validated before
@@ -1068,8 +1072,9 @@ fails, naming the closing record.
 
 `--reason fixed|wontfix|duplicate|invalid|obsolete` adds the tag
 `reason:<value>`. A resolve carries at most one `reason:*` tag, and its
-value must be one of these; `resolve` rejects anything else. It is a tag
-convention (§2.12), not a body field.
+value must be one of these; the CLI rejects anything else on every
+`resolve` it writes (§6.2). It is a tag convention (§2.12), not a body
+field.
 
 ### 6.5 `qualifier emit`
 
