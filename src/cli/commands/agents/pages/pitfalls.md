@@ -69,7 +69,8 @@ since = "0.5.0"
   A re-recorded annotation supersedes the old one, and replies to the old ID
   attach to a dead record that never shows on the live thread. `reply` and
   `resolve` refuse superseded targets and name the live record: retarget to
-  it rather than passing `--allow-superseded`.
+  it. A closed record is refused too, with the `resolve` that closed it
+  named: to comment on the closed thread, reply to that closing record.
 
 - **Citing context outside the repository.**
   "Breaks principle 3" or "as the brief says" means nothing to the next

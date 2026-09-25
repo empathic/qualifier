@@ -5,7 +5,7 @@ use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 
 use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record};
-use crate::cli::commands::{reply, resolve};
+use crate::cli::commands::resolve;
 use crate::cli::provenance;
 use crate::cli::targets;
 use crate::content_hash;
@@ -56,55 +56,50 @@ pub struct Args {
     #[arg(long)]
     pub span: Option<String>,
 
-    /// ID of a prior annotation this replaces.
+    /// Full ID of a prior record this replaces. The record must exist and
+    /// be live (not superseded, not closed).
     #[arg(long)]
     pub supersedes: Option<String>,
 
-    /// ID of a related annotation (conversational reference).
+    /// Full ID of a related record (conversational reference). The record
+    /// must exist and be live (not superseded, not closed).
     #[arg(long)]
     pub references: Option<String>,
-
-    /// Allow --supersedes / --references to name a superseded or resolved
-    /// record. Not supported with --stdin; set `allow_superseded` per line.
-    #[arg(long)]
-    pub allow_superseded: bool,
 
     /// Explicit .qual file to write to (overrides layout resolution). Not
     /// supported with --stdin.
     #[arg(long)]
     pub file: Option<String>,
 
-    /// Read JSONL records from stdin (batch mode). Each line is one of:
+    /// Read JSONL records from stdin (batch mode). Each line describes one
+    /// new record and is one of:
     ///
     ///   1. An overrides object: `{"kind":"concern","location":"src/foo.rs:42",
     ///      "message":"...","detail":"...","suggested_fix":"...","tags":["x"],
     ///      "issuer":"mailto:agent@example.com","issuer_type":"ai",
     ///      "ref":"git:abc123","supersedes":"<id>","references":"<id>",
-    ///      "span":"42:58","allow_superseded":true}`
-    ///   2. A reply line: `{"reply":"<target>","message":"...","kind"?,
-    ///      "detail"?,"suggested_fix"?,"tags"?,"issuer"?,"issuer_type"?,
-    ///      "ref"?,"supersedes"?,"allow_superseded"?}`
-    ///   3. A resolve line: `{"resolve":"<target>","message"?,"reason"?,
-    ///      "tags"?,"issuer"?,"issuer_type"?,"ref"?,"allow_superseded"?}`
-    ///   4. A complete record envelope (forward-compat) — recognized when the
+    ///      "span":"42:58"}`
+    ///   2. A complete record envelope (forward-compat) — recognized when the
     ///      object has both `subject` and `body` keys.
     ///
-    /// `<target>` is an id-prefix or a `<location>`, resolved the same way
-    /// as the `reply`/`resolve` commands — including against records
-    /// created earlier in the same batch. A reply or resolve line with any
-    /// other key is rejected, naming the key.
+    /// `supersedes` and `references` on an overrides line take the full ID
+    /// of a live record in the project or on an earlier line of the same
+    /// batch, as `--supersedes`/`--references` do. A reply is a line whose
+    /// `references` is the target's ID; a resolve is a `kind: "resolve"`
+    /// line whose `supersedes` is the target's ID, with at most one
+    /// `reason:*` tag.
     ///
     /// Lines starting with `//` and blank lines are ignored. One record per
     /// line is emitted on stdout (id + summary, or full JSON with --format
     /// json). Errors are reported as `stdin line N: <reason>: <input>`.
     /// Without --continue-on-error the batch is all-or-nothing for
-    /// parse/resolve/validation failures: every line is resolved and
-    /// validated first, and nothing is written if any line fails that way.
-    /// This does not cover I/O failures while writing — those can leave
-    /// earlier lines written; the error reports how many. Pass
-    /// `--continue-on-error` to collect every parse/resolve/validation
-    /// error, write the lines that succeeded, and exit with a summary.
-    /// See `qualifier agents record` for a worked example.
+    /// parse/validation failures: every line is validated first, and
+    /// nothing is written if any line fails that way. This does not cover
+    /// I/O failures while writing — those can leave earlier lines written;
+    /// the error reports how many. Pass `--continue-on-error` to collect
+    /// every parse/validation error, write the lines that succeeded, and
+    /// exit with a summary. `--file` is not supported with --stdin.
+    /// See `qualifier agents batch` for a worked example.
     #[arg(long)]
     pub stdin: bool,
 
@@ -129,11 +124,6 @@ pub fn run(args: Args) -> crate::Result<()> {
         if args.file.is_some() {
             return Err(crate::Error::Validation(
                 "--file is not supported with --stdin".into(),
-            ));
-        }
-        if args.allow_superseded {
-            return Err(crate::Error::Validation(
-                "--allow-superseded is not supported with --stdin; set it per line".into(),
             ));
         }
         return run_batch(&args.format, args.continue_on_error, args.dry_run);
@@ -173,15 +163,15 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     let (supersedes, references) = if args.supersedes.is_some() || args.references.is_some() {
         let qual_files = targets::discover_project(true)?;
-        let resolve = |flag: &str, value: &Option<String>| -> crate::Result<Option<String>> {
+        let check = |flag: &str, value: &Option<String>| -> crate::Result<Option<String>> {
             value
                 .as_deref()
-                .map(|v| targets::resolve_id_flag(flag, v, &qual_files, args.allow_superseded))
+                .map(|v| targets::require_live_id(flag, v, &qual_files))
                 .transpose()
         };
         (
-            resolve("--supersedes", &args.supersedes)?,
-            resolve("--references", &args.references)?,
+            check("--supersedes", &args.supersedes)?,
+            check("--references", &args.references)?,
         )
     } else {
         (None, None)
@@ -388,10 +378,10 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
     Ok(())
 }
 
-/// Parse, resolve, and validate one line against `view`. Returns the record
-/// and the `.qual` path it will be appended to. Locations on overrides,
-/// reply, and resolve lines are relative to the current directory; every
-/// write path is under the project root. Plans only: nothing is created.
+/// Parse and validate one line against `view`. Returns the record and the
+/// `.qual` path it will be appended to. Locations on overrides lines are
+/// relative to the current directory; every write path is under the
+/// project root. Plans only: nothing is created.
 fn plan_one(
     trimmed: &str,
     view: &BatchView,
@@ -407,13 +397,7 @@ fn plan_one(
         let obj = value
             .as_object()
             .ok_or_else(|| "stdin line must be a JSON object".to_string())?;
-        let built = match (obj.contains_key("reply"), obj.contains_key("resolve")) {
-            (true, true) => return Err("line has both 'reply' and 'resolve'".into()),
-            (true, false) => build_reply_from_line(obj, view.files(), locator),
-            (false, true) => build_resolve_from_line(obj, view.files(), locator),
-            (false, false) => build_record_from_overrides(obj, view.files(), locator),
-        };
-        built.map_err(|e| e.to_string())?
+        build_record_from_overrides(obj, view.files(), locator).map_err(|e| e.to_string())?
     };
 
     if let Some(att) = record.as_annotation() {
@@ -444,109 +428,6 @@ fn tags_field(obj: &Map<String, Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Keys a `reply` line may carry.
-const REPLY_KEYS: &[&str] = &[
-    "reply",
-    "message",
-    "kind",
-    "detail",
-    "suggested_fix",
-    "tags",
-    "issuer",
-    "issuer_type",
-    "ref",
-    "supersedes",
-    "allow_superseded",
-];
-
-/// Keys a `resolve` line may carry.
-const RESOLVE_KEYS: &[&str] = &[
-    "resolve",
-    "message",
-    "reason",
-    "tags",
-    "issuer",
-    "issuer_type",
-    "ref",
-    "allow_superseded",
-];
-
-/// Fail on the first key of `obj` outside `allowed`, naming it.
-fn reject_unknown_keys(
-    obj: &Map<String, Value>,
-    allowed: &[&str],
-    form: &str,
-) -> crate::Result<()> {
-    match obj.keys().find(|k| !allowed.contains(&k.as_str())) {
-        Some(key) => Err(crate::Error::Validation(format!(
-            "unknown key '{key}' on a {form} line (allowed: {})",
-            allowed.join(", ")
-        ))),
-        None => Ok(()),
-    }
-}
-
-fn allow_superseded_field(obj: &Map<String, Value>) -> bool {
-    obj.get("allow_superseded")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
-fn build_reply_from_line(
-    obj: &Map<String, Value>,
-    files: &[QualFile],
-    locator: &targets::Locator,
-) -> crate::Result<Record> {
-    reject_unknown_keys(obj, REPLY_KEYS, "reply")?;
-    let target = str_field(obj, "reply")
-        .ok_or_else(|| crate::Error::Validation("'reply' must be a target string".into()))?;
-    let message = str_field(obj, "message")
-        .ok_or_else(|| crate::Error::Validation("reply line missing 'message'".into()))?;
-    let allow = allow_superseded_field(obj);
-    let target = targets::resolve_target(&target, files, allow, locator)?;
-    let supersedes = str_field(obj, "supersedes")
-        .map(|v| targets::resolve_id_flag("supersedes", &v, files, allow))
-        .transpose()?;
-    let att = reply::build_reply(
-        &target,
-        reply::ReplyInput {
-            message,
-            kind: str_field(obj, "kind"),
-            detail: str_field(obj, "detail"),
-            suggested_fix: str_field(obj, "suggested_fix"),
-            tags: tags_field(obj),
-            issuer: str_field(obj, "issuer"),
-            issuer_type: str_field(obj, "issuer_type"),
-            r#ref: str_field(obj, "ref"),
-            supersedes,
-        },
-    )?;
-    Ok(Record::Annotation(Box::new(att)))
-}
-
-fn build_resolve_from_line(
-    obj: &Map<String, Value>,
-    files: &[QualFile],
-    locator: &targets::Locator,
-) -> crate::Result<Record> {
-    reject_unknown_keys(obj, RESOLVE_KEYS, "resolve")?;
-    let target = str_field(obj, "resolve")
-        .ok_or_else(|| crate::Error::Validation("'resolve' must be a target string".into()))?;
-    let target = targets::resolve_target(&target, files, allow_superseded_field(obj), locator)?;
-    let att = resolve::build_resolve(
-        &target,
-        resolve::ResolveInput {
-            message: str_field(obj, "message"),
-            reason: str_field(obj, "reason"),
-            tags: tags_field(obj),
-            issuer: str_field(obj, "issuer"),
-            issuer_type: str_field(obj, "issuer_type"),
-            r#ref: str_field(obj, "ref"),
-        },
-    )?;
-    Ok(Record::Annotation(Box::new(att)))
 }
 
 struct BatchError {
@@ -669,14 +550,17 @@ fn build_record_from_overrides(
     let detail = str_field(obj, "detail");
     let suggested_fix = str_field(obj, "suggested_fix");
     let r#ref = str_field(obj, "ref");
-    let allow = allow_superseded_field(obj);
     let supersedes = str_field(obj, "supersedes")
-        .map(|v| targets::resolve_id_flag("supersedes", &v, files, allow))
+        .map(|v| targets::require_live_id("supersedes", &v, files))
         .transpose()?;
     let references = str_field(obj, "references")
-        .map(|v| targets::resolve_id_flag("references", &v, files, allow))
+        .map(|v| targets::require_live_id("references", &v, files))
         .transpose()?;
-    let tags = tags_field(obj);
+    let mut tags = tags_field(obj);
+    if kind == Kind::Resolve {
+        // At most one `reason:*` tag, from the close-reason vocabulary.
+        tags = resolve::with_reason(tags, None)?;
+    }
 
     let att = annotation::finalize(Annotation {
         metabox: "1".into(),

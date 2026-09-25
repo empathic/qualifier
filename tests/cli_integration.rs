@@ -2570,7 +2570,16 @@ fn test_agents_conventions_and_batch_pages() {
     }
     let (out, _, code) = run_qualifier(dir.path(), &["agents", "batch"]);
     assert_eq!(code, 0);
-    assert!(out.contains("\"reply\"") && out.contains("\"resolve\"") && out.contains("--dry-run"));
+    for needle in [
+        "\"references\"",
+        "\"supersedes\"",
+        "\"kind\": \"resolve\"",
+        "reason:fixed",
+        "threads --format json",
+        "--dry-run",
+    ] {
+        assert!(out.contains(needle), "batch page must cover {needle}");
+    }
 }
 
 #[test]
@@ -3130,14 +3139,13 @@ fn test_record_stdin_reports_every_failing_line() {
 }
 
 #[test]
-fn test_record_stdin_reply_and_resolve_lines() {
+fn test_record_stdin_reply_and_resolve_as_plain_records() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_id(dir.path(), &["record", "concern", "a.rs", "a is racy"]);
     let b = write_id(dir.path(), &["record", "concern", "b.rs", "b leaks"]);
     let input = format!(
-        "{{\"reply\":\"{}\",\"message\":\"confirmed\",\"tags\":[\"triage\"]}}\n{{\"resolve\":\"{}\",\"message\":\"fixed in 1a2b\",\"reason\":\"fixed\",\"ref\":\"git:1a2b\"}}\n",
-        &a[..8],
-        &b[..8]
+        "{{\"kind\":\"comment\",\"location\":\"a.rs\",\"references\":\"{a}\",\"message\":\"confirmed\",\"tags\":[\"triage\"]}}\n\
+         {{\"kind\":\"resolve\",\"location\":\"b.rs\",\"supersedes\":\"{b}\",\"message\":\"fixed in 1a2b\",\"tags\":[\"reason:fixed\"],\"ref\":\"git:1a2b\"}}\n"
     );
     let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
     assert_eq!(code, 0, "{stderr}");
@@ -3147,25 +3155,66 @@ fn test_record_stdin_reply_and_resolve_lines() {
         qual.contains(&format!("\"supersedes\":\"{b}\"")) && qual.contains("reason:fixed"),
         "{qual}"
     );
+
+    let threads = threads_json(dir.path(), &["--all"]);
+    assert_eq!(threads.len(), 2, "{threads:?}");
+    let ta = threads.iter().find(|t| t["origin"] == a.as_str()).unwrap();
+    assert_eq!(ta["open"], true);
+    assert_eq!(ta["replies"][0]["record"]["body"]["summary"], "confirmed");
+    let tb = threads.iter().find(|t| t["origin"] == b.as_str()).unwrap();
+    assert_eq!(tb["open"], false);
+    assert_eq!(tb["closed_by"]["body"]["summary"], "fixed in 1a2b");
 }
 
 #[test]
-fn test_record_stdin_reply_to_record_created_in_same_batch() {
+fn test_record_stdin_reply_and_resolve_keys_are_not_line_shapes() {
     let dir = tempfile::tempdir().unwrap();
-    let input = r#"{"kind":"concern","location":"a.rs:3","message":"new finding"}
-{"reply":"a.rs:3","message":"verified"}
-"#;
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "a is racy"]);
+    let input = format!(
+        "{{\"reply\":\"{a}\",\"message\":\"x\"}}\n{{\"resolve\":\"{a}\",\"reason\":\"fixed\"}}\n"
+    );
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("stdin line 1: stdin object missing 'kind'")
+            && stderr.contains("stdin line 2: stdin object missing 'kind'"),
+        "{stderr}"
+    );
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 1, "nothing written: {qual}");
+}
+
+#[test]
+fn test_record_stdin_references_record_created_in_same_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    // A complete envelope with a fixed created_at has a deterministic ID.
+    let first = "{\"metabox\":\"1\",\"type\":\"annotation\",\"subject\":\"a.rs\",\
+                 \"issuer\":\"mailto:t@t.com\",\"created_at\":\"2026-01-01T00:00:00Z\",\
+                 \"id\":\"\",\"body\":{\"kind\":\"concern\",\"summary\":\"new finding\"}}\n";
+    let (stdout, stderr, code) = run_qualifier_stdin(
+        dir.path(),
+        &["record", "--stdin", "--dry-run", "--format", "json"],
+        first,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let planned: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    let id = planned["id"].as_str().unwrap().to_string();
+
+    let input = format!(
+        "{first}{{\"kind\":\"comment\",\"location\":\"a.rs\",\"references\":\"{id}\",\"message\":\"verified\"}}\n"
+    );
     let (stdout, stderr, code) = run_qualifier_stdin(
         dir.path(),
         &["record", "--stdin", "--format", "json"],
-        input,
+        &input,
     );
     assert_eq!(code, 0, "{stderr}");
     let lines: Vec<serde_json::Value> = stdout
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
-    assert_eq!(lines[1]["body"]["references"], lines[0]["id"]);
+    assert_eq!(lines[0]["id"], id.as_str());
+    assert_eq!(lines[1]["body"]["references"], id.as_str());
 }
 
 #[test]
@@ -3173,15 +3222,17 @@ fn test_record_stdin_double_resolve_fails_atomically() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_id(dir.path(), &["record", "concern", "a.rs", "x"]);
     let input = format!(
-        "{{\"resolve\":\"{p}\",\"reason\":\"fixed\"}}\n{{\"resolve\":\"{p}\",\"reason\":\"duplicate\"}}\n",
-        p = &a[..8]
+        "{{\"kind\":\"resolve\",\"location\":\"a.rs\",\"supersedes\":\"{a}\",\"message\":\"fixed\",\"tags\":[\"reason:fixed\"]}}\n\
+         {{\"kind\":\"resolve\",\"location\":\"a.rs\",\"supersedes\":\"{a}\",\"message\":\"dup\",\"tags\":[\"reason:duplicate\"]}}\n"
     );
     let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
     assert_ne!(code, 0);
     assert!(
-        stderr.contains("stdin line 2") && stderr.contains("closed"),
+        stderr.contains("stdin line 2")
+            && stderr.contains(&format!("target {} is closed (resolved by ", &a[..8])),
         "{stderr}"
     );
+    assert!(!stderr.contains("allow"), "{stderr}");
     let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
     assert!(
         !qual.contains("\"kind\":\"resolve\""),
@@ -3193,65 +3244,98 @@ fn test_record_stdin_double_resolve_fails_atomically() {
 fn test_record_stdin_superseded_target_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_id(dir.path(), &["record", "concern", "a.rs", "v1"]);
-    write_id(
+    let b = write_id(
         dir.path(),
         &["record", "concern", "a.rs", "v2", "--supersedes", &a],
     );
-    let input = format!("{{\"reply\":\"{}\",\"message\":\"late\"}}\n", &a[..8]);
+    let input = format!(
+        "{{\"kind\":\"comment\",\"location\":\"a.rs\",\"references\":\"{a}\",\"message\":\"late\"}}\n"
+    );
     let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
     assert_ne!(code, 0);
-    assert!(stderr.contains("superseded by"), "{stderr}");
+    assert!(
+        stderr.contains("references: target")
+            && stderr.contains(&format!("superseded by {}", &b[..8])),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("allow"), "{stderr}");
 }
 
 #[test]
-fn test_record_stdin_supersedes_prefix() {
+fn test_record_stdin_closed_target_names_closer() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_id(dir.path(), &["record", "concern", "a.rs", "v1"]);
+    let closer = write_id(dir.path(), &["resolve", &a[..8], "fixed"]);
     let input = format!(
-        "{{\"kind\":\"concern\",\"location\":\"a.rs\",\"message\":\"v2\",\"supersedes\":\"{}\"}}\n",
+        "{{\"kind\":\"comment\",\"location\":\"a.rs\",\"references\":\"{a}\",\"message\":\"late\"}}\n"
+    );
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains(&format!("closed (resolved by {})", &closer[..8])),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("allow"), "{stderr}");
+}
+
+#[test]
+fn test_record_stdin_pointers_must_be_full_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "v1"]);
+    let unknown = "f".repeat(64);
+    let input = format!(
+        "{{\"kind\":\"concern\",\"location\":\"a.rs\",\"message\":\"v2\",\"supersedes\":\"{}\"}}\n\
+         {{\"kind\":\"comment\",\"location\":\"a.rs\",\"message\":\"re\",\"references\":\"a.rs\"}}\n\
+         {{\"kind\":\"comment\",\"location\":\"a.rs\",\"message\":\"re\",\"references\":\"{unknown}\"}}\n",
         &a[..8]
     );
     let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
-    assert_eq!(code, 0, "{stderr}");
-    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
-    assert!(qual.contains(&format!("\"supersedes\":\"{a}\"")), "{qual}");
-}
-
-#[test]
-fn test_record_stdin_dry_run_resolves_targets() {
-    let dir = tempfile::tempdir().unwrap();
-    let a = write_id(dir.path(), &["record", "concern", "a.rs", "x"]);
-    let input = format!("{{\"reply\":\"{}\",\"message\":\"y\"}}\n", &a[..8]);
-    let (stdout, stderr, code) = run_qualifier_stdin(
-        dir.path(),
-        &["record", "--stdin", "--dry-run", "--format", "json"],
-        &input,
-    );
-    assert_eq!(code, 0, "{stderr}");
-    let v: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
-    assert_eq!(
-        v["body"]["references"],
-        a.as_str(),
-        "dry run prints the full resolved target"
-    );
-    assert_eq!(v["dry_run"], true);
-}
-
-#[test]
-fn test_record_stdin_reply_and_resolve_keys_conflict() {
-    let dir = tempfile::tempdir().unwrap();
-    let a = write_id(dir.path(), &["record", "concern", "a.rs", "x"]);
-    let input = format!(
-        "{{\"reply\":\"{p}\",\"resolve\":\"{p}\",\"message\":\"?\"}}\n",
-        p = &a[..8]
-    );
-    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
     assert_ne!(code, 0);
-    assert!(stderr.contains("both 'reply' and 'resolve'"), "{stderr}");
+    for line in 1..=3 {
+        assert!(
+            stderr
+                .lines()
+                .any(|l| l.starts_with(&format!("stdin line {line}:"))
+                    && l.contains("must be a full record ID")),
+            "line {line}: {stderr}"
+        );
+    }
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 1, "nothing written: {qual}");
 }
 
 #[test]
-fn test_record_stdin_continue_on_error_writes_valid_reply_and_resolve_lines() {
+fn test_record_stdin_resolve_line_reason_tags_validated() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "x"]);
+    let unknown = format!(
+        "{{\"kind\":\"resolve\",\"location\":\"a.rs\",\"supersedes\":\"{a}\",\"message\":\"m\",\"tags\":[\"reason:meh\"]}}\n"
+    );
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &unknown);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("unknown close reason 'meh'") && stderr.contains("wontfix"),
+        "{stderr}"
+    );
+
+    let two = format!(
+        "{{\"kind\":\"resolve\",\"location\":\"a.rs\",\"supersedes\":\"{a}\",\"message\":\"m\",\"tags\":[\"reason:fixed\",\"reason:duplicate\"]}}\n"
+    );
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &two);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("one reason"), "{stderr}");
+
+    // reason:* tags on other kinds are left alone.
+    let other = "{\"kind\":\"comment\",\"location\":\"a.rs\",\"message\":\"m\",\"tags\":[\"reason:meh\"]}\n";
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], other);
+    assert_eq!(code, 0, "{stderr}");
+
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(!qual.contains("\"kind\":\"resolve\""), "{qual}");
+}
+
+#[test]
+fn test_record_stdin_continue_on_error_writes_valid_lines_past_closed_target() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_id(dir.path(), &["record", "concern", "a.rs", "a is racy"]);
     let b = write_id(dir.path(), &["record", "concern", "b.rs", "b leaks"]);
@@ -3259,9 +3343,8 @@ fn test_record_stdin_continue_on_error_writes_valid_reply_and_resolve_lines() {
 
     // Line 1 is a valid reply; line 2 resolves an already-closed target.
     let input = format!(
-        "{{\"reply\":\"{}\",\"message\":\"confirmed\"}}\n{{\"resolve\":\"{}\",\"reason\":\"fixed\"}}\n",
-        &a[..8],
-        &b[..8]
+        "{{\"kind\":\"comment\",\"location\":\"a.rs\",\"references\":\"{a}\",\"message\":\"confirmed\"}}\n\
+         {{\"kind\":\"resolve\",\"location\":\"b.rs\",\"supersedes\":\"{b}\",\"message\":\"fixed\",\"tags\":[\"reason:fixed\"]}}\n"
     );
     let (_, stderr, code) = run_qualifier_stdin(
         dir.path(),
@@ -3269,12 +3352,16 @@ fn test_record_stdin_continue_on_error_writes_valid_reply_and_resolve_lines() {
         &input,
     );
     assert_ne!(code, 0);
-    assert!(stderr.contains("closed"), "{stderr}");
+    assert!(
+        stderr.contains("stdin line 2") && stderr.contains("closed"),
+        "{stderr}"
+    );
     let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
     assert!(
         qual.contains("confirmed"),
-        "the valid reply line is still written under --continue-on-error: {qual}"
+        "the valid line is still written under --continue-on-error: {qual}"
     );
+    assert_eq!(qual.matches("\"kind\":\"resolve\"").count(), 1, "{qual}");
 }
 
 #[test]
@@ -4282,7 +4369,7 @@ fn test_ambiguous_id_prefix_lists_candidates() {
 }
 
 #[test]
-fn test_record_stdin_rejects_file_and_allow_superseded_flags() {
+fn test_record_stdin_rejects_file_flag() {
     let dir = tempfile::tempdir().unwrap();
     let input = "{\"kind\":\"concern\",\"location\":\"a.rs\",\"message\":\"x\"}\n";
     let (_, stderr, code) = run_qualifier_stdin(
@@ -4295,39 +4382,28 @@ fn test_record_stdin_rejects_file_and_allow_superseded_flags() {
         stderr.contains("--file is not supported with --stdin"),
         "{stderr}"
     );
-    let (_, stderr, code) = run_qualifier_stdin(
-        dir.path(),
-        &["record", "--stdin", "--allow-superseded"],
-        input,
-    );
-    assert_ne!(code, 0);
-    assert!(
-        stderr.contains("--allow-superseded is not supported with --stdin; set it per line"),
-        "{stderr}"
-    );
     assert!(!dir.path().join(".qual").exists(), "nothing written");
     assert!(!dir.path().join("out.qual").exists(), "nothing written");
 }
 
 #[test]
-fn test_record_stdin_rejects_unknown_keys_on_reply_and_resolve_lines() {
+fn test_allow_superseded_flag_does_not_exist() {
     let dir = tempfile::tempdir().unwrap();
-    let a = write_id(dir.path(), &["record", "concern", "a.rs", "a is racy"]);
-    let input = format!(
-        "{{\"reply\":\"{p}\",\"message\":\"x\",\"references\":\"{p}\"}}\n\
-         {{\"resolve\":\"{p}\",\"detail\":\"why\"}}\n",
-        p = &a[..8]
-    );
-    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
-    assert_ne!(code, 0);
-    assert!(
-        stderr.contains("stdin line 1: unknown key 'references' on a reply line"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("stdin line 2: unknown key 'detail' on a resolve line"),
-        "{stderr}"
-    );
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "x"]);
+    for args in [
+        vec!["record", "comment", "a.rs", "y", "--allow-superseded"],
+        vec!["reply", &a[..8], "y", "--allow-superseded"],
+        vec!["resolve", &a[..8], "y", "--allow-superseded"],
+    ] {
+        let (_, stderr, code) = run_qualifier(dir.path(), &args);
+        assert_ne!(code, 0, "{args:?}");
+        assert!(
+            stderr.contains("unexpected argument '--allow-superseded'"),
+            "{args:?}: {stderr}"
+        );
+    }
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 1, "{qual}");
 }
 
 #[test]
@@ -4366,6 +4442,10 @@ fn test_reply_to_superseded_record_names_successor() {
         "error should name the live record: {stderr}"
     );
     assert!(stderr.contains("better wording"), "{stderr}");
+    assert!(
+        !stderr.contains("allow"),
+        "no override flag exists: {stderr}"
+    );
 }
 
 #[test]
@@ -4412,8 +4492,19 @@ fn test_reply_to_resolved_record_says_closed() {
         ],
     );
     assert_ne!(code, 0);
-    assert!(stderr.contains("closed"), "{stderr}");
-    assert!(stderr.contains(&closer[..8]), "{stderr}");
+    let c = &closer[..8];
+    assert!(
+        stderr.contains(&format!(
+            "target {} is closed (resolved by {c}); reply to {c} to comment on the \
+             closed thread, or record a new record that supersedes {c} to reopen it",
+            &id[..8]
+        )),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("allow"),
+        "no override flag exists: {stderr}"
+    );
     assert!(
         !stderr.contains("superseded by"),
         "a resolve closes a record; it is not a successor to reply to: {stderr}"
@@ -4438,30 +4529,73 @@ fn test_resolve_twice_fails() {
     );
     assert_ne!(code, 0, "second resolve must fail");
     assert!(stderr.contains("closed"), "{stderr}");
+    assert!(!stderr.contains("allow"), "{stderr}");
     let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
     assert_eq!(qual.matches("\"kind\":\"resolve\"").count(), 1, "{qual}");
 }
 
 #[test]
-fn test_reply_allow_superseded_annotates_history() {
+fn test_reply_to_closing_resolve_joins_closed_thread() {
     let dir = tempfile::tempdir().unwrap();
     let id = write_id(dir.path(), &["record", "concern", "lib.rs", "old finding"]);
-    write_id(dir.path(), &["resolve", &id[..8], "fixed"]);
+    let closer = write_id(dir.path(), &["resolve", &id[..8], "fixed"]);
+    let reply = write_id(
+        dir.path(),
+        &["reply", &closer[..8], "context for the record"],
+    );
 
-    let (_, stderr, code) = run_qualifier(
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert!(
+        qual.contains(&format!("\"references\":\"{closer}\"")),
+        "{qual}"
+    );
+    let threads = threads_json(dir.path(), &["--all"]);
+    assert_eq!(threads.len(), 1, "{threads:?}");
+    let t = &threads[0];
+    assert_eq!(t["open"], false);
+    assert_eq!(t["root"]["id"], id.as_str());
+    assert_eq!(t["closed_by"]["id"], closer.as_str());
+    assert_eq!(t["replies"][0]["record"]["id"], reply.as_str());
+    assert!(
+        threads_json(dir.path(), &[]).is_empty(),
+        "the thread stays closed"
+    );
+}
+
+#[test]
+fn test_record_superseding_resolve_reopens_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = write_id(
+        dir.path(),
+        &["record", "concern", "lib.rs", "leaks a handle"],
+    );
+    let closer = write_id(dir.path(), &["resolve", &id[..8], "fixed"]);
+    let reopened = write_id(
         dir.path(),
         &[
-            "reply",
-            &id[..8],
-            "context for the record",
-            "--allow-superseded",
-            "--issuer",
-            "mailto:test@test.com",
+            "record",
+            "concern",
+            "lib.rs",
+            "still leaks on the error path",
+            "--supersedes",
+            &closer,
         ],
     );
-    assert_eq!(code, 0, "{stderr}");
-    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
-    assert!(qual.contains(&format!("\"references\":\"{id}\"")), "{qual}");
+
+    let threads = threads_json(dir.path(), &[]);
+    assert_eq!(threads.len(), 1, "{threads:?}");
+    let t = &threads[0];
+    assert_eq!(t["open"], true);
+    assert_eq!(t["origin"], id.as_str());
+    assert_eq!(t["root"]["id"], reopened.as_str());
+    assert!(t["closed_by"].is_null());
+    let history: Vec<&str> = t["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(history, vec![id.as_str(), closer.as_str()], "{t}");
 }
 
 // --- resolve --reason ---
@@ -4562,13 +4696,13 @@ fn test_resolve_rejects_unknown_reason_tag() {
     assert!(stderr.contains("unknown close reason"), "{stderr}");
 }
 
-// --- ID prefixes in --supersedes / --references ---
+// --- --supersedes / --references take full, live record IDs ---
 
 #[test]
-fn test_record_supersedes_accepts_prefix() {
+fn test_record_supersedes_requires_full_id() {
     let dir = tempfile::tempdir().unwrap();
     let old = write_id(dir.path(), &["record", "concern", "lib.rs", "first"]);
-    write_id(
+    let (_, stderr, code) = run_qualifier(
         dir.path(),
         &[
             "record",
@@ -4577,6 +4711,25 @@ fn test_record_supersedes_accepts_prefix() {
             "second",
             "--supersedes",
             &old[..8],
+            "--issuer",
+            "mailto:test@test.com",
+        ],
+    );
+    assert_ne!(code, 0, "an ID prefix is not a full ID");
+    assert!(
+        stderr.contains("--supersedes") && stderr.contains("must be a full record ID"),
+        "{stderr}"
+    );
+
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib.rs",
+            "second",
+            "--supersedes",
+            &old,
         ],
     );
     let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
@@ -4587,9 +4740,29 @@ fn test_record_supersedes_accepts_prefix() {
 }
 
 #[test]
-fn test_record_references_accepts_prefix() {
+fn test_record_references_requires_full_id() {
     let dir = tempfile::tempdir().unwrap();
     let root = write_id(dir.path(), &["record", "concern", "lib.rs", "first"]);
+    for value in [&root[..6], "lib.rs"] {
+        let (_, stderr, code) = run_qualifier(
+            dir.path(),
+            &[
+                "record",
+                "comment",
+                "lib.rs",
+                "see also",
+                "--references",
+                value,
+                "--issuer",
+                "mailto:test@test.com",
+            ],
+        );
+        assert_ne!(code, 0, "{value}");
+        assert!(
+            stderr.contains("--references") && stderr.contains("must be a full record ID"),
+            "{value}: {stderr}"
+        );
+    }
     write_id(
         dir.path(),
         &[
@@ -4598,7 +4771,7 @@ fn test_record_references_accepts_prefix() {
             "lib.rs",
             "see also",
             "--references",
-            &root[..6],
+            &root,
         ],
     );
     let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
@@ -4609,11 +4782,11 @@ fn test_record_references_accepts_prefix() {
 }
 
 #[test]
-fn test_reply_supersedes_accepts_prefix() {
+fn test_reply_supersedes_requires_full_id() {
     let dir = tempfile::tempdir().unwrap();
     let root = write_id(dir.path(), &["record", "concern", "lib.rs", "first"]);
     let r1 = write_id(dir.path(), &["reply", &root[..8], "draft reply"]);
-    write_id(
+    let (_, stderr, code) = run_qualifier(
         dir.path(),
         &[
             "reply",
@@ -4621,7 +4794,18 @@ fn test_reply_supersedes_accepts_prefix() {
             "edited reply",
             "--supersedes",
             &r1[..8],
+            "--issuer",
+            "mailto:test@test.com",
         ],
+    );
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("--supersedes") && stderr.contains("must be a full record ID"),
+        "{stderr}"
+    );
+    write_id(
+        dir.path(),
+        &["reply", &root[..8], "edited reply", "--supersedes", &r1],
     );
     let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
     assert!(qual.contains(&format!("\"supersedes\":\"{r1}\"")), "{qual}");
@@ -4643,7 +4827,7 @@ fn test_record_supersedes_rejects_superseded_target() {
             "lib.rs",
             "v2-fork",
             "--supersedes",
-            &a[..8],
+            &a,
             "--issuer",
             "mailto:test@test.com",
         ],
@@ -4654,30 +4838,60 @@ fn test_record_supersedes_rejects_superseded_target() {
     );
     assert!(stderr.contains("--supersedes"), "{stderr}");
     assert!(stderr.contains(&b[..8]), "{stderr}");
+    assert!(!stderr.contains("allow"), "{stderr}");
 }
 
 #[test]
-fn test_record_supersedes_short_prefix_rejected() {
+fn test_record_references_closed_record_names_closer() {
     let dir = tempfile::tempdir().unwrap();
-    write_id(dir.path(), &["record", "concern", "lib.rs", "v1"]);
+    let a = write_id(dir.path(), &["record", "concern", "lib.rs", "v1"]);
+    let closer = write_id(dir.path(), &["resolve", &a[..8], "fixed"]);
     let (_, stderr, code) = run_qualifier(
         dir.path(),
         &[
             "record",
-            "concern",
+            "comment",
             "lib.rs",
-            "v2",
-            "--supersedes",
-            "abc",
+            "late",
+            "--references",
+            &a,
             "--issuer",
             "mailto:test@test.com",
         ],
     );
     assert_ne!(code, 0);
     assert!(
-        stderr.contains("--supersedes") && stderr.contains("at least 4"),
+        stderr.contains("--references")
+            && stderr.contains(&format!("closed (resolved by {})", &closer[..8])),
         "{stderr}"
     );
+}
+
+#[test]
+fn test_record_pointer_short_or_unknown_id_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(dir.path(), &["record", "concern", "lib.rs", "v1"]);
+    let unknown = "f".repeat(64);
+    for value in ["abc", unknown.as_str(), &unknown.to_uppercase()] {
+        let (_, stderr, code) = run_qualifier(
+            dir.path(),
+            &[
+                "record",
+                "concern",
+                "lib.rs",
+                "v2",
+                "--supersedes",
+                value,
+                "--issuer",
+                "mailto:test@test.com",
+            ],
+        );
+        assert_ne!(code, 0, "{value}");
+        assert!(
+            stderr.contains("--supersedes") && stderr.contains("must be a full record ID"),
+            "{value}: {stderr}"
+        );
+    }
 }
 
 // --- provenance defaults ---
@@ -4999,11 +5213,10 @@ fn test_threads_and_reply_discover_project_from_subdirectory() {
     let root_qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
     assert!(root_qual.contains("\"kind\":\"resolve\""), "{root_qual}");
 
-    // Same for a stdin batch reply line.
+    // Same for a stdin batch reply line (locations are CWD-relative).
     let c = write_id(dir.path(), &["record", "concern", "c.rs", "c waits"]);
     let input = format!(
-        "{{\"reply\":\"{}\",\"message\":\"batch confirmed\"}}\n",
-        &c[..8]
+        "{{\"kind\":\"comment\",\"location\":\"../c.rs\",\"references\":\"{c}\",\"message\":\"batch confirmed\"}}\n"
     );
     let (_, stderr, code) = run_qualifier_stdin(&sub, &["record", "--stdin"], &input);
     assert_eq!(code, 0, "{stderr}");
@@ -5122,12 +5335,15 @@ fn test_reply_and_resolve_locations_from_subdirectory() {
 fn test_batch_from_subdirectory_normalizes_locations() {
     let dir = tempfile::tempdir().unwrap();
     let net = subdir_project(dir.path());
-    let input = concat!(
-        "{\"kind\":\"concern\",\"location\":\"tcp.rs:1\",\"message\":\"a leaks\"}\n",
-        "{\"reply\":\"tcp.rs:1\",\"message\":\"seen\"}\n",
-        "{\"resolve\":\"tcp.rs:1\",\"reason\":\"fixed\"}\n",
+    let a = write_id(
+        dir.path(),
+        &["record", "concern", "src/net/tcp.rs:1", "a leaks"],
     );
-    let (stdout, stderr, code) = run_qualifier_stdin(&net, &["record", "--stdin"], input);
+    let input = format!(
+        "{{\"kind\":\"comment\",\"location\":\"tcp.rs:1\",\"references\":\"{a}\",\"message\":\"seen\"}}\n\
+         {{\"kind\":\"resolve\",\"location\":\"tcp.rs\",\"supersedes\":\"{a}\",\"message\":\"fixed\",\"tags\":[\"reason:fixed\"]}}\n"
+    );
+    let (stdout, stderr, code) = run_qualifier_stdin(&net, &["record", "--stdin"], &input);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
     assert!(!net.join("src").exists(), "no nested src/net/src tree");
     let qual = std::fs::read_to_string(net.join(".qual")).unwrap();
@@ -5203,7 +5419,7 @@ fn test_show_praise_compact_from_subdirectory() {
             "src/net/tcp.rs:2",
             "b is racy (edited)",
             "--supersedes",
-            &a[..8],
+            &a,
         ],
     );
 
@@ -5302,25 +5518,11 @@ fn test_threads_id_filter_matches_every_record_role() {
     let origin = write_id(dir.path(), &["record", "concern", "a.rs", "v1"]);
     let middle = write_id(
         dir.path(),
-        &[
-            "record",
-            "concern",
-            "a.rs",
-            "v2",
-            "--supersedes",
-            &origin[..8],
-        ],
+        &["record", "concern", "a.rs", "v2", "--supersedes", &origin],
     );
     let root = write_id(
         dir.path(),
-        &[
-            "record",
-            "concern",
-            "a.rs",
-            "v3",
-            "--supersedes",
-            &middle[..8],
-        ],
+        &["record", "concern", "a.rs", "v3", "--supersedes", &middle],
     );
     let reply = write_id(dir.path(), &["reply", &root[..8], "seen"]);
     write_id(dir.path(), &["record", "concern", "b.rs", "unrelated"]);
@@ -5485,7 +5687,7 @@ fn test_threads_history_shows_superseded_root_chain() {
             "a.rs",
             "new summary",
             "--supersedes",
-            &old[..8],
+            &old,
         ],
     );
     write_id(dir.path(), &["reply", &new[..8], "a reply"]);

@@ -88,13 +88,9 @@ pub struct Args {
     #[arg(long, name = "ref")]
     pub r#ref: Option<String>,
 
-    /// ID of a prior annotation this replaces
+    /// Full ID of a prior reply this one replaces (must be live)
     #[arg(long)]
     pub supersedes: Option<String>,
-
-    /// Allow targeting a superseded or resolved record (annotating history)
-    #[arg(long)]
-    pub allow_superseded: bool,
 
     /// Explicit .qual file to write to
     #[arg(long)]
@@ -108,12 +104,11 @@ pub struct Args {
 pub fn run(args: Args) -> crate::Result<()> {
     let locator = targets::Locator::from_cwd()?;
     let qual_files = targets::discover_project(true)?;
-    let target =
-        targets::resolve_target(&args.target, &qual_files, args.allow_superseded, &locator)?;
+    let target = targets::resolve_target(&args.target, &qual_files, &locator)?;
     let supersedes = args
         .supersedes
         .as_deref()
-        .map(|v| targets::resolve_id_flag("--supersedes", v, &qual_files, args.allow_superseded))
+        .map(|v| targets::require_live_id("--supersedes", v, &qual_files))
         .transpose()?;
 
     let att = build_reply(

@@ -123,10 +123,6 @@ pub struct Args {
     #[arg(long = "tag")]
     pub tags: Vec<String>,
 
-    /// Allow targeting a superseded or resolved record (annotating history)
-    #[arg(long)]
-    pub allow_superseded: bool,
-
     /// Why the record is closed: fixed, wontfix, duplicate, invalid, or
     /// obsolete. Adds the tag `reason:<value>`.
     #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(CLOSE_REASONS.iter().copied()))]
@@ -136,12 +132,7 @@ pub struct Args {
 pub fn run(args: Args) -> crate::Result<()> {
     let locator = targets::Locator::from_cwd()?;
     let all_qual_files = targets::discover_project(true)?;
-    let target = targets::resolve_target(
-        &args.target,
-        &all_qual_files,
-        args.allow_superseded,
-        &locator,
-    )?;
+    let target = targets::resolve_target(&args.target, &all_qual_files, &locator)?;
 
     let att = build_resolve(
         &target,

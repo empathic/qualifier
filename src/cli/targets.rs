@@ -212,13 +212,12 @@ fn looks_like_location(target: &str) -> bool {
     false
 }
 
-/// Resolve a target string to a unique record. Accepts an id-prefix or a
-/// `<location>` (subject + optional span). Unless `allow_superseded`, a
-/// superseded or resolved record is rejected (see [`ensure_live`]).
+/// Resolve a target string to a unique, live record. Accepts an id-prefix
+/// or a `<location>` (subject + optional span). A superseded or resolved
+/// record is rejected (see [`ensure_live`]).
 pub(crate) fn resolve_target(
     target: &str,
     qual_files: &[QualFile],
-    allow_superseded: bool,
     locator: &Locator,
 ) -> crate::Result<Record> {
     let record = if looks_like_location(target) {
@@ -226,15 +225,13 @@ pub(crate) fn resolve_target(
     } else {
         resolve_id_prefix(target, qual_files)?
     };
-    if !allow_superseded {
-        ensure_live(&record, qual_files)?;
-    }
+    ensure_live(&record, qual_files)?;
     Ok(record)
 }
 
 /// Fail when `record` has been superseded. The error names the live tip of
 /// its supersession chain, or — when the chain ends in a `resolve` —
-/// reports the record as closed.
+/// reports the record as closed and names the closing record.
 pub(crate) fn ensure_live(record: &Record, qual_files: &[QualFile]) -> crate::Result<()> {
     // Map each superseded ID to its newest superseder.
     let mut successor: HashMap<&str, &Record> = HashMap::new();
@@ -262,11 +259,11 @@ pub(crate) fn ensure_live(record: &Record, qual_files: &[QualFile]) -> crate::Re
     }
 
     if tip.kind() == Some(&Kind::Resolve) {
+        let closer = short_id(tip.id());
         return Err(crate::Error::Validation(format!(
-            "target {} is closed (resolved by {})\n\
-             hint: pass --allow-superseded to annotate a closed record",
+            "target {} is closed (resolved by {closer}); reply to {closer} to comment on \
+             the closed thread, or record a new record that supersedes {closer} to reopen it",
             short_id(record.id()),
-            short_id(tip.id()),
         )));
     }
     let kind = tip
@@ -278,8 +275,7 @@ pub(crate) fn ensure_live(record: &Record, qual_files: &[QualFile]) -> crate::Re
         .map(|a| a.body.summary.as_str())
         .unwrap_or("");
     Err(crate::Error::Validation(format!(
-        "target {} is superseded by {} ({kind} {summary:?})\n\
-         hint: target the live record, or pass --allow-superseded to annotate history",
+        "target {} is superseded by {} ({kind} {summary:?}); target the live record",
         short_id(record.id()),
         short_id(tip.id()),
     )))
@@ -367,21 +363,34 @@ fn resolve_location_target(
     Ok(candidates[0].clone())
 }
 
-/// Resolve an ID-valued flag (`--supersedes`, `--references`) to the full
-/// ID of a record. Unless `allow_superseded`, the record must be live.
-/// Errors are prefixed with `flag`.
-pub(crate) fn resolve_id_flag(
+/// Check a pointer value (`--supersedes`, `--references`, or the same
+/// keys on a batch line): it must be the full ID (64 lowercase hex) of a
+/// record in `qual_files`, and that record must be live (see
+/// [`ensure_live`]). Returns the ID. Errors are prefixed with `flag`.
+pub(crate) fn require_live_id(
     flag: &str,
-    value: &str,
+    id: &str,
     qual_files: &[QualFile],
-    allow_superseded: bool,
 ) -> crate::Result<String> {
-    let prefixed = |e: crate::Error| crate::Error::Validation(format!("{flag}: {e}"));
-    let record = resolve_id_prefix(value, qual_files).map_err(prefixed)?;
-    if !allow_superseded {
-        ensure_live(&record, qual_files).map_err(prefixed)?;
+    let err = |msg: String| crate::Error::Validation(format!("{flag}: {msg}"));
+    let is_full_id = id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !is_full_id {
+        return Err(err(format!(
+            "'{id}' must be a full record ID (64 lowercase hex characters)"
+        )));
     }
-    Ok(record.id().to_string())
+    let record = qual_files
+        .iter()
+        .flat_map(|qf| qf.records.iter())
+        .find(|r| r.id() == id)
+        .ok_or_else(|| {
+            err(format!(
+                "no record with ID {} (must be a full record ID of an existing record)",
+                short_id(id)
+            ))
+        })?;
+    ensure_live(record, qual_files).map_err(|e| err(e.to_string()))?;
+    Ok(id.to_string())
 }
 
 /// Check that adding `record` to `existing` keeps supersession acyclic and

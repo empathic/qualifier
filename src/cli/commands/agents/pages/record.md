@@ -43,7 +43,7 @@ Locations are relative to the current directory; subjects are stored
 relative to the project root. From `src/net/`, `tcp.rs:42` records against
 `src/net/tcp.rs`, written to `src/net/.qual` under the project root. A
 location that leaves the project root is an error. The same rule applies to
-`location`, `reply`, and `resolve` values in `--stdin` batches.
+`location` values in `--stdin` batches.
 
 ## Flags worth knowing
 
@@ -56,9 +56,10 @@ drift.
 **`--supersedes <ID>`** marks this record as superseding a prior annotation.
 Use this to update or correct an existing annotation rather than leaving both
 visible — the superseded record is filtered out by `show`, `praise`, and
-`review`. Takes an ID or ID prefix (≥ 4 characters); it must name a live
-record unless `--allow-superseded` is also passed. `--references <ID>` takes
-the same ID-or-prefix form for its target.
+`review`. Takes the full 64-character ID of an existing record, which must
+be live (not superseded, not closed); a prefix or location is rejected.
+`--references <ID>` takes the same full-ID form for its target. A stale
+pointer fails and names the live record, or the `resolve` that closed it.
 
 **`--issuer` / `--issuer-type`**: as an agent, leave `--issuer` and `--issuer-type` unset; see `qualifier agents concepts` for
 defaults (`QUALIFIER_*` variables, agent-harness detection).
@@ -67,13 +68,16 @@ defaults (`QUALIFIER_*` variables, agent-harness detection).
 for when emitting more than one annotation in a session — it collapses many
 sequential `qualifier record` invocations into a single pipe.
 
-Each stdin line is one of four shapes:
+Each stdin line describes one new record, in one of two shapes. A reply is
+a line whose `references` is the target's ID; a resolve is a
+`kind: "resolve"` line whose `supersedes` is the target's ID (see
+`qualifier agents batch`):
 
 ```jsonl
 {"kind":"concern","location":"src/auth.rs:42:58","message":"Token comparison is timing-unsafe","detail":"Uses == on session_token; replace with constant-time compare.","suggested_fix":"Use subtle::ConstantTimeEq.","tags":["security"]}
-{"kind":"suggestion","location":"src/auth.rs:88","message":"Extract magic constant","supersedes":"<id-or-prefix>"}
-{"reply":"<id-prefix-or-location>","message":"Confirmed, tracking in #482","tags":["triage"]}
-{"resolve":"<id-prefix-or-location>","message":"Fixed in 1a2b3c4","reason":"fixed","ref":"git:1a2b3c4"}
+{"kind":"suggestion","location":"src/auth.rs:88","message":"Extract magic constant","supersedes":"<full-64-char-id>"}
+{"kind":"comment","location":"src/auth.rs","references":"<full-64-char-id>","message":"Confirmed, tracking in #482","tags":["triage"]}
+{"kind":"resolve","location":"src/auth.rs","supersedes":"<full-64-char-id>","message":"Fixed in 1a2b3c4","tags":["reason:fixed"],"ref":"git:1a2b3c4"}
 ```
 
 Recognized keys on the **overrides** form:
@@ -81,43 +85,26 @@ Recognized keys on the **overrides** form:
 - `kind` — required. Any built-in kind or a custom string.
 - `location` — required. `path` or `path:line` or `path:start:end`.
 - `message` — required. Becomes `body.summary`.
-- `detail`, `suggested_fix`, `tags`, `ref`, `references`, `supersedes`,
-  `allow_superseded` — optional, all match their `--flag` equivalents on
-  the non-batch CLI. `supersedes` and `references` accept an ID or an ID
-  prefix (≥ 4 characters), resolved the same way as the non-batch
-  `--supersedes`/`--references` flags; the target must be live unless
-  `allow_superseded` is set.
+- `detail`, `suggested_fix`, `tags`, `ref`, `references`, `supersedes` —
+  optional, all match their `--flag` equivalents on the non-batch CLI.
+  `supersedes` and `references` take a full record ID that exists on disk
+  or on an earlier line of the same batch and is live, exactly like the
+  `--supersedes`/`--references` flags.
+- On a `kind: "resolve"` line, `tags` may carry at most one `reason:*`
+  tag, and its value must be one of `fixed`, `wontfix`, `duplicate`,
+  `invalid`, `obsolete`.
 - `span` — optional. Same syntax as the `--span` flag (e.g. `"42:58"`).
   Overrides any span parsed from `location`.
 - `issuer`, `issuer_type` — optional, with the same defaults as non-batch
   mode. As an agent, leave them unset; see `qualifier agents concepts` for
   defaults (`QUALIFIER_*` variables, agent-harness detection).
 
-The **reply** form (has a `reply` key) responds to an existing thread the
-same way `qualifier reply` does: `reply` names the target (an ID prefix or
-a `<location>`), `message` is required, and `kind`, `detail`,
-`suggested_fix`, `tags`, `issuer`, `issuer_type`, `ref`, `supersedes`, and
-`allow_superseded` mirror the `reply` command's flags.
-
-The **resolve** form (has a `resolve` key) closes an existing thread the
-same way `qualifier resolve` does: `resolve` names the target, and
-`message`, `reason`, `tags`, `issuer`, `issuer_type`, `ref`, and
-`allow_superseded` mirror the `resolve` command's flags. A line must not
-set both `reply` and `resolve`.
-
-A `reply` or `resolve` line with any key not listed for its form is
-rejected, and the error names the key (`unknown key 'detail' on a resolve
-line`). `--file` and `--allow-superseded` are rejected with `--stdin`; set
-`allow_superseded` per line.
-
-For `reply`/`resolve` lines, the target may name a record created earlier
-in the same batch — targets are resolved against the records on disk plus
-everything already planned by prior lines in this batch.
+`--file` is rejected with `--stdin`.
 
 The **complete record** form is recognized when an object carries both
 `subject` and `body` keys; it is taken as a fully-formed envelope and only
-the `id` is recomputed. Use this when round-tripping records produced by
-another tool. The overrides form is the right shape for most agent use.
+the `id` is recomputed; its `supersedes`/`references` are stored as given.
+Use this when round-tripping records produced by another tool. The overrides form is the right shape for most agent use.
 
 Behaviour:
 
@@ -125,12 +112,12 @@ Behaviour:
 - One stdout line is emitted per recorded entry (compact summary + id, or a
   full JSONL record under `--format json`). Trailing summary goes to
   **stderr** so a `--format json` pipe stays clean.
-- Parse, resolution, and validation errors are reported as
+- Parse and validation errors are reported as
   `stdin line N: <reason>: <input>` (the offending input is echoed so you
   can see what was sent without re-piping).
 - **Without `--continue-on-error`, the batch is all-or-nothing for
-  parse/resolve/validation failures:** every line is parsed, resolved,
-  and validated before any record is written. If any line fails that way,
+  parse/validation failures:** every line is parsed and validated before
+  any record is written. If any line fails that way,
   every failing line is reported and *nothing* is written — including
   lines before the failure.
 - This guarantee does not cover I/O failures while writing. Planning
@@ -151,8 +138,8 @@ cat findings.jsonl | qualifier record --stdin --continue-on-error
 #          Recorded 12 of 13 records from stdin, 1 failed
 ```
 
-**`--dry-run`** validates every line (resolving `reply`/`resolve` targets
-and `supersedes`/`references` in full) but writes nothing. Output uses the
+**`--dry-run`** validates every line (including the existence and
+liveness of `supersedes`/`references` targets) but writes nothing. Output uses the
 verb `would-record` so a glance at stdout confirms nothing was committed.
 Combine with `--continue-on-error` to find every bad line in a batch:
 

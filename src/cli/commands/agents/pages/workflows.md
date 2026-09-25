@@ -117,7 +117,8 @@ retains the full pre-compaction records if you need to trace back.
 
 ```bash
 qualifier threads --format json > /tmp/open.json        # the worklist
-# check each root's claim against the code, then write one batch:
+# check each root's claim against the code, then write one batch
+# (replies and resolves point at each root's full `id`; see `qualifier agents batch`):
 qualifier record --stdin --dry-run < /tmp/triage.jsonl
 qualifier record --stdin < /tmp/triage.jsonl
 qualifier threads --status needs-decision               # what's left for a human
