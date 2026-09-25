@@ -79,6 +79,7 @@ is a path with an optional span (`src/foo.rs:42`, `src/foo.rs:42:58`).
 | Command | Description |
 |---------|-------------|
 | `qualifier show <artifact>` | Show annotations for an artifact (threaded) |
+| `qualifier threads [location...]` | List conversation threads across the project |
 | `qualifier ls [--kind K]` | List artifacts (optionally by kind) |
 | `qualifier praise <artifact>` | Show who annotated and why (alias: `blame`) |
 | `qualifier review [subject]` | Check freshness of span-bound annotations |

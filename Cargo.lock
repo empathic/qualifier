@@ -1921,6 +1921,7 @@ dependencies = [
  "comfy-table",
  "figment",
  "gix",
+ "globset",
  "ignore",
  "rand",
  "serde",

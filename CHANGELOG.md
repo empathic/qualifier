@@ -18,6 +18,9 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
   `session:claude-code:<session id>`. Explicit flags still win.
 - `resolve --reason <fixed|wontfix|duplicate|invalid|obsolete>` adds the
   tag `reason:<value>`.
+- **`qualifier threads`** lists conversations across the project (root,
+  live replies, open/closed) with location, glob, span, kind, tag, and
+  issuer-type filters, and JSON output.
 
 ### Fixed
 

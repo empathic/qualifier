@@ -890,6 +890,7 @@ qualifier emit <type> <subject> --body '<JSON>' Emit a raw record of any type
 
 ```
 qualifier show <artifact>                 Show annotations for an artifact
+qualifier threads [location...]           List conversation threads
 qualifier ls [--kind <k>]                 List subjects by kind
 qualifier praise <artifact>               Show who annotated an artifact and why
                                           (also available as the `blame` alias)
@@ -1148,6 +1149,22 @@ the underlying VCS blame command for the subject's `.qual` file.
 qualifier praise src/parser.rs
 qualifier praise src/parser.rs --vcs
 ```
+
+### 6.12 `qualifier threads`
+
+```
+qualifier threads [LOCATION...] [--all] [--kind K[,K]] [--tag T]
+                  [--issuer-type TYPE] [--format human|json] [--no-ignore]
+```
+
+Lists threads as defined in §7 (`qualifier::threads`). By default only
+open threads and live replies are shown; `--all` adds closed threads and
+superseded replies. A location is a path, a directory, a glob (`*` does not
+cross `/`), or `path:start[:end]` matching threads whose root span
+overlaps. `--tag` matches tags on the root or a live reply; `ns:*` matches a
+namespace; repeated `--tag` flags must all match. JSON output is a single
+array of `{origin, open, root, closed_by, history, replies: [{active,
+record}], latest_at}` with full IDs.
 
 ## 7. Library API
 

@@ -33,6 +33,7 @@ Record observations:
 
 Inspect annotations:
   show       Show annotations for an artifact
+  threads    List conversation threads across the project
   ls         List artifacts by kind
   praise     Show who annotated an artifact and why (alias: blame)
   review     Check freshness of annotations against current code
@@ -82,6 +83,8 @@ pub enum Commands {
 
     /// Show annotations for an artifact
     Show(commands::show::Args),
+    /// List conversation threads across the project
+    Threads(commands::threads::Args),
     /// List artifacts by kind
     Ls(commands::ls::Args),
     /// Show who annotated an artifact and why
@@ -130,6 +133,7 @@ pub fn run() {
         Commands::Resolve(args) => commands::resolve::run(args),
         Commands::Emit(args) => commands::emit::run(args),
         Commands::Show(args) => commands::show::run(args),
+        Commands::Threads(args) => commands::threads::run(args),
         Commands::Ls(args) => commands::ls::run(args),
         Commands::Compact(args) => commands::compact::run(args),
         Commands::Haiku => {

@@ -4606,3 +4606,183 @@ fn test_stdin_batch_uses_env_defaults() {
         "{qual}"
     );
 }
+
+// --- qualifier threads ---
+
+fn threads_json(dir: &Path, args: &[&str]) -> Vec<serde_json::Value> {
+    let mut full = vec!["threads", "--format", "json"];
+    full.extend_from_slice(args);
+    let (stdout, stderr, code) = run_qualifier(dir, &full);
+    assert_eq!(code, 0, "{stderr}");
+    serde_json::from_str::<serde_json::Value>(&stdout)
+        .expect("threads --format json prints one JSON array")
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn test_threads_lists_open_threads_with_replies() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "a is racy"]);
+    write_id(dir.path(), &["reply", &a[..8], "confirmed in a_test"]);
+    let b = write_id(dir.path(), &["record", "concern", "b.rs", "b leaks"]);
+    write_id(dir.path(), &["resolve", &b[..8], "fixed"]);
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["threads"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("a is racy") && stdout.contains("confirmed in a_test"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("b leaks"),
+        "closed threads hidden by default: {stdout}"
+    );
+}
+
+#[test]
+fn test_threads_all_includes_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = write_id(dir.path(), &["record", "concern", "b.rs", "b leaks"]);
+    write_id(dir.path(), &["resolve", &b[..8], "fixed"]);
+    let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--all"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("b leaks") && stdout.contains("(closed)"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn test_threads_json_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "a.rs", "a is racy"]);
+    let r = write_id(dir.path(), &["reply", &a[..8], "confirmed"]);
+    let threads = threads_json(dir.path(), &[]);
+    assert_eq!(threads.len(), 1);
+    let t = &threads[0];
+    assert_eq!(t["origin"], a.as_str());
+    assert_eq!(t["open"], true);
+    assert_eq!(t["root"]["id"], a.as_str());
+    assert!(t["closed_by"].is_null());
+    assert_eq!(t["replies"][0]["active"], true);
+    assert_eq!(t["replies"][0]["record"]["id"], r.as_str());
+    assert!(t["latest_at"].is_string());
+}
+
+#[test]
+fn test_threads_json_empty_is_array() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--format", "json"]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "[]");
+}
+
+#[test]
+fn test_threads_location_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(
+        dir.path(),
+        &["record", "concern", "src/net/tcp.rs:15:30", "tcp span"],
+    );
+    write_id(
+        dir.path(),
+        &["record", "concern", "src/net/tcp.rs:40", "tcp later"],
+    );
+    write_id(dir.path(), &["record", "concern", "src/db.rs", "db"]);
+    write_id(dir.path(), &["record", "concern", "docs/spec.md", "spec"]);
+
+    let summaries = |args: &[&str]| -> Vec<String> {
+        threads_json(dir.path(), args)
+            .iter()
+            .map(|t| t["root"]["body"]["summary"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(summaries(&["src/db.rs"]), vec!["db"]);
+    assert_eq!(summaries(&["src/net"]).len(), 2, "directory prefix");
+    assert_eq!(summaries(&["src/*.rs"]), vec!["db"], "* does not cross /");
+    assert_eq!(summaries(&["src/**/*.rs"]).len(), 3);
+    assert_eq!(
+        summaries(&["src/net/tcp.rs:10:20"]),
+        vec!["tcp span"],
+        "span overlap"
+    );
+    assert_eq!(
+        summaries(&["docs/spec.md", "src/db.rs"]).len(),
+        2,
+        "any location matches"
+    );
+}
+
+#[test]
+fn test_threads_kind_tag_and_issuer_type_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(
+        dir.path(),
+        &["record", "blocker", "a.rs", "must fix", "--tag", "review"],
+    );
+    let c = write_id(
+        dir.path(),
+        &["record", "concern", "b.rs", "maybe", "--issuer-type", "ai"],
+    );
+    write_id(
+        dir.path(),
+        &[
+            "reply",
+            &c[..8],
+            "needs a call",
+            "--tag",
+            "status:needs-decision",
+        ],
+    );
+
+    assert_eq!(threads_json(dir.path(), &["--kind", "blocker"]).len(), 1);
+    assert_eq!(
+        threads_json(dir.path(), &["--kind", "blocker,concern"]).len(),
+        2
+    );
+    assert_eq!(threads_json(dir.path(), &["--tag", "review"]).len(), 1);
+    assert_eq!(
+        threads_json(dir.path(), &["--tag", "status:*"]).len(),
+        1,
+        "tags on live replies count"
+    );
+    assert_eq!(
+        threads_json(dir.path(), &["--tag", "review", "--tag", "status:*"]).len(),
+        0,
+        "repeated tags must all match"
+    );
+    assert_eq!(threads_json(dir.path(), &["--issuer-type", "ai"]).len(), 1);
+}
+
+#[test]
+fn test_threads_history_shows_superseded_root_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = write_id(dir.path(), &["record", "concern", "a.rs", "old summary"]);
+    let new = write_id(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "a.rs",
+            "new summary",
+            "--supersedes",
+            &old[..8],
+        ],
+    );
+    write_id(dir.path(), &["reply", &new[..8], "a reply"]);
+
+    let threads = threads_json(dir.path(), &[]);
+    assert_eq!(threads.len(), 1);
+    let history = threads[0]["history"].as_array().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["id"], old.as_str());
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--all"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("old summary") && stdout.contains("(superseded)"),
+        "{stdout}"
+    );
+}
