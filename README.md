@@ -92,6 +92,19 @@ is a path with an optional span (`src/foo.rs:42`, `src/foo.rs:42:58`).
 
 All read commands accept `--format json` for machine-readable output.
 
+## Using with Claude Code
+
+```
+/plugin marketplace add empathic/qualifier
+/plugin install qual@qualifier
+```
+
+In repositories with `.qual` files, the `qual` plugin loads skills that
+make Claude record design decisions, write review findings into
+qualifier, consult threads before editing, triage and escalate threads,
+and hand off threads a fresh session can act on. See
+[`plugins/claude-code/README.md`](plugins/claude-code/README.md).
+
 ## Records
 
 Annotations are the primary record type, but `.qual` is a substrate. The

@@ -46,6 +46,7 @@ When making changes, verify that all affected surfaces stay consistent:
   - Coordinate with `SPEC.md` version when the spec itself changes.
 - **Tests** — Many test files have local `make_att()`/`make_record()` helpers that construct records by hand. When adding or renaming fields on `Annotation`, `Epoch`, or `DependencyRecord`, update all helpers (~6 locations across `src/` and `tests/`). Run `cargo test --all-features` to catch any you miss.
 - **Golden IDs** — `tests/integration.rs` pins BLAKE3 IDs for annotation, epoch, and dependency records. Any change to canonical form (field order, new envelope fields, MCF rules) will break these. Update the expected hashes after confirming the new values are correct.
+- **plugins/claude-code/** — Skills cite `qualifier agents` topics, CLI flags, and batch line shapes. When renaming or removing any of them, update the skills and `MIN_VERSION` in `plugins/claude-code/scripts/ensure-qualifier.sh`. The wrapper installs only `PINNED_VERSION`: after a qualifier release, check the skills against it, then bump `PINNED_VERSION` and the three `SHA256_*` values (from the release's `.sha256` assets) in a plugin release. Keep `plugin.json` and the marketplace entry version in lockstep and bump the plugin version for any skill, hook, or wrapper change. `scripts/test-plugin.sh` enforces the structural parts and runs in CI.
 
 ## Slash Command Discovery
 - Unrecognized slash commands should be looked up as files under `.claude/commands/` (e.g., `/foo` looks for `.claude/commands/foo.md`).
