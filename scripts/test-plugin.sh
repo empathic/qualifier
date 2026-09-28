@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Offline checks for the Claude Code plugin (plugins/claude-code): manifest
-# consistency, ensure-qualifier.sh resolution and install against a stubbed
-# GitHub release, the SessionStart hook, and skill structure.
+# consistency, ensure-qualifier.sh resolution and its managed install against
+# a stubbed GitHub release, the SessionStart hook, and skill structure.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PLUGIN="plugins/claude-code"
 ENSURE="$PWD/$PLUGIN/scripts/ensure-qualifier.sh"
+HOOK="$PWD/$PLUGIN/hooks/session-start"
 PASS=0
 
 fail() {
@@ -42,84 +43,175 @@ PY
 ok "manifests parse and agree (plugin 'qual', versions match)"
 
 bash -n "$ENSURE" || fail "ensure-qualifier.sh does not parse"
+bash -n "$HOOK" || fail "session-start does not parse"
+python3 -c "import json; json.load(open('$PLUGIN/hooks/hooks.json'))" || fail "hooks.json is not valid JSON"
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck "$ENSURE" "$0" || fail "shellcheck"
+    shellcheck "$ENSURE" "$HOOK" "$0" || fail "shellcheck"
     ok "shellcheck clean"
 else
     echo "skip: shellcheck not installed"
 fi
 
-# --- ensure-qualifier.sh ----------------------------------------------------
+PINNED="$("$ENSURE" pinned-version)"
+
+# --- sandbox and stubs -----------------------------------------------------
 
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX/home"
-export QUALIFIER_INSTALL_DIR="$SANDBOX/global-bin"
 mkdir -p "$HOME"
-unset QUALIFIER_BIN
+unset QUALIFIER_BIN QUALIFIER_PLUGIN_HOME XDG_DATA_HOME
 
 make_fake_qualifier() {
-    # A stand-in binary that answers --version like the real CLI and
-    # prints a fixed summary for `threads --summary`.
+    # A stand-in binary that answers --version like the real CLI and prints
+    # a fixed summary for `threads --summary`.
     local file="$1" version="$2" identity="${3:-qualifier}"
+    local summary="${4:-qualifier: 1 blocker and 0 concerns open on files changed since main}"
     mkdir -p "$(dirname "$file")"
     cat >"$file" <<EOF
 #!/usr/bin/env bash
 case "\${1:-}" in
     --version) echo "$identity $version" ;;
-    threads) echo "qualifier: 1 blocker and 0 concerns open on files changed since main" ;;
+    threads) echo "$summary" ;;
     *) echo "fake-qualifier ran: \$*" ;;
 esac
 EOF
     chmod +x "$file"
 }
 
-# 1. A qualifier on PATH wins.
-STUB1="$SANDBOX/stub1"
-make_fake_qualifier "$STUB1/qualifier" "9.9.9"
-out="$(PATH="$STUB1:$PATH" "$ENSURE")"
-[ "$out" = "$STUB1/qualifier" ] || fail "expected $STUB1/qualifier, got $out"
-ok "prefers a qualifier on PATH"
+# Every curl stub touches this marker, so a test can assert "no download".
+export CURL_MARKER="$SANDBOX/curl-was-called"
 
-# 2. $QUALIFIER_BIN beats PATH.
-STUB_OVERRIDE="$SANDBOX/stub-override"
-make_fake_qualifier "$STUB_OVERRIDE/qualifier" "8.8.8"
-out="$(QUALIFIER_BIN="$STUB_OVERRIDE/qualifier" PATH="$STUB1:$PATH" "$ENSURE")"
-[ "$out" = "$STUB_OVERRIDE/qualifier" ] || fail "expected \$QUALIFIER_BIN to win, got $out"
-ok "\$QUALIFIER_BIN wins over PATH"
+# curl that refuses all network access.
+NOACCESS="$SANDBOX/curl-noaccess"
+mkdir -p "$NOACCESS"
+cat >"$NOACCESS/curl" <<'EOF'
+#!/usr/bin/env bash
+touch "$CURL_MARKER"
+echo "curl stub: unexpected network access" >&2
+exit 7
+EOF
+chmod +x "$NOACCESS/curl"
 
-# 3. An unusable $QUALIFIER_BIN warns and falls through.
-err="$(QUALIFIER_BIN="$SANDBOX/gone/qualifier" PATH="$STUB1:$PATH" "$ENSURE" 2>&1 >/dev/null)"
-out="$(QUALIFIER_BIN="$SANDBOX/gone/qualifier" PATH="$STUB1:$PATH" "$ENSURE" 2>/dev/null)"
-case "$err" in *"QUALIFIER_BIN"*) ;; *) fail "expected a warning naming QUALIFIER_BIN, got: $err" ;; esac
-[ "$out" = "$STUB1/qualifier" ] || fail "expected fall-through to $STUB1/qualifier, got $out"
-ok "an unusable \$QUALIFIER_BIN warns and falls through"
+# A managed install of the real pinned version, for tests of the shipped
+# wrapper that must not download anything.
+populate_managed() {
+    make_fake_qualifier "$1/$PINNED/qualifier" "$PINNED" qualifier "${2:-qualifier: 1 blocker and 0 concerns open on files changed since main}"
+}
 
-# 4. A foreign binary named qualifier is rejected.
-FOREIGN="$SANDBOX/foreign"
-make_fake_qualifier "$FOREIGN/qualifier" "1.0" "something-else"
-out="$(PATH="$FOREIGN:$STUB1:$PATH" "$ENSURE" 2>/dev/null)"
-[ "$out" = "$STUB1/qualifier" ] || fail "expected the foreign binary to be skipped, got $out"
-ok "skips a foreign binary named qualifier"
+# --- ensure-qualifier.sh: modes and $QUALIFIER_BIN -------------------------
 
-# 5. exec mode runs the resolved binary.
-out="$(PATH="$STUB1:$PATH" "$ENSURE" exec --version)"
-[ "$out" = "qualifier 9.9.9" ] || fail "exec mode: got '$out'"
-ok "exec mode runs the resolved binary"
+# W1. pinned-version resolves nothing: it works with an empty PATH.
+out="$(env -i PATH= HOME="$HOME" /bin/bash "$ENSURE" pinned-version)" || fail "pinned-version failed with an empty PATH"
+[ "$out" = "0.8.0" ] || fail "pinned-version: expected 0.8.0, got $out"
+ok "pinned-version reports PINNED_VERSION with an empty PATH"
 
-# 6. Older than MIN_VERSION warns but resolves.
-STUB_OLD="$SANDBOX/stub-old"
-make_fake_qualifier "$STUB_OLD/qualifier" "0.1.0"
-err="$(PATH="$STUB_OLD:$PATH" "$ENSURE" 2>&1 >/dev/null)"
-echo "$err" | grep -q "older than" || fail "expected an old-version warning, got: $err"
-ok "warns when the binary predates MIN_VERSION"
+# W2. The min-version mode is gone.
+if "$ENSURE" min-version >/dev/null 2>&1; then fail "min-version must no longer be a mode"; fi
+ok "min-version is not a mode"
+
+MANAGED="$SANDBOX/managed"
+populate_managed "$MANAGED"
+MANAGED_BIN="$MANAGED/$PINNED/qualifier"
+PATHQ="$SANDBOX/path-qualifier"
+make_fake_qualifier "$PATHQ/qualifier" "$PINNED" qualifier "PATH-QUALIFIER-SUMMARY"
+OVERRIDE="$SANDBOX/override"
+make_fake_qualifier "$OVERRIDE/qualifier" "8.8.8"
+
+# W3. A valid $QUALIFIER_BIN wins over the managed install and PATH.
+rm -f "$CURL_MARKER"
+out="$(QUALIFIER_BIN="$OVERRIDE/qualifier" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE")"
+[ "$out" = "$OVERRIDE/qualifier" ] || fail "expected \$QUALIFIER_BIN to win, got $out"
+[ ! -e "$CURL_MARKER" ] || fail "a valid \$QUALIFIER_BIN must not download"
+ok "\$QUALIFIER_BIN wins"
+
+# W4. An unusable $QUALIFIER_BIN (missing, not executable, foreign, or
+#     relative) warns and falls through to the managed install.
+NOEXEC="$SANDBOX/noexec/qualifier"
+make_fake_qualifier "$NOEXEC" "8.8.8"
+chmod -x "$NOEXEC"
+FOREIGN="$SANDBOX/foreign/qualifier"
+make_fake_qualifier "$FOREIGN" "1.0" "something-else"
+for bad in "$SANDBOX/gone/qualifier" "$NOEXEC" "$FOREIGN" "override/qualifier"; do
+    err="$(cd "$SANDBOX" && QUALIFIER_BIN="$bad" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE" 2>&1 >/dev/null)"
+    out="$(cd "$SANDBOX" && QUALIFIER_BIN="$bad" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE" 2>/dev/null)"
+    case "$err" in *"QUALIFIER_BIN"*) ;; *) fail "expected a warning naming QUALIFIER_BIN for '$bad', got: $err" ;; esac
+    [ "$out" = "$MANAGED_BIN" ] || fail "'$bad': expected fall-through to $MANAGED_BIN, got $out"
+done
+ok "an unusable, foreign, or relative \$QUALIFIER_BIN warns and falls through"
+
+# W5. A qualifier on PATH is ignored when a managed install exists.
+rm -f "$CURL_MARKER"
+out="$(QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE")"
+[ "$out" = "$MANAGED_BIN" ] || fail "expected the managed install, got $out"
+[ ! -e "$CURL_MARKER" ] || fail "a valid managed install must not download"
+ok "uses the managed install, not a qualifier on PATH"
+
+# W6. exec mode resolves, then runs the binary with the arguments.
+out="$(QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE" exec --version)"
+[ "$out" = "qualifier $PINNED" ] || fail "exec mode: got '$out'"
+out="$(QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE" exec show "a b")"
+[ "$out" = "fake-qualifier ran: show a b" ] || fail "exec mode arguments: got '$out'"
+ok "exec mode runs the managed binary with the arguments"
+
+# W7. The default plugin home is $XDG_DATA_HOME/qualifier/plugin, else
+#     ~/.local/share/qualifier/plugin.
+populate_managed "$SANDBOX/xdg/qualifier/plugin"
+out="$(XDG_DATA_HOME="$SANDBOX/xdg" PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE")"
+[ "$out" = "$SANDBOX/xdg/qualifier/plugin/$PINNED/qualifier" ] || fail "XDG_DATA_HOME default: got $out"
+populate_managed "$HOME/.local/share/qualifier/plugin"
+out="$(PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE")"
+[ "$out" = "$HOME/.local/share/qualifier/plugin/$PINNED/qualifier" ] || fail "HOME default: got $out"
+ok "plugin home defaults to \$XDG_DATA_HOME, then ~/.local/share"
+
+# W8. An unusable plugin home (relative, or /) from QUALIFIER_PLUGIN_HOME or
+#     XDG_DATA_HOME warns and falls back to ~/.local/share/qualifier/plugin.
+DEFAULT_BIN="$HOME/.local/share/qualifier/plugin/$PINNED/qualifier"
+for bad in "QUALIFIER_PLUGIN_HOME=relative/home" "QUALIFIER_PLUGIN_HOME=/" "QUALIFIER_PLUGIN_HOME=///" \
+           "XDG_DATA_HOME=relative/data" "XDG_DATA_HOME=/"; do
+    err="$(cd "$SANDBOX" && env "$bad" PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE" 2>&1 >/dev/null)" \
+        || fail "$bad: expected a fall-back, got an error: $err"
+    out="$(cd "$SANDBOX" && env "$bad" PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE" 2>/dev/null)"
+    case "$err" in *"${bad%%=*}"*) ;; *) fail "$bad: expected a warning naming ${bad%%=*}, got: $err" ;; esac
+    [ "$out" = "$DEFAULT_BIN" ] || fail "$bad: expected fall-back to $DEFAULT_BIN, got $out"
+done
+[ ! -e "$SANDBOX/relative" ] || fail "a relative plugin home must not be created"
+ok "an unusable QUALIFIER_PLUGIN_HOME or XDG_DATA_HOME warns and falls back to the default"
+
+# W9. With no usable plugin home and no usable HOME, exit 1 before touching
+#     anything; with HOME unset but QUALIFIER_PLUGIN_HOME valid, resolve.
+for env_args in "-u HOME QUALIFIER_PLUGIN_HOME=/" "-u HOME" "HOME=relative-home" "HOME="; do
+    # Word splitting of the env arguments is intended.
+    # shellcheck disable=SC2086
+    err="$(cd "$SANDBOX" && env $env_args PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE" 2>&1 >/dev/null)" \
+        && fail "env $env_args: expected exit 1"
+    case "$err" in *"HOME"*) ;; *) fail "env $env_args: expected an error naming HOME, got: $err" ;; esac
+done
+out="$(env -u HOME QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE")"
+[ "$out" = "$MANAGED_BIN" ] || fail "HOME unset with a valid QUALIFIER_PLUGIN_HOME: got $out"
+ok "no usable plugin home exits 1; a valid QUALIFIER_PLUGIN_HOME works without HOME"
+
+# W9b. A valid $QUALIFIER_BIN is used even when there is no usable plugin
+#      home: it is resolved before the plugin home is computed.
+out="$(env -u HOME QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE")" \
+    || fail "a valid QUALIFIER_BIN with HOME unset must resolve"
+[ "$out" = "$OVERRIDE/qualifier" ] || fail "QUALIFIER_BIN with HOME unset: got $out"
+ok "a valid \$QUALIFIER_BIN works with HOME unset"
+
+# W9c. HOME=/ (a passwd-less UID in a container) is accepted: the default
+#      plugin home is /.local/share/qualifier/plugin. Checked on the
+#      computed value, since nothing may be written to /.
+tail -n 1 "$ENSURE" | grep -qx 'main "\$@"' || fail "ensure-qualifier.sh must end with main \"\$@\""
+sed '$d' "$ENSURE" >"$SANDBOX/ensure-functions.sh"
+# The single-quoted script expands $1 and $PLUGIN_HOME in the inner shell.
+# shellcheck disable=SC2016
+out="$(env -u QUALIFIER_PLUGIN_HOME -u XDG_DATA_HOME HOME=/ /bin/bash -c \
+    '. "$1"; plugin_home; echo "$PLUGIN_HOME"' _ "$SANDBOX/ensure-functions.sh")" \
+    || fail "HOME=/ must be accepted"
+[ "$out" = "/.local/share/qualifier/plugin" ] || fail "HOME=/: expected /.local/share/qualifier/plugin, got $out"
+ok "HOME=/ gives the default plugin home /.local/share/qualifier/plugin"
 
 # --- SessionStart hook -----------------------------------------------------
-
-HOOK="$PWD/$PLUGIN/hooks/session-start"
-bash -n "$HOOK" || fail "session-start does not parse"
-command -v shellcheck >/dev/null 2>&1 && { shellcheck "$HOOK" || fail "shellcheck session-start"; }
-python3 -c "import json; json.load(open('$PLUGIN/hooks/hooks.json'))" || fail "hooks.json is not valid JSON"
 
 run_hook() {
     # Runs the hook as Claude Code would, with a project directory. The
@@ -135,51 +227,53 @@ context_of() {
     python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'
 }
 
+# The call line every hook context with a binary must give.
+CALL_FORM="Run qualifier as \`\"$PWD/$PLUGIN/scripts/ensure-qualifier.sh\" exec <args>\`"
+
+HOOK_PATH="$NOACCESS:/usr/bin:/bin"
+
 # H1. Silent in a repository without .qual files.
 NOQUAL="$SANDBOX/noqual"
 mkdir -p "$NOQUAL/.git"
-out="$(run_hook "$NOQUAL" PATH="$STUB1:$PATH")"
+out="$(run_hook "$NOQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
 [ -z "$out" ] || fail "hook must be silent without .qual files, got: $out"
 ok "hook is silent in repositories without .qual files"
 
-# H2. Injects the skill, binary, and summary in a repository with .qual files.
+# H2. Injects the skill, the wrapper call line, and the summary in a
+#     repository with .qual files.
 WITHQUAL="$SANDBOX/withqual"
 mkdir -p "$WITHQUAL/.git" "$WITHQUAL/src"
 echo '{}' >"$WITHQUAL/src/.qual"
-out="$(run_hook "$WITHQUAL" PATH="$STUB1:$PATH")"
+out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
 ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not the expected JSON: $out"
 case "$ctx" in *"qual:recording-design-decisions"*) ;; *) fail "context lacks the using-qualifier map" ;; esac
 case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the thread summary: $ctx" ;; esac
 case "$ctx" in *"name: using-qualifier"*) fail "frontmatter must be stripped" ;; esac
-# The backticks are a literal call-line quote, not command substitution.
-# shellcheck disable=SC2016
-case "$ctx" in *'Call it as `qualifier`'*) ;; *) fail "context must give the on-PATH call line: $ctx" ;; esac
-case "$ctx" in *'ensure-qualifier.sh" exec'*) fail "an on-PATH binary must not route through the wrapper: $ctx" ;; esac
+case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call line ($CALL_FORM): $ctx" ;; esac
 [ "${#ctx}" -lt 10000 ] || fail "context is ${#ctx} chars; the harness caps it at 10000"
-ok "hook injects using-qualifier and the summary (${#ctx} chars)"
+ok "hook injects using-qualifier, the wrapper call line, and the summary (${#ctx} chars)"
 
-# H3. A binary off PATH is reached through the pre-approved wrapper.
-out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$STUB_OVERRIDE/qualifier" PATH="/usr/bin:/bin")"
+# H3. A pre-populated managed install is found without PATH or network.
+rm -f "$CURL_MARKER"
+out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$HOOK_PATH")"
 ctx="$(printf '%s' "$out" | context_of)"
-case "$ctx" in *'ensure-qualifier.sh" exec'*) ;; *) fail "context must route an off-PATH binary through the wrapper: $ctx" ;; esac
-ok "hook routes an off-PATH binary through the wrapper"
+case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call line: $ctx" ;; esac
+case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the managed binary's summary: $ctx" ;; esac
+[ ! -e "$CURL_MARKER" ] || fail "hook must not download when the managed install is valid"
+ok "hook uses the managed install"
 
 # H4. No binary and no network: still exit 0 with valid JSON.
-FAILCURL="$SANDBOX/failcurl"
-mkdir -p "$FAILCURL"
-printf '#!/usr/bin/env bash\nexit 7\n' >"$FAILCURL/curl"
-chmod +x "$FAILCURL/curl"
-out="$(run_hook "$WITHQUAL" QUALIFIER_INSTALL_DIR="$SANDBOX/empty-bin" PATH="$FAILCURL:/usr/bin:/bin")" \
+out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$SANDBOX/hook-empty-home" PATH="$HOOK_PATH")" \
     || fail "hook must exit 0 when the binary cannot be installed"
-ctx="$(printf '%s' "$out" | context_of)"
-case "$ctx" in *"cargo install qualifier --version 0.8.0"*) ;; *) fail "context must give the pinned install command: $ctx" ;; esac
+ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not valid JSON without a binary: $out"
+case "$ctx" in *"cargo install qualifier --version $PINNED"*) ;; *) fail "context must give the pinned install command: $ctx" ;; esac
 ok "hook degrades gracefully without a binary or network"
 
 # H5. Works without VCS markers (project dir is the root).
 NOVCS="$SANDBOX/novcs"
 mkdir -p "$NOVCS"
 echo '{}' >"$NOVCS/.qual"
-out="$(run_hook "$NOVCS" PATH="$STUB1:$PATH")"
+out="$(run_hook "$NOVCS" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
 printf '%s' "$out" | context_of >/dev/null || fail "hook must work outside a VCS"
 ok "hook works outside a VCS"
 
@@ -188,13 +282,13 @@ GITQUAL="$SANDBOX/gitqual"
 mkdir -p "$GITQUAL/src"
 git -C "$GITQUAL" init -q
 echo '{}' >"$GITQUAL/src/.qual"
-out="$(run_hook "$GITQUAL" PATH="$STUB1:$PATH")"
+out="$(run_hook "$GITQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
 printf '%s' "$out" | context_of >/dev/null || fail "an untracked .qual in a git repo must be found"
 GITNOQUAL="$SANDBOX/gitnoqual"
 mkdir -p "$GITNOQUAL"
 git -C "$GITNOQUAL" init -q
 echo "x" >"$GITNOQUAL/a.txt"
-out="$(run_hook "$GITNOQUAL" PATH="$STUB1:$PATH")"
+out="$(run_hook "$GITNOQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
 [ -z "$out" ] || fail "a git repo without .qual files must be silent, got: $out"
 ok "hook gates git repositories through the index"
 
@@ -205,15 +299,21 @@ mkdir -p "$GITIGNORED/src"
 git -C "$GITIGNORED" init -q
 echo '*.qual' >"$GITIGNORED/.gitignore"
 echo '{}' >"$GITIGNORED/src/.qual"
-out="$(run_hook "$GITIGNORED" PATH="$STUB1:$PATH")"
+out="$(run_hook "$GITIGNORED" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
 [ -z "$out" ] || fail "a gitignored .qual must be silent, got: $out"
 ok "hook honors .gitignore via the git index path"
 
-# H7. An old binary puts an upgrade note into the context.
-out="$(run_hook "$WITHQUAL" PATH="$STUB_OLD:$PATH")"
+# H7. A qualifier on PATH (even the pinned version) is ignored, and the call
+#     line is still the wrapper form.
+out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$HOOK_PATH")"
 ctx="$(printf '%s' "$out" | context_of)"
-case "$ctx" in *"older than 0.8.0"*) ;; *) fail "context must flag an old binary: $ctx" ;; esac
-ok "hook flags a binary older than MIN_VERSION"
+case "$ctx" in *"PATH-QUALIFIER-SUMMARY"*) fail "the qualifier on PATH must not be run: $ctx" ;; esac
+case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the managed binary's summary: $ctx" ;; esac
+case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call line: $ctx" ;; esac
+# The backticks are a literal call-line quote, not command substitution.
+# shellcheck disable=SC2016
+case "$ctx" in *'Call it as `qualifier`'*) fail "context must not route calls to the qualifier on PATH: $ctx" ;; esac
+ok "hook ignores a qualifier on PATH and gives the wrapper call line"
 
 # H8. A slow summary is dropped instead of delaying the session.
 SLOW="$SANDBOX/slow"
@@ -227,7 +327,7 @@ esac
 EOF
 chmod +x "$SLOW/qualifier"
 start="$(date +%s)"
-out="$(run_hook "$WITHQUAL" PATH="$SLOW:$PATH")"
+out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$SLOW/qualifier" PATH="$HOOK_PATH")"
 elapsed=$(( $(date +%s) - start ))
 [ "$elapsed" -lt 4 ] || fail "hook waited ${elapsed}s for a slow summary"
 ctx="$(printf '%s' "$out" | context_of)"
@@ -244,7 +344,7 @@ mkdir -p "$CTRLCHARS"
 printf '#!/usr/bin/env bash\ncase "${1:-}" in\n    --version) echo "qualifier 9.9.9" ;;\n    threads) printf "\\033[31m1 blocker\\033[0m\\f\\n" ;;\nesac\n' \
     >"$CTRLCHARS/qualifier"
 chmod +x "$CTRLCHARS/qualifier"
-out="$(run_hook "$WITHQUAL" PATH="$CTRLCHARS:$PATH")"
+out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$CTRLCHARS/qualifier" PATH="$HOOK_PATH")"
 ctx="$(printf '%s' "$out" | context_of)" || fail "control characters in the summary broke the JSON: $out"
 case "$ctx" in *"1 blocker"*) ;; *) fail "context lost the summary text: $ctx" ;; esac
 ok "hook strips control characters that would break the JSON"
@@ -299,17 +399,17 @@ for name in expected - {"using-qualifier"}:
 PY
 ok "skills: frontmatter, cited topics, cross-references, supporting files, size"
 
-# --- stubbed download ---
-# The download tests run a copy of the wrapper pinned to a fixture release
-# (version 9.9.9 and the fixture's checksum), served by a curl stub.
+# The plugin no longer consults PATH, installs to ~/.local/bin, or has a
+# minimum version; nothing under plugins/ may still say so.
+if stale="$(grep -rnE 'MIN_VERSION|min-version|QUALIFIER_INSTALL_DIR|\.local/bin|not on PATH' "$PLUGIN")"; then
+    fail "stale PATH/install statements under $PLUGIN:
+$stale"
+fi
+ok "no stale PATH, ~/.local/bin, or minimum-version statements under $PLUGIN"
 
-out="$("$ENSURE" min-version)"
-[ "$out" = "0.8.0" ] || fail "min-version: expected 0.8.0, got $out"
-ok "min-version reports MIN_VERSION without resolving a binary"
-
-out="$("$ENSURE" pinned-version)"
-[ "$out" = "0.8.0" ] || fail "pinned-version: expected 0.8.0, got $out"
-ok "pinned-version reports PINNED_VERSION without resolving a binary"
+# --- managed install against a stubbed release -----------------------------
+# These run copies of the wrapper pinned to fixture releases (9.9.9 and
+# 9.9.10, with the fixtures' checksums), served by a curl stub.
 
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)              TARGET="aarch64-apple-darwin";      SHAVAR="SHA256_AARCH64_APPLE_DARWIN" ;;
@@ -322,33 +422,51 @@ case "$(uname -s)-$(uname -m)" in
         ;;
 esac
 
-export FIXTURE_DIR="$SANDBOX/release"
-mkdir -p "$FIXTURE_DIR"
-make_fake_qualifier "$SANDBOX/payload/qualifier" "9.9.9"
-tar -C "$SANDBOX/payload" -czf "$FIXTURE_DIR/qualifier-$TARGET.tar.gz" qualifier
-if command -v sha256sum >/dev/null 2>&1; then
-    FIXTURE_SHA="$(sha256sum "$FIXTURE_DIR/qualifier-$TARGET.tar.gz" | awk '{print $1}')"
-else
-    FIXTURE_SHA="$(shasum -a 256 "$FIXTURE_DIR/qualifier-$TARGET.tar.gz" | awk '{print $1}')"
-fi
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
 
-# A copy of the wrapper pinned to version 9.9.9 with the given checksum for
-# this platform's target.
+export FIXTURE_DIR="$SANDBOX/release"
+# Builds the fixture release tarball for version $1 and prints its sha256.
+make_fixture() {
+    local version="$1" payload="$SANDBOX/payload-$1"
+    make_fake_qualifier "$payload/qualifier" "$version"
+    mkdir -p "$FIXTURE_DIR/v$version"
+    tar -C "$payload" -czf "$FIXTURE_DIR/v$version/qualifier-$TARGET.tar.gz" qualifier
+    sha256_file "$FIXTURE_DIR/v$version/qualifier-$TARGET.tar.gz"
+}
+SHA_999="$(make_fixture 9.9.9)"
+SHA_9910="$(make_fixture 9.9.10)"
+
+# A copy of the wrapper pinned to version $2 with checksum $3 for this
+# platform's target.
 pinned_copy() {
-    local dest="$1" sha="$2"
-    sed -e 's/^PINNED_VERSION=.*/PINNED_VERSION="9.9.9"/' \
+    local dest="$1" version="$2" sha="$3"
+    sed -e "s/^PINNED_VERSION=.*/PINNED_VERSION=\"${version}\"/" \
         -e "s/^${SHAVAR}=.*/${SHAVAR}=\"${sha}\"/" "$ENSURE" >"$dest"
     chmod +x "$dest"
     # Fail-fast check, not if/then/else: either grep failing should fail.
     # shellcheck disable=SC2015
-    grep -q '^PINNED_VERSION="9.9.9"$' "$dest" && grep -q "^${SHAVAR}=\"${sha}\"$" "$dest" \
+    grep -q "^PINNED_VERSION=\"${version}\"$" "$dest" && grep -q "^${SHAVAR}=\"${sha}\"$" "$dest" \
         || fail "could not pin a wrapper copy"
 }
+pinned_copy "$SANDBOX/ensure-999.sh" 9.9.9 "$SHA_999"
+pinned_copy "$SANDBOX/ensure-9910.sh" 9.9.10 "$SHA_9910"
+pinned_copy "$SANDBOX/ensure-unverified.sh" 9.9.9 ""
+pinned_copy "$SANDBOX/ensure-wrong-sha.sh" 9.9.9 "0000000000000000000000000000000000000000000000000000000000000000"
 
+# Serves the fixture releases. When CURL_RACE_DEST is set, it first plays a
+# concurrent session that finishes its install there while this download is
+# in flight, copying CURL_RACE_SRC into place.
 CURL_STUB="$SANDBOX/curl-stub"
 mkdir -p "$CURL_STUB"
 cat >"$CURL_STUB/curl" <<'EOF'
 #!/usr/bin/env bash
+touch "$CURL_MARKER"
 out=""; url=""; prev=""
 for a in "$@"; do
     case "$prev" in -o) out="$a" ;; esac
@@ -358,71 +476,260 @@ for a in "$@"; do
         *) prev="" ;;
     esac
 done
+if [ -n "${CURL_RACE_DEST:-}" ]; then
+    mkdir -p "$CURL_RACE_DEST"
+    cp "$CURL_RACE_SRC" "$CURL_RACE_DEST/qualifier"
+fi
 case "$url" in
-    https://github.com/empathic/qualifier/releases/download/v9.9.9/*)
-        cp "$FIXTURE_DIR/$(basename "$url")" "$out" ;;
+    https://github.com/empathic/qualifier/releases/download/v*/*)
+        rest="${url#https://github.com/empathic/qualifier/releases/download/}"
+        cp "$FIXTURE_DIR/${rest%%/*}/$(basename "$url")" "$out" ;;
     *)
         echo "curl stub: unexpected URL $url" >&2
         exit 22 ;;
 esac
 EOF
 chmod +x "$CURL_STUB/curl"
-
 SAFE_PATH="$CURL_STUB:/usr/bin:/bin:/usr/sbin:/sbin"
-if PATH="/usr/bin:/bin:/usr/sbin:/sbin" command -v qualifier >/dev/null 2>&1; then
-    echo "skip: a qualifier binary exists in the system dirs; download tests skipped"
-    echo "test-plugin: $PASS checks passed"
-    exit 0
+
+# Lists a plugin home's entries, dotfiles included, space-separated.
+entries_of() {
+    (cd "$1" && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+}
+
+# D1. A qualifier on PATH, of any version including the pinned one, is not
+#     used: resolution downloads into the managed install.
+for v in 9.9.9 0.1.0; do
+    ph="$SANDBOX/home-path-$v"
+    pq="$SANDBOX/pathq-$v"
+    make_fake_qualifier "$pq/qualifier" "$v"
+    rm -f "$CURL_MARKER"
+    out="$(QUALIFIER_PLUGIN_HOME="$ph" PATH="$pq:$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"
+    [ "$out" = "$ph/9.9.9/qualifier" ] || fail "PATH qualifier $v must be ignored; got $out"
+    [ -e "$CURL_MARKER" ] || fail "PATH qualifier $v: expected a download"
+done
+ok "a qualifier on PATH (pinned version or not) is not used"
+
+# D2. Fresh install: download, verify, install to <home>/<pinned>/qualifier.
+PH="$SANDBOX/plugin-home"
+out="$(QUALIFIER_PLUGIN_HOME="$PH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"
+[ "$out" = "$PH/9.9.9/qualifier" ] || fail "expected install to $PH/9.9.9/qualifier, got $out"
+[ "$("$out" --version)" = "qualifier 9.9.9" ] || fail "installed binary does not run"
+[ "$(entries_of "$PH")" = "9.9.9" ] || fail "plugin home must hold only 9.9.9, has: $(entries_of "$PH")"
+ok "downloads, verifies, and installs the pinned release into the plugin home"
+
+# D3. A second run reuses the install without calling curl.
+rm -f "$CURL_MARKER"
+out="$(QUALIFIER_PLUGIN_HOME="$PH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"
+[ "$out" = "$PH/9.9.9/qualifier" ] || fail "expected the installed binary, got $out"
+[ ! -e "$CURL_MARKER" ] || fail "reuse must not call curl"
+ok "reuses the managed install without calling curl"
+
+# D3b. The reuse path also clears install leftovers older than an hour
+#      (a crashed install's), keeping fresh ones and everything else.
+mkdir -p "$PH/.staging.crashed" "$PH/.stale.crashed" "$PH/.staging.live"
+touch -t 202001010000 "$PH/.staging.crashed" "$PH/.stale.crashed"
+rm -f "$CURL_MARKER"
+out="$(QUALIFIER_PLUGIN_HOME="$PH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"
+[ "$out" = "$PH/9.9.9/qualifier" ] || fail "reuse with leftovers: got $out"
+[ ! -e "$CURL_MARKER" ] || fail "reuse with leftovers must not call curl"
+[ "$(entries_of "$PH")" = ".staging.live 9.9.9" ] || fail "reuse cleanup left: $(entries_of "$PH")"
+rm -rf "$PH/.staging.live"
+ok "the reuse path removes install leftovers older than an hour, keeps fresh ones"
+
+# D4. exec mode on the managed install.
+out="$(QUALIFIER_PLUGIN_HOME="$PH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" exec --version)"
+[ "$out" = "qualifier 9.9.9" ] || fail "exec mode: got '$out'"
+ok "exec mode runs the managed install"
+
+# D5. A plugin update pinned to a newer version installs it and removes the
+#     older version directory, but nothing that doesn't look like a
+#     version (N.N.N, digits only), however old it is.
+mkdir -p "$PH/notes" "$PH/1.2" "$PH/0.1.0-rc1"
+touch "$PH/notes/keep" "$PH/readme.txt"
+touch -t 202001010000 "$PH/notes" "$PH/readme.txt"
+# Leftovers of an interrupted install: an hour-plus old staging and stale
+# dir are removed, a fresh one (a concurrent install may own it) is kept.
+mkdir -p "$PH/.staging.aged" "$PH/.stale.aged" "$PH/.staging.fresh"
+touch -t 202001010000 "$PH/.staging.aged" "$PH/.stale.aged"
+rm -f "$CURL_MARKER"
+out="$(QUALIFIER_PLUGIN_HOME="$PH" PATH="$SAFE_PATH" "$SANDBOX/ensure-9910.sh" 2>/dev/null)"
+[ "$out" = "$PH/9.9.10/qualifier" ] || fail "version bump: expected $PH/9.9.10/qualifier, got $out"
+[ "$("$out" --version)" = "qualifier 9.9.10" ] || fail "version bump: new binary does not run"
+[ -e "$CURL_MARKER" ] || fail "version bump must download the new release"
+[ "$(entries_of "$PH")" = ".staging.fresh 0.1.0-rc1 1.2 9.9.10 notes readme.txt" ] \
+    || fail "version bump left: $(entries_of "$PH")"
+[ -e "$PH/notes/keep" ] || fail "version bump must leave non-version entries alone"
+ok "a version bump installs the new release and removes only older version dirs"
+ok "cleanup removes staging/stale leftovers older than an hour, keeps fresh ones"
+
+# D5b. A wrapper pinned to an older version (e.g. another session still on
+#      the previous plugin) installs its own but never removes a newer one.
+rm -f "$CURL_MARKER"
+out="$(QUALIFIER_PLUGIN_HOME="$PH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"
+[ "$out" = "$PH/9.9.9/qualifier" ] || fail "older pin: expected $PH/9.9.9/qualifier, got $out"
+[ -e "$CURL_MARKER" ] || fail "older pin must download its release"
+[ "$("$PH/9.9.10/qualifier" --version)" = "qualifier 9.9.10" ] || fail "older pin removed the newer version dir"
+[ "$(entries_of "$PH")" = ".staging.fresh 0.1.0-rc1 1.2 9.9.10 9.9.9 notes readme.txt" ] \
+    || fail "older pin left: $(entries_of "$PH")"
+ok "an older pin never removes a newer version dir"
+
+# D5c. Versions compare numerically per component, not as strings.
+PH_NUM="$SANDBOX/home-numeric"
+make_fake_qualifier "$PH_NUM/9.9.9/qualifier" "9.9.9"
+make_fake_qualifier "$PH_NUM/10.0.0/qualifier" "10.0.0"
+make_fake_qualifier "$PH_NUM/9.10.0/qualifier" "9.10.0"
+make_fake_qualifier "$PH_NUM/9.9.08/qualifier" "9.9.08"
+# A component longer than 9 digits is unparseable, so never removed.
+mkdir -p "$PH_NUM/0.0.0000000001"
+out="$(QUALIFIER_PLUGIN_HOME="$PH_NUM" PATH="$SAFE_PATH" "$SANDBOX/ensure-9910.sh" 2>/dev/null)"
+[ "$out" = "$PH_NUM/9.9.10/qualifier" ] || fail "numeric compare: got $out"
+[ "$(entries_of "$PH_NUM")" = "0.0.0000000001 10.0.0 9.10.0 9.9.10" ] || fail "numeric compare left: $(entries_of "$PH_NUM")"
+ok "version dirs compare numerically (9.9.9 and 9.9.08 < 9.9.10 < 9.10.0 < 10.0.0); over-long components are kept"
+
+# D6. A managed dir holding a binary with the wrong version is replaced.
+PH_WRONG="$SANDBOX/home-wrong"
+make_fake_qualifier "$PH_WRONG/9.9.9/qualifier" "9.9.8"
+rm -f "$CURL_MARKER"
+out="$(QUALIFIER_PLUGIN_HOME="$PH_WRONG" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"
+[ "$out" = "$PH_WRONG/9.9.9/qualifier" ] || fail "wrong version: got $out"
+[ "$("$out" --version)" = "qualifier 9.9.9" ] || fail "the wrong-version binary was not replaced"
+[ -e "$CURL_MARKER" ] || fail "a wrong-version managed dir must trigger a download"
+[ "$(entries_of "$PH_WRONG")" = "9.9.9" ] || fail "replacement left: $(entries_of "$PH_WRONG")"
+ok "replaces a managed dir holding the wrong version"
+
+# D7. A concurrent session that finishes installing first wins: its binary
+#     is used and this run's download is discarded.
+PH_RACE="$SANDBOX/home-race"
+make_fake_qualifier "$SANDBOX/race-winner/qualifier" "9.9.9" qualifier "RACE-WINNER"
+out="$(CURL_RACE_DEST="$PH_RACE/9.9.9" CURL_RACE_SRC="$SANDBOX/race-winner/qualifier" \
+    QUALIFIER_PLUGIN_HOME="$PH_RACE" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"
+[ "$out" = "$PH_RACE/9.9.9/qualifier" ] || fail "race: got $out"
+[ "$("$out" threads)" = "RACE-WINNER" ] || fail "race: the concurrent install must be kept"
+[ "$(entries_of "$PH_RACE")" = "9.9.9" ] || fail "race left: $(entries_of "$PH_RACE")"
+[ "$(entries_of "$PH_RACE/9.9.9")" = "qualifier" ] || fail "race: the discarded download leaked into 9.9.9: $(entries_of "$PH_RACE/9.9.9")"
+ok "a concurrent install that lands first is used and this download discarded"
+
+# An mv shim, first on the wrapper's PATH, that plays a concurrent session
+# at the exact moment of one of the wrapper's renames:
+#   dest-appears  just before the staging rename, the other session's valid
+#                 install lands at MV_SHIM_DEST (so mv nests staging in it);
+#   dest-taken    just before this run sets the invalid MV_SHIM_DEST aside,
+#                 the other session has already moved it away.
+MV_SHIM="$SANDBOX/mv-shim"
+mkdir -p "$MV_SHIM"
+cat >"$MV_SHIM/mv" <<'EOF'
+#!/usr/bin/env bash
+case "${MV_SHIM_MODE:-}" in
+    dest-appears)
+        case "$1" in
+            */.staging.*)
+                mkdir -p "$MV_SHIM_DEST"
+                cp "$MV_SHIM_SRC" "$MV_SHIM_DEST/qualifier" ;;
+        esac ;;
+    dest-taken)
+        if [ "$1" = "$MV_SHIM_DEST" ]; then
+            /bin/mv "$MV_SHIM_DEST" "$MV_SHIM_AWAY"
+        fi ;;
+esac
+exec /bin/mv "$@"
+EOF
+chmod +x "$MV_SHIM/mv"
+
+# D7b. Another install lands between the existence check and the staging
+#      rename: mv nests staging inside it; the nested copy is removed and
+#      the other install used.
+PH_NEST="$SANDBOX/home-nest"
+out="$(MV_SHIM_MODE=dest-appears MV_SHIM_DEST="$PH_NEST/9.9.9" MV_SHIM_SRC="$SANDBOX/race-winner/qualifier" \
+    QUALIFIER_PLUGIN_HOME="$PH_NEST" PATH="$MV_SHIM:$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)" \
+    || fail "nested rename: the wrapper must succeed"
+[ "$out" = "$PH_NEST/9.9.9/qualifier" ] || fail "nested rename: got $out"
+[ "$("$out" threads)" = "RACE-WINNER" ] || fail "nested rename: the other install must be kept"
+[ "$(entries_of "$PH_NEST")" = "9.9.9" ] || fail "nested rename left: $(entries_of "$PH_NEST")"
+[ "$(entries_of "$PH_NEST/9.9.9")" = "qualifier" ] || fail "nested rename leaked staging: $(entries_of "$PH_NEST/9.9.9")"
+ok "a rename that nests staging inside a concurrent install is cleaned up"
+
+# D7c. Two sessions replacing the same invalid install: the other one moves
+#      it away first, so this run's set-aside finds nothing. Both outcomes
+#      settle: exit 0, one valid install, no .stale.* left.
+PH_TAKEN="$SANDBOX/home-taken"
+make_fake_qualifier "$PH_TAKEN/9.9.9/qualifier" "9.9.8"
+out="$(MV_SHIM_MODE=dest-taken MV_SHIM_DEST="$PH_TAKEN/9.9.9" MV_SHIM_AWAY="$SANDBOX/taken-by-other" \
+    QUALIFIER_PLUGIN_HOME="$PH_TAKEN" PATH="$MV_SHIM:$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)" \
+    || fail "concurrent replace: the wrapper must succeed"
+[ -e "$SANDBOX/taken-by-other" ] || fail "concurrent replace: the shim did not run"
+[ "$out" = "$PH_TAKEN/9.9.9/qualifier" ] || fail "concurrent replace: got $out"
+[ "$("$out" --version)" = "qualifier 9.9.9" ] || fail "concurrent replace: no valid install"
+[ "$(entries_of "$PH_TAKEN")" = "9.9.9" ] || fail "concurrent replace left: $(entries_of "$PH_TAKEN")"
+ok "a concurrent replace of an invalid install settles on one valid install"
+
+# D7d. A cleanup failure (an old version dir that can't be deleted) never
+#      fails a successful install.
+PH_STUCK="$SANDBOX/home-stuck"
+make_fake_qualifier "$PH_STUCK/9.9.8/locked/qualifier" "9.9.8"
+chmod 555 "$PH_STUCK/9.9.8/locked"
+if out="$(QUALIFIER_PLUGIN_HOME="$PH_STUCK" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"; then
+    status=0
+else
+    status=$?
 fi
+chmod 755 "$PH_STUCK/9.9.8/locked"
+[ "$status" -eq 0 ] || fail "cleanup failure: exit $status"
+[ "$out" = "$PH_STUCK/9.9.9/qualifier" ] || fail "cleanup failure: got $out"
+ok "a cleanup failure does not fail the install"
 
-# 7. A foreign binary already at $QUALIFIER_INSTALL_DIR/qualifier is never
-#    overwritten by an install.
-make_fake_qualifier "$QUALIFIER_INSTALL_DIR/qualifier" "1.0" "something-else"
-pinned_copy "$SANDBOX/ensure-foreign-install.sh" "$FIXTURE_SHA"
-err="$(PATH="$SAFE_PATH" "$SANDBOX/ensure-foreign-install.sh" 2>&1 >/dev/null)" && fail "must refuse to overwrite a foreign binary"
-case "$err" in *"QUALIFIER_INSTALL_DIR"*) ;; *) fail "expected an error naming QUALIFIER_INSTALL_DIR, got: $err" ;; esac
-[ "$("$QUALIFIER_INSTALL_DIR/qualifier" --version)" = "something-else 1.0" ] || fail "the foreign binary must be left unchanged"
-rm -f "$QUALIFIER_INSTALL_DIR/qualifier"
-ok "refuses to overwrite a foreign binary in QUALIFIER_INSTALL_DIR"
+# D7e. This run's rename fails and a concurrent session's install lands a
+#      moment later: the final re-check finds it instead of failing.
+cat >"$MV_SHIM/mv-late" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+    */.staging.*)
+        ( sleep 0.3; mkdir -p "$MV_SHIM_DEST"; cp "$MV_SHIM_SRC" "$MV_SHIM_DEST/qualifier" ) >/dev/null 2>&1 &
+        exit 1 ;;
+esac
+exec /bin/mv "$@"
+EOF
+MV_LATE="$SANDBOX/mv-late"
+mkdir -p "$MV_LATE"
+mv "$MV_SHIM/mv-late" "$MV_LATE/mv"
+chmod +x "$MV_LATE/mv"
+PH_LATE="$SANDBOX/home-late"
+out="$(MV_SHIM_DEST="$PH_LATE/9.9.9" MV_SHIM_SRC="$SANDBOX/race-winner/qualifier" \
+    QUALIFIER_PLUGIN_HOME="$PH_LATE" PATH="$MV_LATE:$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)" \
+    || fail "late concurrent install: the wrapper must succeed"
+[ "$out" = "$PH_LATE/9.9.9/qualifier" ] || fail "late concurrent install: got $out"
+[ "$("$out" threads)" = "RACE-WINNER" ] || fail "late concurrent install: the other install must be used"
+[ "$(entries_of "$PH_LATE")" = "9.9.9" ] || fail "late concurrent install left: $(entries_of "$PH_LATE")"
+ok "a concurrent install landing just after a failed rename is used"
 
-# 8. No embedded checksum for this target: refuse to download, point at cargo.
-pinned_copy "$SANDBOX/ensure-unverified.sh" ""
-err="$(PATH="$SAFE_PATH" "$SANDBOX/ensure-unverified.sh" 2>&1 >/dev/null)" && fail "an unverified target must not install"
+# D8. No embedded checksum for this target: cargo fallback, nothing installed.
+PH_FAIL="$SANDBOX/home-fail"
+make_fake_qualifier "$PH_FAIL/9.9.8/qualifier" "9.9.8"
+rm -f "$CURL_MARKER"
+err="$(QUALIFIER_PLUGIN_HOME="$PH_FAIL" PATH="$SAFE_PATH" "$SANDBOX/ensure-unverified.sh" 2>&1 >/dev/null)" \
+    && fail "an unverified target must not install"
 case "$err" in *"cargo install qualifier --version 9.9.9"*) ;; *) fail "expected the cargo fallback, got: $err" ;; esac
 case "$err" in *"no verified"*) ;; *) fail "expected a 'no verified' message, got: $err" ;; esac
-[ ! -e "$QUALIFIER_INSTALL_DIR/qualifier" ] || fail "nothing may be installed without a checksum"
-ok "refuses to download a target without an embedded checksum"
+[ ! -e "$CURL_MARKER" ] || fail "an unverified target must not download"
+[ "$(entries_of "$PH_FAIL")" = "9.9.8" ] || fail "unverified target changed the plugin home: $(entries_of "$PH_FAIL")"
+ok "refuses a target without an embedded checksum (cargo fallback)"
 
-# 9. Download the pinned release, verify, install.
-pinned_copy "$SANDBOX/ensure-pinned.sh" "$FIXTURE_SHA"
-out="$(PATH="$SAFE_PATH" "$SANDBOX/ensure-pinned.sh" 2>/dev/null)"
-[ "$out" = "$QUALIFIER_INSTALL_DIR/qualifier" ] || fail "expected install to $QUALIFIER_INSTALL_DIR, got $out"
-[ "$("$out" --version)" = "qualifier 9.9.9" ] || fail "installed binary does not run"
-ok "downloads, verifies, and installs the pinned release"
-
-# 10. A second run finds the installed binary without touching the network.
-NOACCESS_STUB="$SANDBOX/curl-noaccess"
-mkdir -p "$NOACCESS_STUB"
-NOACCESS_MARKER="$SANDBOX/curl-was-called"
-cat >"$NOACCESS_STUB/curl" <<EOF
-#!/usr/bin/env bash
-touch "$NOACCESS_MARKER"
-echo "curl stub: unexpected network access" >&2
-exit 1
-EOF
-chmod +x "$NOACCESS_STUB/curl"
-rm -f "$NOACCESS_MARKER"
-out="$(PATH="$NOACCESS_STUB:/usr/bin:/bin" "$SANDBOX/ensure-pinned.sh" 2>/dev/null)"
-[ "$out" = "$QUALIFIER_INSTALL_DIR/qualifier" ] || fail "expected the installed binary, got $out"
-[ ! -e "$NOACCESS_MARKER" ] || fail "reuse must not touch the network (curl was invoked)"
-ok "reuses the installed binary without touching the network"
-
-# 11. A checksum mismatch aborts and installs nothing.
-rm -f "$QUALIFIER_INSTALL_DIR/qualifier"
-pinned_copy "$SANDBOX/ensure-wrong-sha.sh" "0000000000000000000000000000000000000000000000000000000000000000"
-err="$(PATH="$SAFE_PATH" "$SANDBOX/ensure-wrong-sha.sh" 2>&1 >/dev/null)" && fail "a checksum mismatch must fail"
+# D9. A checksum mismatch installs nothing and removes nothing.
+err="$(QUALIFIER_PLUGIN_HOME="$PH_FAIL" PATH="$SAFE_PATH" "$SANDBOX/ensure-wrong-sha.sh" 2>&1 >/dev/null)" \
+    && fail "a checksum mismatch must fail"
 case "$err" in *"checksum mismatch"*) ;; *) fail "expected a checksum mismatch message, got: $err" ;; esac
-[ ! -e "$QUALIFIER_INSTALL_DIR/qualifier" ] || fail "nothing may be installed on checksum mismatch"
-ok "checksum mismatch aborts the install"
+[ "$(entries_of "$PH_FAIL")" = "9.9.8" ] || fail "checksum mismatch changed the plugin home: $(entries_of "$PH_FAIL")"
+ok "checksum mismatch installs nothing and removes nothing"
+
+# D10. A failed download installs nothing and removes nothing.
+err="$(QUALIFIER_PLUGIN_HOME="$PH_FAIL" PATH="$NOACCESS:/usr/bin:/bin" "$SANDBOX/ensure-999.sh" 2>&1 >/dev/null)" \
+    && fail "a failed download must fail"
+case "$err" in *"cargo install qualifier --version 9.9.9"*) ;; *) fail "expected the cargo fallback, got: $err" ;; esac
+[ "$(entries_of "$PH_FAIL")" = "9.9.8" ] || fail "failed download changed the plugin home: $(entries_of "$PH_FAIL")"
+ok "a failed download installs nothing and removes nothing"
+
+# Nothing above may have written to ~/.local/bin.
+[ ! -e "$HOME/.local/bin" ] || fail "the wrapper wrote to ~/.local/bin"
+ok "nothing written to ~/.local/bin"
 
 echo "test-plugin: $PASS checks passed"

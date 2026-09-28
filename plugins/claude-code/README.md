@@ -12,10 +12,21 @@ consult threads before editing, and hand off threads a fresh session can act on.
 /plugin install qual@qualifier
 ```
 
-The plugin uses an existing `qualifier` if one is on your `PATH`; otherwise
-it installs the qualifier release this plugin pins to `~/.local/bin` on
-first use, verified against checksums shipped in the plugin. Platforms
-without a prebuilt binary get a `cargo install qualifier --version …` line.
+The plugin keeps its own copy of the qualifier release it pins, under
+`~/.local/share/qualifier/plugin/<version>/` (`$XDG_DATA_HOME/qualifier/plugin/`
+when `XDG_DATA_HOME` is set). It downloads that release on first use,
+verified against checksums shipped in the plugin, and installs the new
+release automatically when a plugin update pins a newer one, removing
+older versions' directories (never a newer one). It never runs, replaces, or installs over a
+`qualifier` on your `PATH`, so the one you use in your shell can be any
+version. Platforms without a prebuilt binary get a
+`cargo install qualifier --version …` line.
+
+- `QUALIFIER_BIN=/abs/path/to/qualifier` makes the plugin run that binary
+  instead (for a development build).
+- `QUALIFIER_PLUGIN_HOME=/some/dir` relocates the plugin's installs (an
+  absolute path other than `/`; anything else falls back to the default
+  with a warning).
 
 ## What it does
 
@@ -44,26 +55,24 @@ spec, a source file, and open qualifier threads including a blocker on
 `no-qual-files` case that must not fire any `qual:` skill at all. Running
 evals calls the model and costs money — confirm before running.
 
-Requires `qualifier` >= 0.8.0. Build it and put it on `PATH`, not just in
-`QUALIFIER_BIN`: each run's agent session is isolated and inherits only an
-allowlist of environment variables (`PATH`, locale, provider credentials,
-`EVAL_*`) — `QUALIFIER_BIN` does not reach it, and with no real qualifier
-release published yet the wrapper's embedded checksums are empty, so a
-sandboxed session that falls back to the wrapper would report qualifier as
-not installed. The `scaffold_script` runs on the host, outside that
-sandbox, and does see `QUALIFIER_BIN` if you set it (`scaffold.sh` falls
-back to `qualifier` on `PATH` otherwise), so set `QUALIFIER_BIN` too only
-if you want the scaffold to use a different binary than the one on `PATH`.
-`Bash`, `Write`, and `Edit` are gated tools: listing them in a case's
-`allowed_tools` is not enough, they also need an operator grant on the
-command line. Smoke-test one case first, then run the full suite:
+Each run's agent session is isolated and inherits only an allowlist of
+environment variables (`PATH`, locale, provider credentials, `EVAL_*`), so
+`QUALIFIER_BIN` does not reach it. The plugin installs its pinned
+qualifier release itself inside the session; no `PATH` setup is needed,
+but the eval sandbox must allow that download (from GitHub releases), or
+runs will report qualifier as not installed. The `scaffold_script` runs
+on the host, outside that sandbox, and needs a qualifier there to seed the
+fixture threads: it uses `QUALIFIER_BIN` if set, else `qualifier` on
+`PATH`. `Bash`, `Write`, and `Edit` are gated tools: listing them in a
+case's `allowed_tools` is not enough, they also need an operator grant on
+the command line. Smoke-test one case first, then run the full suite:
 
 ```bash
 cargo build --bin qualifier
-PATH="$PWD/target/debug:$PATH" claude plugin eval plugins/claude-code \
+QUALIFIER_BIN="$PWD/target/debug/qualifier" claude plugin eval plugins/claude-code \
   --case design-rejects-option --runs 1 --scaffold --allow-tools Write Edit Bash
 
-PATH="$PWD/target/debug:$PATH" claude plugin eval plugins/claude-code \
+QUALIFIER_BIN="$PWD/target/debug/qualifier" claude plugin eval plugins/claude-code \
   --runs 3 --scaffold --allow-tools Write Edit Bash
 ```
 

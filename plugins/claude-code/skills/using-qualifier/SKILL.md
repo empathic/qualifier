@@ -74,5 +74,6 @@ brief, "principle N", "as discussed", or anything outside the repository.
 - Leave `--issuer` and `--issuer-type` unset; qualifier marks records from
   this session as `ai` and tags them with the session. Override only in
   `qual:escalating-decisions`.
-- If the session context says qualifier is not on PATH, call the wrapper it
-  names wherever these skills say `qualifier`.
+- Run qualifier through the command the session context gives (the
+  plugin's wrapper, which runs the qualifier version this plugin pins);
+  these skills write `qualifier` for short.
