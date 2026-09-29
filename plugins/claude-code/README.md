@@ -78,22 +78,29 @@ one case per skill, seeded by `evals/_fixture/scaffold.sh` (a git repo with a
 spec, three source files under `src/`, and open qualifier threads including
 a blocker on `src/net.rs`); `review-subsystems`, a large-scope review that
 should dispatch reviewer and verifier subagents (see
-[its README](evals/review-subsystems/README.md)); three quiet cases that
-must *not* write a record; and a `no-qual-files` case that must not fire
+[its README](evals/review-subsystems/README.md)); and four negative
+cases: three quiet cases (`quiet-typo`, `quiet-question`, `quiet-explore`)
+that must *not* write a record, and `no-qual-files`, which must not fire
 any `qual:` skill at all. Running evals calls the model and costs money —
 confirm before running.
+
+Bash graders match only inside the call's `command`, not its
+description. The quiet cases' `no-record` grader counts any `record`,
+`reply`, `resolve`, or `emit` call, `record --stdin --dry-run` included:
+that is deliberately conservative, so a dry run fails a negative case.
 
 Each run's agent session is isolated and inherits only an allowlist of
 environment variables (`PATH`, locale, provider credentials, `EVAL_*`), so
 `QUALIFIER_BIN` does not reach it. The plugin installs its pinned
 qualifier release itself inside the session; no `PATH` setup is needed,
 but the eval sandbox must allow that download (from GitHub releases), or
-runs will report that the plugin could not install qualifier. The `scaffold_script` runs
-on the host, outside that sandbox, and needs a qualifier there to seed the
-fixture threads: it uses `QUALIFIER_BIN` if set, else `qualifier` on
-`PATH`. `Bash`, `Write`, and `Edit` are gated tools: listing them in a
-case's `allowed_tools` is not enough, they also need an operator grant on
-the command line. Smoke-test one case first, then run the full suite:
+runs will report that the plugin could not install qualifier. The
+`scaffold_script` runs on the host, outside that sandbox, and needs a
+qualifier there to seed the fixture threads: it uses `QUALIFIER_BIN` if
+set, else `qualifier` on `PATH`. `Bash`, `Write`, and `Edit` are gated
+tools: listing them in a case's `allowed_tools` is not enough, they also
+need an operator grant on the command line. Smoke-test one case first,
+then run the full suite:
 
 ```bash
 cargo build --bin qualifier
@@ -118,19 +125,21 @@ form of `plugins:` has not been run yet — smoke-test it on one case first
 (`--case <name> --runs 1`) and confirm both skills are actually available
 before trusting a full-suite comparison.
 
-Expected: each non-quiet case passes its graders in at least 2 of 3 runs.
-`review-spec` accepts either `recording-design-decisions` or
-`reviewing-into-qualifier` firing — a "review this spec" prompt can
-legitimately trigger either skill, and the case exists to watch that
-overlap rather than force one winner. Every quiet case and `no-qual-files`
-should pass in 3 of 3, and the no-plugin baseline should pass the
-non-quiet cases far less often than the with-plugin arm.
+Expected: each of the four negative cases passes in 3 of 3 runs, and
+every other case in at least 2 of 3. `review-spec` accepts either
+`recording-design-decisions` or `reviewing-into-qualifier` firing — a
+"review this spec" prompt can legitimately trigger either skill, and the
+case exists to watch that overlap rather than force one winner. The
+no-plugin baseline should pass the cases other than the negative ones far
+less often than the with-plugin arm.
 
 ### Results
 
 Pass rate per case, per configuration. "Plugin alone" is `qual` with no
 other plugin loaded; "with superpowers" adds `superpowers`'s plugin
-directory to `plugins:` as described above. Fill this in from an actual
+directory to `plugins:` as described above. The negative cases
+(`no-qual-files`, `quiet-explore`, `quiet-question`, `quiet-typo`) need 3
+of 3; every other case needs at least 2 of 3. Fill this in from an actual
 `claude plugin eval` run — nothing below has been run yet.
 
 | Case | Plugin alone | With superpowers | Date | qualifier / plugin version |
@@ -161,10 +170,10 @@ Before a plugin release:
    QUALIFIER_BIN="$PWD/target/debug/qualifier" claude plugin eval plugins/claude-code \
      --runs 3 --scaffold --allow-tools Write Edit Bash
    ```
-2. Every non-quiet case (each one but `quiet-typo`, `quiet-question`,
-   `quiet-explore`, and `no-qual-files`) must pass at least 2 of 3 runs.
-   Every quiet case (those four) must pass 3 of 3.
-   `review-spec` passes on either of its two accepted skills firing.
+2. Every negative case (`quiet-typo`, `quiet-question`, `quiet-explore`,
+   and `no-qual-files`) must pass 3 of 3 runs; every other case must pass
+   at least 2 of 3. `review-spec` passes on either of its two accepted
+   skills firing.
 3. Record the outcome in the [Results](#results) table above: pass rate
    for each configuration, the date, and the qualifier/plugin version pair
    under test. Do this for every release, even one where nothing under

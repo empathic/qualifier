@@ -8,8 +8,9 @@
 #   ensure-qualifier.sh exec <args...>  resolve, then run `qualifier <args...>`
 #   ensure-qualifier.sh pinned-version  print PINNED_VERSION (resolves nothing)
 #   ensure-qualifier.sh prebuilt-target print this platform's release target;
-#                                       exit 1 when the pinned release has no
-#                                       verified binary for it (resolves nothing)
+#                                       exit 1 when the pinned release has
+#                                       no verified binary for it (resolves
+#                                       nothing)
 #
 # Everything except the resolved path / exec'd command output goes to stderr.
 #
@@ -184,9 +185,11 @@ check_dependencies() {
 # QUALIFIER_BIN names it.
 cargo_fallback() {
     log "Error: $1."
-    log "Install qualifier from source instead: cargo install qualifier --version ${PINNED_VERSION} --locked"
-    log "then set QUALIFIER_BIN to the installed binary's absolute path (${CARGO_HOME:-${HOME:-~}/.cargo}/bin/qualifier by default)"
-    log "in your shell profile or under \"env\" in Claude Code settings. A qualifier on PATH is not used."
+    log "Install qualifier from source instead:"
+    log "  cargo install qualifier --version ${PINNED_VERSION} --locked"
+    log "then set QUALIFIER_BIN to the installed binary's absolute path"
+    log "(${CARGO_HOME:-${HOME:-~}/.cargo}/bin/qualifier by default) in your shell profile"
+    log "or under \"env\" in Claude Code settings. A qualifier on PATH is not used."
     exit 1
 }
 
@@ -370,7 +373,8 @@ main() {
             ;;
         prebuilt-target)
             local target
-            target="$(release_target)" && [ -n "$(expected_sha256 "$target")" ] || exit 1
+            target="$(release_target)" || exit 1
+            [ -n "$(expected_sha256 "$target")" ] || exit 1
             echo "$target"
             return 0
             ;;

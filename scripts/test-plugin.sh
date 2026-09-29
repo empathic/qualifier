@@ -870,6 +870,7 @@ ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not valid JSON 
 case "$ctx" in *"cargo install qualifier --version $PINNED --locked"*) ;; *) fail "context must give the pinned install command: $ctx" ;; esac
 case "$ctx" in *"could not install its pinned qualifier release"*"QUALIFIER_BIN"*) ;; *) fail "context must report the failed install and name QUALIFIER_BIN: $ctx" ;; esac
 case "$ctx" in *"no prebuilt"*) fail "a supported platform must not be reported as lacking a prebuilt binary: $ctx" ;; esac
+case "$ctx" in *"GitHub releases), ask the user to run \`cargo install"*) ;; *) fail "context must continue the sentence with 'ask the user to run': $ctx" ;; esac
 ok "hook degrades gracefully without a binary or network"
 
 # H4b. On a platform with no prebuilt release, the context says so and gives
@@ -882,6 +883,7 @@ ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not valid JSON 
 case "$ctx" in *"no prebuilt qualifier binary for this platform"*) ;; *) fail "context must say there is no prebuilt binary: $ctx" ;; esac
 case "$ctx" in *"cargo install qualifier --version $PINNED --locked"*"QUALIFIER_BIN"*) ;; *) fail "context must give the cargo install and QUALIFIER_BIN steps: $ctx" ;; esac
 case "$ctx" in *"not installed"*) fail "context must not call the platform's problem 'not installed': $ctx" ;; esac
+case "$ctx" in *"pinned release. Ask the user to run \`cargo install"*) ;; *) fail "context must say 'Ask the user to run': $ctx" ;; esac
 [ ! -e "$SANDBOX/hook-unsupported-home" ] || fail "hook on an unsupported platform must not create the plugin home"
 ok "hook on an unsupported platform names the cargo install and QUALIFIER_BIN"
 
@@ -1502,12 +1504,17 @@ else:
             bash_call("cd /tmp/repo && qualifier threads --all"),
             bash_call(QUOTED + 'qualifier reply 1a2b3c4d "ok"'),
             bash_call('qualifier record concern src/net.rs:1 "a \\"quoted\\" word"', "Record a finding"),
+            # A call starting a line of a multi-line command follows a JSON `\n`.
+            bash_call("cd /tmp/repo\nqualifier threads --all"),
+            bash_call("cd /tmp/repo\n\tqualifier record blocker src/net.rs:1 \"msg\""),
         ],
         DESCRIPTION_ONLY + [
             bash_call(f'{WRAPPER} exec record blocker src/net.rs:1 "msg"'),
             bash_call(f"{WRAPPER} pinned-version"),
             bash_call(QUOTED + f"{WRAPPER} exec threads"),
             bash_call("/opt/bin/qualifier threads"),
+            bash_call(f"cd /tmp/repo\n{WRAPPER} exec record blocker src/net.rs:1 \"msg\""),
+            bash_call("cd /tmp/repo\nls qualifier-notes"),
         ])
     for name, g, subs in (("no-record", no_record, write_subs), ("wrote-record", wrote, write_subs - {"emit"})):
         pat = re.compile(g["input_match"])
@@ -1517,6 +1524,8 @@ else:
                 bash_call(QUOTED + f'{WRAPPER} exec record concern src/net.rs:1 "m"', "Record it"),
                 bash_call(QUOTED + 'qualifier reply 1a2b3c4d "ok"'),
                 bash_call("/repo/target/debug/qualifier record --stdin < /tmp/x/batch.jsonl"),
+                bash_call('cd /tmp/repo\nqualifier reply 1a2b3c4d "ok"'),
+                bash_call(f'cd /tmp/repo\n{WRAPPER} exec record concern src/net.rs:1 "m"'),
             ],
             DESCRIPTION_ONLY + [
                 bash_call(f"{WRAPPER} exec threads --format json", "Record qualifier reply targets"),
