@@ -16,8 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all-features
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --all-features
 
   plugin:
     name: plugin checks (${{ matrix.os }})
@@ -39,5 +39,5 @@ jobs:
       QUALIFIER_BIN: ${{ github.workspace }}/target/debug/qualifier
     steps:
       - uses: actions/checkout@v4
-      - run: cargo build --bin qualifier
+      - run: cargo build --locked --bin qualifier
       - run: ${{ matrix.bash }} scripts/test-plugin.sh
