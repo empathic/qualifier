@@ -24,8 +24,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            bash: bash
+          # macOS's system bash 3.2, even when Homebrew's bash is first on
+          # PATH; test-plugin.sh runs the wrapper and hook under the same one.
+          - os: macos-latest
+            bash: /bin/bash
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: scripts/test-plugin.sh
+      - run: ${{ matrix.bash }} scripts/test-plugin.sh

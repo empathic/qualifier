@@ -42,8 +42,8 @@ assert plugin["name"] == "qual", "plugin must be named 'qual' (skills are /qual:
 PY
 ok "manifests parse and agree (plugin 'qual', versions match)"
 
-bash -n "$ENSURE" || fail "ensure-qualifier.sh does not parse"
-bash -n "$HOOK" || fail "session-start does not parse"
+"$BASH" -n "$ENSURE" || fail "ensure-qualifier.sh does not parse"
+"$BASH" -n "$HOOK" || fail "session-start does not parse"
 python3 -c "import json; json.load(open('$PLUGIN/hooks/hooks.json'))" || fail "hooks.json is not valid JSON"
 if command -v shellcheck >/dev/null 2>&1; then
     shellcheck "$ENSURE" "$HOOK" "$0" || fail "shellcheck"
@@ -52,7 +52,7 @@ else
     echo "skip: shellcheck not installed"
 fi
 
-PINNED="$("$ENSURE" pinned-version)"
+PINNED="$("$BASH" "$ENSURE" pinned-version)"
 
 # --- sandbox and stubs -----------------------------------------------------
 
@@ -61,6 +61,29 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX/home"
 mkdir -p "$HOME"
 unset QUALIFIER_BIN QUALIFIER_PLUGIN_HOME XDG_DATA_HOME
+
+# The wrapper, the hook, and every stub start with `#!/usr/bin/env bash`.
+# A `bash` first on each PATH the tests use makes all of them run under the
+# interpreter running this script, so `/bin/bash scripts/test-plugin.sh`
+# exercises macOS's bash 3.2 throughout, even with a newer bash on PATH.
+INTERP="$SANDBOX/interp"
+mkdir -p "$INTERP"
+ln -s "$BASH" "$INTERP/bash"
+export PATH="$INTERP:$PATH"
+for script in "$ENSURE" "$HOOK"; do
+    [ "$(head -n 1 "$script")" = "#!/usr/bin/env bash" ] \
+        || fail "$script must start with #!/usr/bin/env bash (the interpreter shim relies on it)"
+done
+cat >"$SANDBOX/bash-probe" <<'EOF'
+#!/usr/bin/env bash
+echo "$BASH_VERSION"
+EOF
+chmod +x "$SANDBOX/bash-probe"
+for probe_path in "$PATH" "$INTERP:/usr/bin:/bin"; do
+    got="$(PATH="$probe_path" "$SANDBOX/bash-probe")"
+    [ "$got" = "$BASH_VERSION" ] || fail "scripts under test run bash $got, not this script's $BASH_VERSION"
+done
+ok "the wrapper, hook, and stubs run under this script's bash ($BASH, $BASH_VERSION)"
 
 make_fake_qualifier() {
     # A stand-in binary that answers --version like the real CLI and prints
@@ -117,7 +140,7 @@ populate_managed() {
 # --- ensure-qualifier.sh: modes and $QUALIFIER_BIN -------------------------
 
 # W1. pinned-version resolves nothing: it works with an empty PATH.
-out="$(env -i PATH= HOME="$HOME" /bin/bash "$ENSURE" pinned-version)" || fail "pinned-version failed with an empty PATH"
+out="$(env -i PATH= HOME="$HOME" "$BASH" "$ENSURE" pinned-version)" || fail "pinned-version failed with an empty PATH"
 [ "$out" = "0.8.0" ] || fail "pinned-version: expected 0.8.0, got $out"
 ok "pinned-version reports PINNED_VERSION with an empty PATH"
 
@@ -135,7 +158,7 @@ make_fake_qualifier "$OVERRIDE/qualifier" "8.8.8"
 
 # W3. A valid $QUALIFIER_BIN wins over the managed install and PATH.
 rm -f "$CURL_MARKER"
-out="$(QUALIFIER_BIN="$OVERRIDE/qualifier" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE")"
+out="$(QUALIFIER_BIN="$OVERRIDE/qualifier" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE")"
 [ "$out" = "$OVERRIDE/qualifier" ] || fail "expected \$QUALIFIER_BIN to win, got $out"
 [ ! -e "$CURL_MARKER" ] || fail "a valid \$QUALIFIER_BIN must not download"
 ok "\$QUALIFIER_BIN wins"
@@ -148,8 +171,8 @@ chmod -x "$NOEXEC"
 FOREIGN="$SANDBOX/foreign/qualifier"
 make_fake_qualifier "$FOREIGN" "1.0" "something-else"
 for bad in "$SANDBOX/gone/qualifier" "$NOEXEC" "$FOREIGN" "override/qualifier"; do
-    err="$(cd "$SANDBOX" && QUALIFIER_BIN="$bad" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE" 2>&1 >/dev/null)"
-    out="$(cd "$SANDBOX" && QUALIFIER_BIN="$bad" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE" 2>/dev/null)"
+    err="$(cd "$SANDBOX" && QUALIFIER_BIN="$bad" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE" 2>&1 >/dev/null)"
+    out="$(cd "$SANDBOX" && QUALIFIER_BIN="$bad" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE" 2>/dev/null)"
     case "$err" in *"QUALIFIER_BIN"*) ;; *) fail "expected a warning naming QUALIFIER_BIN for '$bad', got: $err" ;; esac
     [ "$out" = "$MANAGED_BIN" ] || fail "'$bad': expected fall-through to $MANAGED_BIN, got $out"
 done
@@ -157,25 +180,25 @@ ok "an unusable, foreign, or relative \$QUALIFIER_BIN warns and falls through"
 
 # W5. A qualifier on PATH is ignored when a managed install exists.
 rm -f "$CURL_MARKER"
-out="$(QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE")"
+out="$(QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE")"
 [ "$out" = "$MANAGED_BIN" ] || fail "expected the managed install, got $out"
 [ ! -e "$CURL_MARKER" ] || fail "a valid managed install must not download"
 ok "uses the managed install, not a qualifier on PATH"
 
 # W6. exec mode resolves, then runs the binary with the arguments.
-out="$(QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE" exec --version)"
+out="$(QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE" exec --version)"
 [ "$out" = "qualifier $PINNED" ] || fail "exec mode: got '$out'"
-out="$(QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:/usr/bin:/bin" "$ENSURE" exec show "a b")"
+out="$(QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE" exec show "a b")"
 [ "$out" = "fake-qualifier ran: show a b" ] || fail "exec mode arguments: got '$out'"
 ok "exec mode runs the managed binary with the arguments"
 
 # W7. The default plugin home is $XDG_DATA_HOME/qualifier/plugin, else
 #     ~/.local/share/qualifier/plugin.
 populate_managed "$SANDBOX/xdg/qualifier/plugin"
-out="$(XDG_DATA_HOME="$SANDBOX/xdg" PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE")"
+out="$(XDG_DATA_HOME="$SANDBOX/xdg" PATH="$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE")"
 [ "$out" = "$SANDBOX/xdg/qualifier/plugin/$PINNED/qualifier" ] || fail "XDG_DATA_HOME default: got $out"
 populate_managed "$HOME/.local/share/qualifier/plugin"
-out="$(PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE")"
+out="$(PATH="$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE")"
 [ "$out" = "$HOME/.local/share/qualifier/plugin/$PINNED/qualifier" ] || fail "HOME default: got $out"
 ok "plugin home defaults to \$XDG_DATA_HOME, then ~/.local/share"
 
@@ -184,9 +207,9 @@ ok "plugin home defaults to \$XDG_DATA_HOME, then ~/.local/share"
 DEFAULT_BIN="$HOME/.local/share/qualifier/plugin/$PINNED/qualifier"
 for bad in "QUALIFIER_PLUGIN_HOME=relative/home" "QUALIFIER_PLUGIN_HOME=/" "QUALIFIER_PLUGIN_HOME=///" \
            "XDG_DATA_HOME=relative/data" "XDG_DATA_HOME=/"; do
-    err="$(cd "$SANDBOX" && env "$bad" PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE" 2>&1 >/dev/null)" \
+    err="$(cd "$SANDBOX" && env "$bad" PATH="$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE" 2>&1 >/dev/null)" \
         || fail "$bad: expected a fall-back, got an error: $err"
-    out="$(cd "$SANDBOX" && env "$bad" PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE" 2>/dev/null)"
+    out="$(cd "$SANDBOX" && env "$bad" PATH="$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE" 2>/dev/null)"
     case "$err" in *"${bad%%=*}"*) ;; *) fail "$bad: expected a warning naming ${bad%%=*}, got: $err" ;; esac
     [ "$out" = "$DEFAULT_BIN" ] || fail "$bad: expected fall-back to $DEFAULT_BIN, got $out"
 done
@@ -198,17 +221,17 @@ ok "an unusable QUALIFIER_PLUGIN_HOME or XDG_DATA_HOME warns and falls back to t
 for env_args in "-u HOME QUALIFIER_PLUGIN_HOME=/" "-u HOME" "HOME=relative-home" "HOME="; do
     # Word splitting of the env arguments is intended.
     # shellcheck disable=SC2086
-    err="$(cd "$SANDBOX" && env $env_args PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE" 2>&1 >/dev/null)" \
+    err="$(cd "$SANDBOX" && env $env_args PATH="$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE" 2>&1 >/dev/null)" \
         && fail "env $env_args: expected exit 1"
     case "$err" in *"HOME"*) ;; *) fail "env $env_args: expected an error naming HOME, got: $err" ;; esac
 done
-out="$(env -u HOME QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE")"
+out="$(env -u HOME QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE")"
 [ "$out" = "$MANAGED_BIN" ] || fail "HOME unset with a valid QUALIFIER_PLUGIN_HOME: got $out"
 ok "no usable plugin home exits 1; a valid QUALIFIER_PLUGIN_HOME works without HOME"
 
 # W9b. A valid $QUALIFIER_BIN is used even when there is no usable plugin
 #      home: it is resolved before the plugin home is computed.
-out="$(env -u HOME QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$NOACCESS:/usr/bin:/bin" "$ENSURE")" \
+out="$(env -u HOME QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$NOACCESS:$INTERP:/usr/bin:/bin" "$ENSURE")" \
     || fail "a valid QUALIFIER_BIN with HOME unset must resolve"
 [ "$out" = "$OVERRIDE/qualifier" ] || fail "QUALIFIER_BIN with HOME unset: got $out"
 ok "a valid \$QUALIFIER_BIN works with HOME unset"
@@ -220,7 +243,7 @@ tail -n 1 "$ENSURE" | grep -qx 'main "\$@"' || fail "ensure-qualifier.sh must en
 sed '$d' "$ENSURE" >"$SANDBOX/ensure-functions.sh"
 # The single-quoted script expands $1 and $PLUGIN_HOME in the inner shell.
 # shellcheck disable=SC2016
-out="$(env -u QUALIFIER_PLUGIN_HOME -u XDG_DATA_HOME HOME=/ /bin/bash -c \
+out="$(env -u QUALIFIER_PLUGIN_HOME -u XDG_DATA_HOME HOME=/ "$BASH" -c \
     '. "$1"; plugin_home; echo "$PLUGIN_HOME"' _ "$SANDBOX/ensure-functions.sh")" \
     || fail "HOME=/ must be accepted"
 [ "$out" = "/.local/share/qualifier/plugin" ] || fail "HOME=/: expected /.local/share/qualifier/plugin, got $out"
@@ -245,7 +268,7 @@ context_of() {
 # The call line every hook context with a binary must give.
 CALL_FORM="Run qualifier as \`\"$PWD/$PLUGIN/scripts/ensure-qualifier.sh\" exec <args>\`"
 
-HOOK_PATH="$NOACCESS:/usr/bin:/bin"
+HOOK_PATH="$NOACCESS:$INTERP:/usr/bin:/bin"
 
 # H1. Silent in a repository without .qual files.
 NOQUAL="$SANDBOX/noqual"
@@ -723,7 +746,7 @@ case "$url" in
 esac
 EOF
 chmod +x "$CURL_STUB/curl"
-SAFE_PATH="$CURL_STUB:/usr/bin:/bin:/usr/sbin:/sbin"
+SAFE_PATH="$CURL_STUB:$INTERP:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # A uname shim that reports FAKE_UNAME_S for -s and FAKE_UNAME_M for -m, so
 # every platform mapping in resolve_target runs on any host.
@@ -749,7 +772,7 @@ while read -r os arch target var; do
     # The single-quoted script expands its positional parameters in the
     # inner shell.
     # shellcheck disable=SC2016
-    out="$(FAKE_UNAME_S="$os" FAKE_UNAME_M="$arch" PATH="$UNAME_SHIM:/usr/bin:/bin" /bin/bash -c \
+    out="$(FAKE_UNAME_S="$os" FAKE_UNAME_M="$arch" PATH="$UNAME_SHIM:$INTERP:/usr/bin:/bin" "$BASH" -c \
         '. "$1"; t="$(resolve_target)"; echo "$t $(expected_sha256 "$t")"' _ "$SANDBOX/ensure-functions.sh")" \
         || fail "$os-$arch: resolve_target failed"
     [ "${out%% *}" = "$target" ] || fail "$os-$arch: expected target $target, got ${out%% *}"
@@ -1143,7 +1166,7 @@ case "$err" in *"checksum mismatch"*) ;; *) fail "expected a checksum mismatch m
 ok "checksum mismatch installs nothing and removes nothing"
 
 # D10. A failed download installs nothing and removes nothing.
-err="$(QUALIFIER_PLUGIN_HOME="$PH_FAIL" PATH="$NOACCESS:/usr/bin:/bin" "$SANDBOX/ensure-999.sh" 2>&1 >/dev/null)" \
+err="$(QUALIFIER_PLUGIN_HOME="$PH_FAIL" PATH="$NOACCESS:$INTERP:/usr/bin:/bin" "$SANDBOX/ensure-999.sh" 2>&1 >/dev/null)" \
     && fail "a failed download must fail"
 case "$err" in *"cargo install qualifier --version 9.9.9"*) ;; *) fail "expected the cargo fallback, got: $err" ;; esac
 [ "$(entries_of "$PH_FAIL")" = "9.9.8" ] || fail "failed download changed the plugin home: $(entries_of "$PH_FAIL")"
