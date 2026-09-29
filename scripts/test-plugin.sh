@@ -759,13 +759,25 @@ for case in cases:
         if "match" in fields:
             assert re.fullmatch(r"not_contains|count:\d+", fields["match"][0]), (
                 f"{where}: match must be not_contains or count:N")
-        if "target" in fields:
-            t = fields["target"][0]
-            assert t in TARGETS or re.fullmatch(r"\{\s*source:\s*file,\s*path:.+\}", t), (
-                f"{where}: unknown target {t!r}")
+        # `focus` (llm) takes the same values as `target` (regex).
+        for key in ("target", "focus"):
+            if key in fields:
+                t = fields[key][0]
+                assert t in TARGETS or re.fullmatch(r"\{\s*source:\s*file,\s*path:.+\}", t), (
+                    f"{where}: unknown {key} {t!r}")
         for key in REGEX_KEYS:
             if key in fields:
                 check_regex(f"{where} ({key})", fields[key][0])
+        # tool_order's before/after: a tool name, or { tool, input_match }.
+        for key in ("before", "after"):
+            if key in fields:
+                v = fields[key][0]
+                if re.fullmatch(r"[A-Za-z_][\w:*.-]*", v):
+                    continue
+                m = re.fullmatch(r"\{\s*tool:\s*([A-Za-z_][\w:*.-]*)\s*(?:,\s*input_match:\s*(.+?))?\s*\}", v)
+                assert m, f"{where}: {key} must be a tool name or {{ tool, input_match }}, got {v!r}"
+                if m.group(2):
+                    check_regex(f"{where} ({key}.input_match)", scalar(m.group(2))[0])
 print(f"eval cases: {len(cases)} checked")
 PY
 ok "eval cases: case.yaml, prompt.md, and grader keys are documented; every grader regex compiles"

@@ -5,7 +5,8 @@ Scans plugins/claude-code/skills/**/*.md (SKILL.md files and the subagent
 briefs) for:
 
   - JSONL record lines: every line of a ```json fence, and every inline
-    backticked object with a "kind" key. Each file's lines run as one
+    backticked object with a "kind", "location", "references", or
+    "supersedes" key (so a line that lost its kind still fails). Each file's lines run as one
     `record --stdin --dry-run` batch in a copy of the fixture. Their keys must
     also be ones the binary's `record --help` lists for an overrides line,
     since the CLI ignores unknown keys rather than rejecting them.
@@ -20,9 +21,10 @@ example (or before the fence that holds it), change that:
   <!-- example: skip — <reason> -->   don't run it; counted and printed
   <!-- example: expect-fail -->       it must exit non-zero
 
-Placeholders are filled from placeholder_table() below. Any `<...>` left inside a
-quoted string (a message, a detail, ...) becomes sample text; one left
-anywhere else fails the check, as does a bare `…`.
+Placeholders are filled from placeholder_table() below. A `<...>` or `…`
+left in free text (a command's message positional, a --detail or
+--suggested-fix value, a record line's message/detail/suggested_fix) becomes
+sample text; one left anywhere else fails the check, quoted or not.
 
 Binary: $QUALIFIER_BIN, else target/debug/qualifier, else
 target/release/qualifier. With none, prints a skip line and exits 2.
@@ -186,7 +188,7 @@ def extract(path, errors):
         content = " ".join(m.group(1).split())
         marker = markers.get(n)
         mode, reason = (marker[0], marker[1]) if marker else (None, None)
-        if content.startswith('{"'):
+        if re.match(r'\{\s*"', content):
             examples.append(Example(path, n, "inline-json", content, mode, reason))
         elif INVOCATION_RE.match(content) or (LOOSE_INVOCATION_RE.search(content) and mode == "skip"):
             examples.append(Example(path, n, "cmd", content, mode, reason))
@@ -310,38 +312,42 @@ def batch_keys(qbin, env):
 # --- checks ----------------------------------------------------------------------
 
 
-def quoted_free_text(cmd):
-    """Replaces placeholders inside quoted strings with sample text."""
-    out, quote, i = [], None, 0
-    while i < len(cmd):
-        ch = cmd[i]
-        if quote:
-            m = PLACEHOLDER_RE.match(cmd, i) or re.compile("…").match(cmd, i)
-            if m and not m.group(0).startswith("{"):
-                out.append(SAMPLE_TEXT)
-                i = m.end()
-                continue
-            if ch == quote:
-                quote = None
-            elif ch == "\\" and quote == '"' and i + 1 < len(cmd):
-                out.append(cmd[i: i + 2])
-                i += 2
-                continue
-        elif ch in "\"'":
-            quote = ch
-        out.append(ch)
-        i += 1
-    return "".join(out)
+# Free text in a command: the message positional (its index among the
+# subcommand's positionals) and the values of the free-text flags. Only
+# there does a leftover `<...>` or `…` become sample text.
+MESSAGE_POSITIONAL = {"record": 2, "reply": 1, "resolve": 1}
+FREE_TEXT_FLAGS = {"--detail", "--suggested-fix"}
+# Flags that take no value; every other `--flag` consumes the next token.
+BOOLEAN_FLAGS = {
+    "--stdin", "--dry-run", "--continue-on-error", "--all", "--no-ignore", "--summary",
+    "--pretty", "--unqualified", "--vcs", "--from-tip", "--fail-on-drift", "--subjects-only",
+    "--help", "-h", "--version", "-V",
+}
+ELLIPSIS_RE = re.compile(r"…|\.\.\.")
+
+
+def free_text(tok):
+    return ELLIPSIS_RE.sub(SAMPLE_TEXT, PLACEHOLDER_RE.sub(SAMPLE_TEXT, tok))
+
+
+def leftover(tok):
+    """The first unsubstituted placeholder or ellipsis in a token, if any."""
+    m = PLACEHOLDER_RE.search(tok) or ELLIPSIS_RE.search(tok)
+    if m:
+        return m.group(0)
+    if "<" in tok or ">" in tok:
+        return tok  # a placeholder with spaces split across tokens
+    return None
 
 
 def prepare_command(ex, fx):
     """-> (argv, subcommand, uses_stdin) or raises ValueError."""
-    text = quoted_free_text(substitute(ex.text, placeholder_table(fx, fx["open"][0])))
+    text = substitute(ex.text, placeholder_table(fx, fx["open"][0]))
     try:
         tokens = shlex.split(text, comments=True)
     except ValueError as e:
         raise ValueError(f"cannot parse as a shell command ({e})")
-    argv, stdin, i = [], False, 0
+    words, stdin, i = [], False, 0
     while i < len(tokens):
         tok = tokens[i]
         if tok == "<":
@@ -349,19 +355,39 @@ def prepare_command(ex, fx):
                 raise ValueError("`<` without a file")
             stdin, i = True, i + 2
             continue
-        left = PLACEHOLDER_RE.search(tok)
-        if left:
-            raise ValueError(f"unsubstituted placeholder {left.group(0)!r}: add it to the table "
-                             "in scripts/check-skill-examples.py or quote it if it is free text")
-        if tok in ("|", "||", "&&", ";", ">", ">>", "2>", "&") or tok.startswith(("<", ">")):
+        if tok in ("|", "||", "&&", ";", ">", ">>", "2>", "&"):
             raise ValueError(f"unsupported shell syntax {tok!r}; mark it skip")
-        argv.append(tok)
+        words.append(tok)
         i += 1
-    for tok in argv[1:]:
-        if tok == "…" or tok == "...":
-            raise ValueError("elided arguments (`…`); make the example concrete or mark it skip")
-    argv[0] = fx["bin"]
-    return argv, (argv[1] if len(argv) > 1 else ""), stdin
+    sub = words[1] if len(words) > 1 else ""
+    argv, positional, i = [fx["bin"], sub], 0, 2
+    while i < len(words):
+        tok, value = words[i], None
+        if tok.startswith("-") and tok not in BOOLEAN_FLAGS:
+            flag, eq, inline = tok.partition("=")
+            if eq:
+                tok, value = flag, inline
+            elif i + 1 < len(words):
+                value, i = words[i + 1], i + 1
+            free = flag in FREE_TEXT_FLAGS
+            parts = [tok] if value is None else [tok, value]
+        else:
+            free = not tok.startswith("-") and MESSAGE_POSITIONAL.get(sub) == positional
+            if not tok.startswith("-"):
+                positional += 1
+            parts, value = [tok], tok
+        for part in parts:
+            if free and part is value:
+                part = free_text(part)
+            bad = leftover(part)
+            if bad:
+                raise ValueError(
+                    f"unsubstituted placeholder or elision {bad!r} in {part!r}: only the message "
+                    "and --detail/--suggested-fix values are free text; add the placeholder to "
+                    "the table in scripts/check-skill-examples.py or make the example concrete")
+            argv.append(part)
+        i += 1
+    return argv, sub, stdin
 
 
 def prepare_json(ex, fx, index, keys):
@@ -374,7 +400,7 @@ def prepare_json(ex, fx, index, keys):
         raise ValueError(f"not valid JSON ({e.msg} at column {e.colno})")
     if not isinstance(obj, dict):
         raise ValueError("not a JSON object")
-    if ex.kind == "inline-json" and "kind" not in obj:
+    if ex.kind == "inline-json" and not {"kind", "location", "references", "supersedes"} & set(obj):
         return obj, None  # e.g. a subagent's final-message shape
     unknown = sorted(set(obj) - keys)
     if unknown:
