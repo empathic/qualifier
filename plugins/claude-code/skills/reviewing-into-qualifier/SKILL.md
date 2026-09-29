@@ -93,7 +93,7 @@ Counts come from queries, not by hand:
   to still see it).
 
 "Recorded N findings (B blockers, C concerns, S suggestions); V confirmed,
-D downgraded, R refuted. List: `qualifier threads --all --tag review:<that>`."
+D downgraded, R refuted. List: `qualifier threads --all --tag review:<tag>`."
 (`--tag review` alone lists every review this project has ever recorded,
 not just this one.)
 

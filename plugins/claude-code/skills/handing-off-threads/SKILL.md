@@ -25,9 +25,12 @@ do?
 
 ## Fix
 
-Rewrite your own records (`qualifier reply <target> "…" --supersedes <id>`
-or `record … --supersedes <id>`, where `<id>` is the full 64-character ID
-of the live record from `qualifier threads --format json`) that:
+Rewrite your own records that fail the checks below — a reply with
+`qualifier reply <root.id> "<new text>" --supersedes <reply.id>`, a root
+with `qualifier record <kind> <location> "<new text>" --supersedes <root.id>`
+(same kind, location, and tags). Both IDs are full 64-character IDs of live
+records, from `qualifier threads --format json` (`root.id`, and each live
+reply's `record.id`). Rewrite records that:
 
 - cite a brief, a prompt, "principle N", "as discussed", or anything else
   only this session saw (a public, stable URL — e.g. the Claude Code docs —
