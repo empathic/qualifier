@@ -269,6 +269,27 @@ context_of() {
     python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'
 }
 
+# Succeeds once no PID listed in the given files is running, within about
+# 5s (a SIGKILLed process can take a moment to be reaped under load). A
+# zombie counts as gone: in a container whose PID 1 does not reap, a killed
+# orphan stays a zombie forever.
+pids_gone() {
+    local pid file state alive
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+        alive=""
+        for file in "$@"; do
+            pid="$(cat "$file" 2>/dev/null)" || continue
+            [ -n "$pid" ] || continue
+            # -o stat= works with both BSD and procps ps; empty when gone.
+            state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')"
+            case "$state" in ""|Z*) ;; *) alive=1 ;; esac
+        done
+        [ -z "$alive" ] && return 0
+        sleep 0.2
+    done
+    return 1
+}
+
 # The call line every hook context with a binary must give.
 CALL_FORM="Run qualifier as \`\"$PWD/$PLUGIN/scripts/ensure-qualifier.sh\" exec <args>\`"
 
@@ -286,8 +307,41 @@ ok "hook is silent in repositories without .qual files"
 WITHQUAL="$SANDBOX/withqual"
 mkdir -p "$WITHQUAL/.git" "$WITHQUAL/src"
 echo '{}' >"$WITHQUAL/src/.qual"
-out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
+# Shims first on the hook's PATH, for the fast-path checks below:
+#   sleep     records its PID and, only if it runs to the end, writes
+#             sleep.expired (the summary budget elapsed);
+#   cat, rm   record their process group and their parent's, so a
+#             foreground command run in a group of its own (monitor mode
+#             left on, which hands a terminal's foreground to that group)
+#             shows up even without a terminal.
+FASTPATH="$SANDBOX/fastpath"
+mkdir -p "$FASTPATH/bin"
+cat >"$FASTPATH/bin/sleep" <<EOF
+#!/usr/bin/env bash
+echo "\$\$" >"$FASTPATH/sleep.pid"
+/bin/sleep "\$@"
+touch "$FASTPATH/sleep.expired"
+EOF
+cat >"$FASTPATH/bin/cat" <<EOF
+#!/usr/bin/env bash
+echo "\$(ps -o pgid= -p \$\$ | tr -d ' ') \$(ps -o pgid= -p \$PPID | tr -d ' ')" >>"$FASTPATH/pgids"
+exec /bin/\$(basename "\$0") "\$@"
+EOF
+chmod +x "$FASTPATH/bin/sleep" "$FASTPATH/bin/cat"
+ln -s cat "$FASTPATH/bin/rm"
+out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$FASTPATH/bin:$HOOK_PATH")"
 ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not the expected JSON: $out"
+[ -s "$FASTPATH/sleep.pid" ] || fail "the summary budget's sleep never started"
+[ ! -e "$FASTPATH/sleep.expired" ] || fail "a fast summary made the hook wait out the budget"
+pids_gone "$FASTPATH/sleep.pid" || fail "the summary budget's sleep outlived the hook"
+# A leaked sleep would have run to the end by now (the budget is shorter
+# than pids_gone's wait) and written the marker.
+[ ! -e "$FASTPATH/sleep.expired" ] || fail "the summary budget's sleep was left running after the hook returned"
+[ -s "$FASTPATH/pgids" ] || fail "the pgid shims never ran"
+while read -r own parent; do
+    [ "$own" = "$parent" ] || fail "a foreground command ran in its own process group ($own, parent $parent): monitor mode was left on"
+done <"$FASTPATH/pgids"
+ok "a fast summary returns before its budget, leaves no budget sleep, and runs no foreground job in its own group"
 case "$ctx" in *"qual:recording-design-decisions"*) ;; *) fail "context lacks the using-qualifier map" ;; esac
 case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the thread summary: $ctx" ;; esac
 case "$ctx" in *"name: using-qualifier"*) fail "frontmatter must be stripped" ;; esac
@@ -378,22 +432,6 @@ case "\${1:-}" in
 esac
 EOF
 chmod +x "$SLOW/qualifier"
-
-# Succeeds once no PID listed in the given files is alive, within about 5s
-# (a SIGKILLed process can take a moment to be reaped under load).
-pids_gone() {
-    local pid file
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
-        local alive=""
-        for file in "$@"; do
-            pid="$(cat "$file" 2>/dev/null)" || continue
-            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=1
-        done
-        [ -z "$alive" ] && return 0
-        sleep 0.2
-    done
-    return 1
-}
 
 run_slow_summary() {
     # $1 is the PATH to give the hook.
