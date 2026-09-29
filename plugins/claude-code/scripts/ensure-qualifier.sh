@@ -17,11 +17,10 @@
 #      (qualifier.sha256) and its `--version` is then exactly
 #      `qualifier $PINNED_VERSION`. The hash is checked first, so a binary
 #      that no longer matches is never run; it is checked on every
-#      resolution, `exec` included (about 6 ms with sha256sum and 30 ms with
-#      shasum for the 0.8.0 binary). A missing or mismatching record makes
-#      the install invalid, and step 3 replaces it. The record detects a
-#      damaged or replaced binary; someone who can write both files can
-#      forge it, so it is not a defense against that.
+#      resolution, `exec` included (a few tens of ms at most). A missing or
+#      mismatching record makes the install invalid, and step 3 replaces
+#      it. The record detects a damaged or replaced binary; someone who can
+#      write both files can forge it, so it is not a defense against that.
 #   3. Otherwise download the PINNED_VERSION release for this platform,
 #      verify it against the checksum embedded below, and install it as the
 #      managed install: extracted into a staging directory inside
@@ -318,7 +317,11 @@ install_qualifier() {
         # Best-effort: a concurrent session may have moved it already; the
         # checks below settle the outcome either way.
         if stale="$(mktemp -d "$PLUGIN_HOME/.stale.XXXXXX" 2>/dev/null)"; then
-            mv "$dest" "$stale/" >/dev/null 2>&1 || true
+            # A concurrent session may have installed a valid one since the
+            # check above: re-check just before moving, and keep it if so.
+            if ! is_valid_install "$dest"; then
+                mv "$dest" "$stale/" >/dev/null 2>&1 || true
+            fi
             rm -rf "$stale" >/dev/null 2>&1 || true
         fi
     fi

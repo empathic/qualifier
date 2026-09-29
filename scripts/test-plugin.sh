@@ -1052,6 +1052,38 @@ out="$(MV_SHIM_MODE=dest-taken MV_SHIM_DEST="$PH_TAKEN/9.9.9" MV_SHIM_AWAY="$SAN
 [ "$(entries_of "$PH_TAKEN")" = "9.9.9" ] || fail "concurrent replace left: $(entries_of "$PH_TAKEN")"
 ok "a concurrent replace of an invalid install settles on one valid install"
 
+# D7c2. An invalid install that a concurrent session replaces with a valid
+#       one after this run's first check, but before the set-aside: this
+#       run re-checks, keeps the valid install (never moving or deleting it),
+#       and discards its own download. A mktemp shim plays the other session
+#       when the wrapper creates its .stale.* directory; the marker file it
+#       leaves inside the install shows the directory was never replaced.
+MKTEMP_SHIM="$SANDBOX/mktemp-shim"
+mkdir -p "$MKTEMP_SHIM"
+cat >"$MKTEMP_SHIM/mktemp" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+    case "$a" in
+        */.stale.*)
+            cp "$MKTEMP_SHIM_SRC" "$MKTEMP_SHIM_DEST/qualifier"
+            cp "$MKTEMP_SHIM_SRC.sha256" "$MKTEMP_SHIM_DEST/qualifier.sha256"
+            touch "$MKTEMP_SHIM_DEST/other-session-marker" ;;
+    esac
+done
+exec /usr/bin/mktemp "$@"
+EOF
+chmod +x "$MKTEMP_SHIM/mktemp"
+PH_REVALID="$SANDBOX/home-revalid"
+make_fake_qualifier "$PH_REVALID/9.9.9/qualifier" "9.9.8"
+out="$(MKTEMP_SHIM_DEST="$PH_REVALID/9.9.9" MKTEMP_SHIM_SRC="$SANDBOX/race-winner/qualifier" \
+    QUALIFIER_PLUGIN_HOME="$PH_REVALID" PATH="$MKTEMP_SHIM:$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)" \
+    || fail "revalidated install: the wrapper must succeed"
+[ -e "$PH_REVALID/9.9.9/other-session-marker" ] || fail "revalidated install: it was moved or deleted"
+[ "$out" = "$PH_REVALID/9.9.9/qualifier" ] || fail "revalidated install: got $out"
+[ "$("$out" threads)" = "RACE-WINNER" ] || fail "revalidated install: the concurrent install must be kept"
+[ "$(entries_of "$PH_REVALID")" = "9.9.9" ] || fail "revalidated install left: $(entries_of "$PH_REVALID")"
+ok "an install made valid by a concurrent session before the set-aside is kept, not moved"
+
 # D7d. A cleanup failure (an old version dir that can't be deleted) never
 #      fails a successful install.
 PH_STUCK="$SANDBOX/home-stuck"
