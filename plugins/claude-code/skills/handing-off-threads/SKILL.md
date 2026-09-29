@@ -34,8 +34,8 @@ Rewrite your own records that:
 - leave a resolution vague ("fix the locking") instead of saying where and
   how.
 
-Rewrite a reply with
-`qualifier reply <root.id> "<message>" --detail "<detail>" --tag <tag> --supersedes <reply.id>`
+Rewrite a reply with `qualifier reply <root.id> "<message>" --kind <kind>
+--detail "<detail>" --suggested-fix "<fix>" --tag <tag> --supersedes <reply.id>`
 and a root with `qualifier record <kind> <location> "<message>" --detail
 "<detail>" --suggested-fix "<fix>" --tag <tag> --supersedes <root.id>`.
 Carry over every field you are not rewriting exactly as it was — the kind,
