@@ -99,3 +99,48 @@ legitimately trigger either skill, and the case exists to watch that
 overlap rather than force one winner. Every quiet case and `no-qual-files`
 should pass in 3 of 3, and the no-plugin baseline should pass the positive
 cases far less often than the with-plugin arm.
+
+### Results
+
+Pass rate per case, per configuration. "Plugin alone" is `qual` with no
+other plugin loaded; "with superpowers" adds `superpowers`'s plugin
+directory to `plugins:` as described above. Fill this in from an actual
+`claude plugin eval` run — nothing below has been run yet.
+
+| Case | Plugin alone | With superpowers | Date | qualifier / plugin version |
+| :- | :- | :- | :- | :- |
+| design-rejects-option | not yet run | not yet run | — | — |
+| done-commit | not yet run | not yet run | — | — |
+| edit-annotated-file | not yet run | not yet run | — | — |
+| handoff | not yet run | not yet run | — | — |
+| needs-decision | not yet run | not yet run | — | — |
+| no-qual-files | not yet run | not yet run | — | — |
+| plan-from-threads | not yet run | not yet run | — | — |
+| quiet-explore | not yet run | not yet run | — | — |
+| quiet-question | not yet run | not yet run | — | — |
+| quiet-typo | not yet run | not yet run | — | — |
+| review-branch | not yet run | not yet run | — | — |
+| review-spec | not yet run | not yet run | — | — |
+| review-subsystems | not yet run | not yet run | — | — |
+| triage-open | not yet run | not yet run | — | — |
+
+### Release checklist
+
+Before a plugin release:
+
+1. Build the qualifier release the plugin pins and run the full suite in
+   both configurations (plugin alone, then again with `superpowers`
+   loaded), at least 3 runs per case:
+   ```
+   QUALIFIER_BIN="$PWD/target/debug/qualifier" claude plugin eval plugins/claude-code \
+     --runs 3 --scaffold --allow-tools Write Edit Bash
+   ```
+2. Every positive case (one that should fire a skill and write a record)
+   must pass at least 2 of 3 runs. Every quiet/negative case (`quiet-typo`,
+   `quiet-question`, `quiet-explore`, `no-qual-files`) must pass 3 of 3.
+   `review-spec` passes on either of its two accepted skills firing.
+3. Record the outcome in the [Results](#results) table above: pass rate
+   for each configuration, the date, and the qualifier/plugin version pair
+   under test. Do this for every release, even one where nothing under
+   `evals/` changed — the table tracks drift against new models as much as
+   against plugin changes.

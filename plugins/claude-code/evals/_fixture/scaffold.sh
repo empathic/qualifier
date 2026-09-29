@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build the eval fixture in the current directory: a git repo with a spec,
-# a source file, and qualifier threads including a blocker on src/net.rs.
+# source files across a few subsystems (networking, auth, caching), and
+# qualifier threads including a blocker on src/net.rs.
 set -euo pipefail
 git init -q --initial-branch=main
 git config user.email eval@example.com
@@ -30,6 +31,32 @@ pub fn connect(addr: &str) -> std::io::Result<std::net::TcpStream> {
 pub fn send(stream: &mut std::net::TcpStream, buf: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     stream.write_all(buf)
+}
+EOF
+cat > src/auth.rs <<'EOF'
+pub fn check_password(candidate: &str, expected: &str) -> bool {
+    candidate == expected
+}
+
+pub fn session_token(user: &str) -> String {
+    format!("{}-{}", user, "static-salt")
+}
+EOF
+cat > src/cache.rs <<'EOF'
+use std::collections::HashMap;
+
+pub struct Cache {
+    entries: HashMap<String, String>,
+}
+
+impl Cache {
+    pub fn new() -> Self {
+        Cache { entries: HashMap::new() }
+    }
+
+    pub fn get(&self, key: &str) -> String {
+        self.entries.get(key).unwrap().clone()
+    }
 }
 EOF
 Q="${QUALIFIER_BIN:-qualifier}"

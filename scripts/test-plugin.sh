@@ -577,6 +577,79 @@ for case in with_no_record:
 PY
 ok "eval graders: no-skill-fired matches every qual skill; no-record cases also forbid .qual writes"
 
+# --- review-subsystems: no-bare-qualifier grader -----------------------------
+# The plugin keeps its qualifier binary off PATH (scripts/ensure-qualifier.sh),
+# so every call must go through its `exec` form; this grader must catch the
+# bare `qualifier <sub>` form (which would fail outright) without also
+# flagging the wrapper form.
+
+python3 - "$PLUGIN" <<'PY' || fail "review-subsystems no-bare-qualifier grader"
+import json, re, sys
+
+def frontmatter(path):
+    text = open(path).read()
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    assert m, f"{path}: missing frontmatter"
+    fields = {}
+    for line in m.group(1).splitlines():
+        key, _, value = line.partition(": ")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] == "'":
+            value = value[1:-1].replace("''", "'")
+        fields[key.strip()] = value
+    return fields
+
+plugin = sys.argv[1]
+g = frontmatter(f"{plugin}/evals/review-subsystems/graders/no-bare-qualifier.md")
+assert g["type"] == "tool_used" and g["tool"] == "Bash", g
+assert (g.get("min"), g.get("max")) == ("0", "0"), "no-bare-qualifier must be min 0, max 0"
+pat = re.compile(g["input_match"])
+
+bare = [
+    'qualifier record blocker src/net.rs:1 "msg"',
+    "cd /tmp/repo && qualifier threads --all",
+    'qualifier reply <id> "ok"',
+]
+for cmd in bare:
+    assert pat.search(json.dumps({"command": cmd})), f"no-bare-qualifier misses {cmd!r}"
+
+wrapped = [
+    '"/plugin/scripts/ensure-qualifier.sh" exec record blocker src/net.rs:1 "msg"',
+    '"/plugin/scripts/ensure-qualifier.sh" pinned-version',
+]
+for cmd in wrapped:
+    assert not pat.search(json.dumps({"command": cmd})), f"no-bare-qualifier wrongly matches {cmd!r}"
+PY
+ok "review-subsystems: no-bare-qualifier grader catches bare calls, not the wrapper form"
+
+# --- review-subsystems: verified-tag grader ----------------------------------
+
+python3 - "$PLUGIN" <<'PY' || fail "review-subsystems verified-tag grader"
+import re, sys
+
+def frontmatter(path):
+    text = open(path).read()
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    assert m, f"{path}: missing frontmatter"
+    fields = {}
+    for line in m.group(1).splitlines():
+        key, _, value = line.partition(": ")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] == "'":
+            value = value[1:-1].replace("''", "'")
+        fields[key.strip()] = value
+    return fields
+
+plugin = sys.argv[1]
+g = frontmatter(f"{plugin}/evals/review-subsystems/graders/verified-tag.md")
+assert g["type"] == "regex" and g.get("target") == "trace", g
+pat = re.compile(g["pattern"])
+for tag in ("verified:confirmed", "verified:refuted", "verified:downgraded"):
+    assert pat.search(tag), f"verified-tag misses {tag}"
+assert not pat.search("verified:maybe"), "verified-tag must not match an unrecognized verdict"
+PY
+ok "review-subsystems: verified-tag grader matches all three verdict tags"
+
 # --- hooks.json: SessionStart matcher sources -------------------------------
 
 python3 -c "
