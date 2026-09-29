@@ -312,17 +312,58 @@ def batch_keys(qbin, env):
 # --- checks ----------------------------------------------------------------------
 
 
-# Free text in a command: the message positional (its index among the
-# subcommand's positionals) and the values of the free-text flags. Only
-# there does a leftover `<...>` or `…` become sample text.
-MESSAGE_POSITIONAL = {"record": 2, "reply": 1, "resolve": 1}
-FREE_TEXT_FLAGS = {"--detail", "--suggested-fix"}
-# Flags that take no value; every other `--flag` consumes the next token.
-BOOLEAN_FLAGS = {
-    "--stdin", "--dry-run", "--continue-on-error", "--all", "--no-ignore", "--summary",
-    "--pretty", "--unqualified", "--vcs", "--from-tip", "--fail-on-drift", "--subjects-only",
-    "--help", "-h", "--version", "-V",
+# Free text in a command: the MESSAGE positional (found in each
+# subcommand's usage line) and the values of these flags. `--help` doesn't
+# mark a value flag as free text, so this list is kept by hand;
+# command_grammar() checks that every flag in it still takes a value in that
+# subcommand's `--help`.
+FREE_TEXT_FLAGS = {
+    "record": {"--detail", "--suggested-fix"},
+    "reply": {"--detail", "--suggested-fix"},
 }
+OPTION_RE = re.compile(r"^ {2,6}(?:(-[A-Za-z0-9]), )?(--[a-z][a-z0-9-]*)?(?: <[^>]+>)?")
+
+
+def command_grammar(qbin, env):
+    """{subcommand: {"flags": {flag: takes_value}, "message": index or None}}
+    parsed from `qualifier --help` and each subcommand's `--help`: an option
+    line without a `<VALUE>` is a boolean flag. Fails loudly on help it
+    can't parse."""
+    top = run([qbin, "--help"], REPO, env).stdout
+    # `help` is clap's own and has no --help of its own.
+    subs = [s for s in re.findall(r"^  ([a-z][a-z-]*)\s{2,}\S", top, re.M) if s != "help"]
+    if not {"record", "reply", "resolve", "threads"} <= set(subs):
+        raise SystemExit(f"could not read the subcommands from `qualifier --help` (got {subs})")
+    grammar = {}
+    for sub in subs:
+        text = run([qbin, sub, "--help"], REPO, env).stdout
+        usage = re.search(rf"^Usage: qualifier {sub}\b(.*)$", text, re.M)
+        options = text.partition("\nOptions:\n")[2]
+        if not usage or not options:
+            raise SystemExit(f"could not parse `qualifier {sub} --help` (no usage line or Options)")
+        flags = {}
+        for line in options.splitlines():
+            m = OPTION_RE.match(line)
+            if not m or not (m.group(1) or m.group(2)):
+                continue
+            takes_value = bool(re.match(r"^\s*(?:-\w, )?--[\w-]+ <", line))
+            for name in (m.group(1), m.group(2)):
+                if name:
+                    flags[name] = takes_value
+        if flags.get("--help") is not False:
+            raise SystemExit(f"could not parse the options of `qualifier {sub} --help`")
+        positionals = [re.sub(r"[\[\]<>.]", "", w) for w in usage.group(1).split()
+                       if w != "[OPTIONS]"]
+        grammar[sub] = {"flags": flags,
+                        "message": positionals.index("MESSAGE") if "MESSAGE" in positionals else None}
+    for sub, names in FREE_TEXT_FLAGS.items():
+        for name in sorted(names):
+            if grammar.get(sub, {}).get("flags", {}).get(name) is not True:
+                raise SystemExit(f"FREE_TEXT_FLAGS names {sub} {name}, which `qualifier {sub} "
+                                 "--help` does not list as a flag taking a value")
+    return grammar
+
+
 ELLIPSIS_RE = re.compile(r"…|\.\.\.")
 
 
@@ -360,19 +401,23 @@ def prepare_command(ex, fx):
         words.append(tok)
         i += 1
     sub = words[1] if len(words) > 1 else ""
+    # An unknown subcommand or flag is left for the CLI to reject.
+    grammar = fx["grammar"].get(sub, {})
+    flags = grammar.get("flags", {})
     argv, positional, i = [fx["bin"], sub], 0, 2
     while i < len(words):
         tok, value = words[i], None
-        if tok.startswith("-") and tok not in BOOLEAN_FLAGS:
+        flag = tok.partition("=")[0]
+        if tok.startswith("-") and flags.get(flag, False):
             flag, eq, inline = tok.partition("=")
             if eq:
                 tok, value = flag, inline
             elif i + 1 < len(words):
                 value, i = words[i + 1], i + 1
-            free = flag in FREE_TEXT_FLAGS
+            free = flag in FREE_TEXT_FLAGS.get(sub, set())
             parts = [tok] if value is None else [tok, value]
         else:
-            free = not tok.startswith("-") and MESSAGE_POSITIONAL.get(sub) == positional
+            free = not tok.startswith("-") and grammar.get("message") == positional
             if not tok.startswith("-"):
                 positional += 1
             parts, value = [tok], tok
@@ -456,8 +501,9 @@ def main():
         env = child_env(home)
         version = run([qbin, "--version"], REPO, env).stdout.strip()
         keys = batch_keys(qbin, env)
+        grammar = command_grammar(qbin, env)
         repo, opened, sha = build_fixture(qbin, root, env)
-        fx = {"bin": qbin, "scratch": scratch, "open": opened, "sha": sha}
+        fx = {"bin": qbin, "scratch": scratch, "open": opened, "sha": sha, "grammar": grammar}
         before = qual_digest(repo)
         copies = [0]
 
