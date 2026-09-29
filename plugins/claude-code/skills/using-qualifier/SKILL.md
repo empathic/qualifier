@@ -35,9 +35,15 @@ reply there instead of opening a near-duplicate.
 
 ## Kinds
 
-Critique → `concern`. Defect that must be fixed → `blocker`. Idea →
-`suggestion`. Path not taken → `alternative` with a `revisit:` tag. Accepted
-risk → `waiver`. Tags, reasons, and statuses: `qualifier agents conventions`.
+Critique → `concern`. Idea → `suggestion`. Path not taken → `alternative`
+with a `revisit:` tag. Accepted risk → `waiver`. Tags, reasons, and
+statuses: `qualifier agents conventions`.
+
+`blocker` is only for a defect a user would hit before merge, not a risk or
+a style problem. Its `detail` must open with a line starting `Failure:`
+stating the inputs or state that produce the wrong result (e.g. `Failure:
+parse(None) panics at src/x.rs:12`). Without a concrete failure, it's a
+`concern` (a real problem, can follow) or a `suggestion`.
 
 ## Close authority
 
@@ -58,8 +64,10 @@ design decisions belong to humans.
 ## Self-sufficiency
 
 Every record must make sense to someone who never saw this session. Cite
-repository paths, line ranges, and record IDs. Never cite a prompt, a
-brief, "principle N", "as discussed", or anything outside the repository.
+repository paths, line ranges, record IDs, command output or tests, or
+public, stable documentation by URL (e.g. the Claude Code docs). Never cite
+a prompt, a brief, "principle N", "as discussed", or anything else only
+this session saw.
 
 ## Mechanics
 

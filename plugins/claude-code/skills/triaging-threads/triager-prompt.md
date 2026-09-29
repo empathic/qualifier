@@ -15,8 +15,9 @@ propose exactly one outcome:
 ## Evidence
 
 Every proposal carries one line of evidence a stranger can check: a
-`file:line`, a command and its output, or a commit. Do not cite this brief
-or anything outside the repository.
+`file:line`, a command and its output, a commit, or public, stable
+documentation by URL (e.g. the Claude Code docs). Do not cite this brief or
+anything else only this session saw.
 
 ## Final message
 

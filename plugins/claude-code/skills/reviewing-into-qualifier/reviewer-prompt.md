@@ -20,14 +20,18 @@ Collect findings, then write them as one batch:
 2. `{QUALIFIER} record --stdin --dry-run < <file>`, fix any errors, then
    `{QUALIFIER} record --stdin --format json < <file>`.
 
-Use `blocker` only for defects that must be fixed before merge.
+Use `blocker` only for a defect a user would hit before merge; its
+`detail` must open with a line starting `Failure:` stating the inputs or
+state that produce the wrong result. Without a concrete failure, use
+`concern` (a real problem, can follow) or `suggestion`.
 
 ## Every finding must stand alone
 
 A reader who never saw this brief must understand it. Cite files, lines,
-and repository docs. Do not cite this brief, numbered rules, or anything
-outside the repository. Before writing, run `{QUALIFIER} threads <path>`
-and skip anything an open thread already says.
+repository docs, or public, stable documentation by URL (e.g. the Claude
+Code docs). Do not cite this brief, numbered rules, or anything else only
+this session saw. Before writing, run `{QUALIFIER} threads <path>` and skip
+anything an open thread already says.
 
 ## Final message
 
