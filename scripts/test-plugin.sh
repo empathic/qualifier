@@ -488,6 +488,95 @@ for skill, prompts in dispatch.items():
 PY
 ok "prompt placeholders are documented in their dispatching skill, and vice versa"
 
+# --- closing-the-loop: every non-fresh `qualifier review` status ----------
+# `qualifier review` reports `drifted` and `missing` (file gone, or span past
+# the end of the file); the drift step must say what to do with each.
+
+python3 - "$PLUGIN" <<'PY' || fail "closing-the-loop drift step"
+import re, sys
+
+path = f"{sys.argv[1]}/skills/closing-the-loop/SKILL.md"
+text = open(path).read()
+m = re.search(r"\n3\. \*\*Drift\.\*\*(.*?)\n4\. ", text, re.S)
+assert m, f"{path}: missing step 3 (Drift)"
+step = " ".join(m.group(1).split())
+for needle in ("`drifted`", "`missing`", "--supersedes", "--reason obsolete",
+               "close authority", "cross-subject"):
+    assert needle in step, f"{path}: step 3 must mention {needle}"
+PY
+ok "closing-the-loop step 3 covers drifted and missing review results"
+
+# --- eval graders ------------------------------------------------------------
+# Graders use JavaScript regexes over the JSON-encoded tool input; the
+# patterns here are also valid Python regexes with the same meaning.
+
+python3 - "$PLUGIN" <<'PY' || fail "eval graders"
+import json, os, re, sys
+
+plugin = sys.argv[1]
+evals = f"{plugin}/evals"
+skills = sorted(d for d in os.listdir(f"{plugin}/skills") if os.path.isdir(f"{plugin}/skills/{d}"))
+
+def frontmatter(path):
+    text = open(path).read()
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    assert m, f"{path}: missing frontmatter"
+    fields = {}
+    for line in m.group(1).splitlines():
+        key, _, value = line.partition(": ")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] == "'":
+            value = value[1:-1].replace("''", "'")
+        fields[key.strip()] = value
+    return fields
+
+def graders(case):
+    d = f"{evals}/{case}/graders"
+    return {f: frontmatter(f"{d}/{f}") for f in sorted(os.listdir(d)) if f.endswith(".md")}
+
+# The no-skill-fired grader catches every qual skill, prefixed or bare.
+g = frontmatter(f"{evals}/no-qual-files/graders/no-skill-fired.md")
+assert g["type"] == "tool_used" and g["tool"] == "Skill", "no-skill-fired must be a Skill tool_used grader"
+assert (g.get("min"), g.get("max"), g.get("arm")) == ("0", "0", "both"), "no-skill-fired must be min 0, max 0, arm both"
+pat = re.compile(g["input_match"])
+for name in skills:
+    for form in (f"qual:{name}", name):
+        for call in ({"skill": form}, {"skill": form, "args": "src/net.rs"}):
+            encoded = json.dumps(call)
+            assert pat.search(encoded), f"no-skill-fired misses {encoded}"
+for other in ("superpowers:brainstorming", "code-review", "other:closing-the-loop", "closing-the-loop-extra"):
+    encoded = json.dumps({"skill": other})
+    assert not pat.search(encoded), f"no-skill-fired must not match {encoded}"
+
+# Every case with a no-record grader also forbids Write and Edit calls on a
+# .qual file, in the same negation form.
+write_inputs = {
+    "Write": lambda p: {"file_path": p, "content": '{"metabox":"1"}\n'},
+    "Edit": lambda p: {"file_path": p, "old_string": "a", "new_string": "b", "replace_all": False},
+}
+qual_paths = ["/tmp/repo/src/.qual", "src/.qual", "/tmp/repo/docs/cache-design.md.qual", ".qual"]
+other_paths = ["/tmp/repo/docs/cache-design.md", "/tmp/repo/.qualifier", "/tmp/repo/src/.qual.bak",
+               "/tmp/repo/.qual/notes.md"]
+cases = [c for c in sorted(os.listdir(evals)) if os.path.isdir(f"{evals}/{c}/graders")]
+with_no_record = [c for c in cases if "no-record.md" in graders(c)]
+assert {"quiet-typo", "quiet-question", "quiet-explore"} <= set(with_no_record), with_no_record
+for case in with_no_record:
+    gs = graders(case)
+    base = gs["no-record.md"]
+    for tool, make in write_inputs.items():
+        found = [f for f, g in gs.items() if g.get("type") == "tool_used" and g.get("tool") == tool]
+        assert len(found) == 1, f"{case}: expected one {tool} grader, found {found}"
+        g = gs[found[0]]
+        assert (g.get("min"), g.get("max")) == ("0", "0"), f"{case}/{found[0]}: must be min 0, max 0"
+        assert g.get("arm") == base.get("arm"), f"{case}/{found[0]}: arm must match no-record.md"
+        pat = re.compile(g["input_match"])
+        for p in qual_paths:
+            assert pat.search(json.dumps(make(p))), f"{case}/{found[0]} misses {tool} on {p}"
+        for p in other_paths:
+            assert not pat.search(json.dumps(make(p))), f"{case}/{found[0]} must not match {tool} on {p}"
+PY
+ok "eval graders: no-skill-fired matches every qual skill; no-record cases also forbid .qual writes"
+
 # --- hooks.json: SessionStart matcher sources -------------------------------
 
 python3 -c "

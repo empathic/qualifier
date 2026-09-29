@@ -35,6 +35,21 @@ Run this checklist before you say the work is done.
    and stating the record was re-anchored unchanged — re-anchoring a
    drifted span is allowed; rewording someone else's finding is not. If it
    no longer applies because you fixed it, step 1 covers it.
+   A `missing` result means the file is gone (`detail.reason` starts
+   `file not found`) or the span now runs past the end of the file. Find the
+   record the same way and look for where the annotated code went:
+   - **Moved within the same file:** re-anchor it on the new lines exactly
+     as for `drifted` above.
+   - **Moved to another file:** `--supersedes` cannot cross subjects
+     (cross-subject supersession is rejected). Reply on the thread naming
+     the new `<path>:<start>:<end>` and let a human decide whether to
+     re-record it there.
+   - **Deleted, and the finding no longer applies:** resolve it with
+     `qualifier resolve <root.id> "<what removed it>" --reason obsolete`
+     only within close authority — your session issued it, or your own
+     commit deleted the code and you cite that evidence with
+     `--ref git:<sha>` (commit the `.qual` change separately, as in step 1).
+     Otherwise reply saying what happened and leave the close to a human.
 4. **Decisions made in chat.** Anything the user and you settled in this
    session that is not in a record: reply on the relevant thread, or record
    an `alternative`/`waiver` on the spec (`qual:recording-design-decisions`).
