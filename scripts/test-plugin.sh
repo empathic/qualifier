@@ -384,7 +384,10 @@ for name in sorted(expected):
         assert ref in expected, f"{path}: references unknown skill qual:{ref}"
     for support in re.findall(r"`([a-z-]+-prompt\.md)`", body):
         assert os.path.exists(f"{skills_dir}/{name}/{support}"), f"{path}: missing {support}"
-    assert not re.search(r"\bTBD\b|(?<!\$)\{[A-Z_ ]+\}", body), f"{path}: placeholder text"
+    # "Filling the brief" sections document placeholder tokens verbatim on
+    # purpose; check the rest of the body for accidental leftover ones.
+    body_outside_filling = re.sub(r"## Filling the brief\n.*?(\n## |\Z)", "", body, flags=re.S)
+    assert not re.search(r"\bTBD\b|(?<!\$)\{[A-Z_ ]+\}", body_outside_filling), f"{path}: placeholder text"
     for prompt_path in sorted(glob.glob(f"{skills_dir}/{name}/*-prompt.md")):
         prompt_text = open(prompt_path).read()
         for topic in re.findall(r"qualifier agents ([a-z_-]+)", prompt_text):
@@ -400,12 +403,87 @@ PY
 ok "skills: frontmatter, cited topics, cross-references, supporting files, size"
 
 # The plugin no longer consults PATH, installs to ~/.local/bin, or has a
-# minimum version; nothing under plugins/ may still say so.
-if stale="$(grep -rnE 'MIN_VERSION|min-version|QUALIFIER_INSTALL_DIR|\.local/bin|not on PATH' "$PLUGIN")"; then
+# minimum version; nothing under plugins/ may still say so. .qual files hold
+# review-finding prose (data, not plugin statements), so they're excluded.
+if stale="$(grep -rnE --exclude='.qual' 'MIN_VERSION|min-version|QUALIFIER_INSTALL_DIR|\.local/bin|not on PATH' "$PLUGIN")"; then
     fail "stale PATH/install statements under $PLUGIN:
 $stale"
 fi
 ok "no stale PATH, ~/.local/bin, or minimum-version statements under $PLUGIN"
+
+# --- subagent prompts: placeholders, not bare `qualifier` ------------------
+# Subagent prompt files never assume `qualifier` is on PATH (a subagent gets
+# no wrapper instruction), so every invocation must use the `{QUALIFIER}`
+# placeholder, filled in by the dispatching skill before dispatch.
+
+python3 - "$PLUGIN" <<'PY' || fail "bare qualifier invocations in prompt files"
+import glob, re, sys
+
+plugin = sys.argv[1]
+subcommands = (
+    "record|reply|resolve|emit|show|ls|threads|praise|review|diff|compact"
+    "|agents|init"
+)
+pattern = re.compile(r"\bqualifier\s+(?:" + subcommands + r")\b")
+
+bad = []
+for path in sorted(glob.glob(f"{plugin}/skills/*/*-prompt.md")):
+    text = open(path).read()
+    for m in pattern.finditer(text):
+        bad.append(f"{path}: {m.group(0)!r}")
+assert not bad, "bare qualifier invocations (use {QUALIFIER} instead):\n" + "\n".join(bad)
+PY
+ok "no bare qualifier invocations in *-prompt.md files"
+
+# Every {PLACEHOLDER} a prompt uses is documented in its dispatching skill's
+# "Filling the brief" section, and every placeholder documented there is used
+# by at least one of that skill's prompts.
+python3 - "$PLUGIN" <<'PY' || fail "prompt placeholder documentation"
+import re, sys
+
+plugin = sys.argv[1]
+skills_dir = f"{plugin}/skills"
+
+# Explicit prompt -> dispatching skill map.
+dispatch = {
+    "reviewing-into-qualifier": ["reviewer-prompt.md", "verifier-prompt.md"],
+    "triaging-threads": ["triager-prompt.md"],
+}
+
+placeholder_re = re.compile(r"\{[A-Z][A-Z_ a-z]*\}")
+
+for skill, prompts in dispatch.items():
+    skill_path = f"{skills_dir}/{skill}/SKILL.md"
+    skill_text = open(skill_path).read()
+    m = re.search(r"## Filling the brief\n(.*?)(\n## |\Z)", skill_text, re.S)
+    assert m, f"{skill_path}: missing a 'Filling the brief' section"
+    documented = set(placeholder_re.findall(m.group(1)))
+
+    used = set()
+    for prompt in prompts:
+        prompt_path = f"{skills_dir}/{skill}/{prompt}"
+        text = open(prompt_path).read()
+        found = set(placeholder_re.findall(text))
+        used |= found
+        undocumented = found - documented
+        assert not undocumented, f"{prompt_path}: undocumented placeholders {undocumented}"
+
+    unused = documented - used
+    assert not unused, f"{skill_path}: documents unused placeholders {unused}"
+PY
+ok "prompt placeholders are documented in their dispatching skill, and vice versa"
+
+# --- hooks.json: SessionStart matcher sources -------------------------------
+
+python3 -c "
+import json
+data = json.load(open('$PLUGIN/hooks/hooks.json'))
+matcher = data['hooks']['SessionStart'][0]['matcher']
+sources = matcher.split('|')
+missing = [s for s in ('startup', 'resume', 'clear', 'compact', 'fork') if s not in sources]
+assert not missing, f'matcher {matcher!r} is missing {missing}'
+" || fail "hooks.json SessionStart matcher must include startup, resume, clear, compact, fork"
+ok "hooks.json SessionStart matcher includes startup, resume, clear, compact, fork"
 
 # --- managed install against a stubbed release -----------------------------
 # These run copies of the wrapper pinned to fixture releases (9.9.9 and

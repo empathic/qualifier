@@ -34,6 +34,24 @@ A verification is a reply, `confirmed` or `refuted`, with evidence: a
 `file:line`, a command and its output, or a test. Refuted findings you
 issued in this session are resolved `--reason invalid`.
 
+## Filling the brief
+
+`reviewer-prompt.md` and `verifier-prompt.md` are complete templates for a
+subagent that starts with none of this session's context. Fill every
+placeholder before dispatch; never send a brief with an unfilled `{…}`:
+
+- `{QUALIFIER}` — the exact command the session context gives for running
+  qualifier (the plugin's wrapper `exec` form), copied verbatim. If you are
+  running a qualifier you installed yourself, its path instead.
+- `{SCRATCH}` — a directory outside the repository created for this run
+  (e.g. `mktemp -d`), so a batch file can never land in the working tree.
+- `{SCOPE}` — what to review: a path, glob, or description of the subsystem
+  (`reviewer-prompt.md` only).
+- `{TAG}` — the tag scoped to this review (`reviewer-prompt.md` only); the
+  same one for every reviewer subagent in this review.
+- `{IDS}` — the finding IDs this subagent verifies (`verifier-prompt.md`
+  only).
+
 ## Never
 
 - Put a finding only in chat or a PR comment.

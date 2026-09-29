@@ -14,10 +14,11 @@ change, then clarity. Skip style nits a formatter would fix.
 
 Collect findings, then write them as one batch:
 
-1. Write a JSONL file with the Write tool, one line per finding:
+1. Write a JSONL file under `{SCRATCH}` — never inside the repository —
+   with the Write tool, one line per finding:
    `{"kind": "<blocker|concern|suggestion>", "location": "<path>:<start>:<end>", "message": "<one-line claim>", "detail": "<why it matters, with evidence>", "suggested_fix": "<concrete change>", "tags": ["review", "{TAG}"]}`
-2. `qualifier record --stdin --dry-run < <file>`, fix any errors, then
-   `qualifier record --stdin --format json < <file>`.
+2. `{QUALIFIER} record --stdin --dry-run < <file>`, fix any errors, then
+   `{QUALIFIER} record --stdin --format json < <file>`.
 
 Use `blocker` only for defects that must be fixed before merge.
 
@@ -25,8 +26,8 @@ Use `blocker` only for defects that must be fixed before merge.
 
 A reader who never saw this brief must understand it. Cite files, lines,
 and repository docs. Do not cite this brief, numbered rules, or anything
-outside the repository. Before writing, run `qualifier threads <path>` and
-skip anything an open thread already says.
+outside the repository. Before writing, run `{QUALIFIER} threads <path>`
+and skip anything an open thread already says.
 
 ## Final message
 

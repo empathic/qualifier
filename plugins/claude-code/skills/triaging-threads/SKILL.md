@@ -24,6 +24,18 @@ allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qual
 Check every claim against the code. For large sets, dispatch subagents with
 `triager-prompt.md`, one subsystem each.
 
+## Filling the brief
+
+`triager-prompt.md` is a complete template for a subagent that starts with
+none of this session's context. Fill every placeholder before dispatch;
+never send a brief with an unfilled `{…}`:
+
+- `{QUALIFIER}` — the exact command the session context gives for running
+  qualifier (the plugin's wrapper `exec` form), copied verbatim. If you are
+  running a qualifier you installed yourself, its path instead.
+- `{IDS or SCOPE}` — the thread IDs or scope (path, glob, `--kind`, `--tag`)
+  this subagent triages.
+
 ## Approval
 
 Closes outside close authority (`qualifier agents conventions`) go to the
