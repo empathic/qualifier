@@ -141,6 +141,19 @@ populate_managed() {
     record_install_hash "$1/$PINNED"
 }
 
+# A uname shim that reports FAKE_UNAME_S for -s and FAKE_UNAME_M for -m, so
+# every platform mapping in the wrapper runs on any host.
+UNAME_SHIM="$SANDBOX/uname-shim"
+mkdir -p "$UNAME_SHIM"
+cat >"$UNAME_SHIM/uname" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    -m) echo "$FAKE_UNAME_M" ;;
+    *) echo "$FAKE_UNAME_S" ;;
+esac
+EOF
+chmod +x "$UNAME_SHIM/uname"
+
 # --- ensure-qualifier.sh: modes and $QUALIFIER_BIN -------------------------
 
 # W1. pinned-version resolves nothing: it works with an empty PATH.
@@ -362,8 +375,23 @@ ok "hook uses the managed install"
 out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$SANDBOX/hook-empty-home" PATH="$HOOK_PATH")" \
     || fail "hook must exit 0 when the binary cannot be installed"
 ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not valid JSON without a binary: $out"
-case "$ctx" in *"cargo install qualifier --version $PINNED"*) ;; *) fail "context must give the pinned install command: $ctx" ;; esac
+case "$ctx" in *"cargo install qualifier --version $PINNED --locked"*) ;; *) fail "context must give the pinned install command: $ctx" ;; esac
+case "$ctx" in *"could not install its pinned qualifier release"*"QUALIFIER_BIN"*) ;; *) fail "context must report the failed install and name QUALIFIER_BIN: $ctx" ;; esac
+case "$ctx" in *"no prebuilt"*) fail "a supported platform must not be reported as lacking a prebuilt binary: $ctx" ;; esac
 ok "hook degrades gracefully without a binary or network"
+
+# H4b. On a platform with no prebuilt release, the context says so and gives
+#      the whole manual route: cargo install, then QUALIFIER_BIN (the wrapper
+#      never looks on PATH, so the install alone would not be used).
+out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$SANDBOX/hook-unsupported-home" \
+    FAKE_UNAME_S=Darwin FAKE_UNAME_M=x86_64 PATH="$UNAME_SHIM:$HOOK_PATH")" \
+    || fail "hook must exit 0 on an unsupported platform"
+ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not valid JSON on an unsupported platform: $out"
+case "$ctx" in *"no prebuilt qualifier binary for this platform"*) ;; *) fail "context must say there is no prebuilt binary: $ctx" ;; esac
+case "$ctx" in *"cargo install qualifier --version $PINNED --locked"*"QUALIFIER_BIN"*) ;; *) fail "context must give the cargo install and QUALIFIER_BIN steps: $ctx" ;; esac
+case "$ctx" in *"not installed"*) fail "context must not call the platform's problem 'not installed': $ctx" ;; esac
+[ ! -e "$SANDBOX/hook-unsupported-home" ] || fail "hook on an unsupported platform must not create the plugin home"
+ok "hook on an unsupported platform names the cargo install and QUALIFIER_BIN"
 
 # H5. Works without VCS markers (project dir is the root).
 NOVCS="$SANDBOX/novcs"
@@ -1039,19 +1067,6 @@ EOF
 chmod +x "$CURL_STUB/curl"
 SAFE_PATH="$CURL_STUB:$INTERP:/usr/bin:/bin:/usr/sbin:/sbin"
 
-# A uname shim that reports FAKE_UNAME_S for -s and FAKE_UNAME_M for -m, so
-# every platform mapping in resolve_target runs on any host.
-UNAME_SHIM="$SANDBOX/uname-shim"
-mkdir -p "$UNAME_SHIM"
-cat >"$UNAME_SHIM/uname" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-    -m) echo "$FAKE_UNAME_M" ;;
-    *) echo "$FAKE_UNAME_S" ;;
-esac
-EOF
-chmod +x "$UNAME_SHIM/uname"
-
 # P1. Every platform mapping in the shipped wrapper resolves to its release
 #     target, and that target has a 64-hex-digit embedded checksum.
 # uname-s uname-m target checksum-variable
@@ -1073,10 +1088,13 @@ while read -r os arch target var; do
     esac
     [ "${#sha}" -eq 64 ] || fail "$os-$arch: checksum for $target is ${#sha} chars, not 64"
     grep -q "^${var}=\"${sha}\"$" "$ENSURE" || fail "$os-$arch: $target's checksum does not come from $var"
+    got="$(FAKE_UNAME_S="$os" FAKE_UNAME_M="$arch" PATH="$UNAME_SHIM:$INTERP:/usr/bin:/bin" "$ENSURE" prebuilt-target)" \
+        || fail "$os-$arch: prebuilt-target failed"
+    [ "$got" = "$target" ] || fail "$os-$arch: prebuilt-target printed '$got', not $target"
 done <<EOF
 $PLATFORMS
 EOF
-ok "every platform mapping resolves to its target with a 64-hex-digit embedded checksum"
+ok "every platform mapping resolves to its target (also via prebuilt-target) with a 64-hex-digit embedded checksum"
 
 # P2. The full download/verify/install path for each target, whatever the
 #     host: the wrapper fetches that target's tarball, verifies it against
@@ -1109,11 +1127,13 @@ for platform in "Darwin x86_64" "FreeBSD amd64" "Linux armv7l"; do
     err="$(FAKE_UNAME_S="$os" FAKE_UNAME_M="$arch" QUALIFIER_PLUGIN_HOME="$ph" \
         PATH="$UNAME_SHIM:$SAFE_PATH" "$ENSURE" 2>&1 >/dev/null)" \
         && fail "$os-$arch: an unsupported platform must fail"
-    case "$err" in *"cargo install qualifier --version $PINNED"*) ;; *) fail "$os-$arch: expected the cargo fallback, got: $err" ;; esac
+    case "$err" in *"cargo install qualifier --version $PINNED --locked"*"QUALIFIER_BIN"*) ;; *) fail "$os-$arch: expected the cargo fallback and QUALIFIER_BIN, got: $err" ;; esac
+    FAKE_UNAME_S="$os" FAKE_UNAME_M="$arch" PATH="$UNAME_SHIM:$SAFE_PATH" "$ENSURE" prebuilt-target >/dev/null 2>&1 \
+        && fail "$os-$arch: prebuilt-target must fail on an unsupported platform"
     [ ! -e "$CURL_MARKER" ] || fail "$os-$arch: an unsupported platform must not download"
     [ ! -e "$ph" ] || fail "$os-$arch: an unsupported platform must not create the plugin home"
 done
-ok "an unsupported platform falls back to cargo without downloading"
+ok "an unsupported platform falls back to cargo without downloading; prebuilt-target fails"
 
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)              TARGET="aarch64-apple-darwin";      SHAVAR="SHA256_AARCH64_APPLE_DARWIN" ;;

@@ -15,20 +15,35 @@ consult threads before editing, and hand off threads a fresh session can act on.
 The plugin keeps its own copy of the qualifier release it pins, under
 `~/.local/share/qualifier/plugin/<version>/` (`$XDG_DATA_HOME/qualifier/plugin/`
 when `XDG_DATA_HOME` is set). It downloads that release on first use,
-verified against checksums shipped in the plugin, and records the
-binary's sha256 beside it; a binary that no longer matches that record is
-reinstalled before it is run. It installs the new
-release automatically when a plugin update pins a newer one, removing
-older versions' directories (never a newer one). It never runs, replaces, or installs over a
-`qualifier` on your `PATH`, so the one you use in your shell can be any
-version. Platforms without a prebuilt binary get a
-`cargo install qualifier --version …` line.
+verified against checksums shipped in the plugin, and records the binary's
+sha256 beside it; a binary that no longer matches that record is
+reinstalled before it is run. It installs the new release automatically
+when a plugin update pins a newer one, removing older versions'
+directories (never a newer one). It never runs, replaces, or installs over
+a `qualifier` on your `PATH`, so the one you use in your shell can be any
+version.
 
 - `QUALIFIER_BIN=/abs/path/to/qualifier` makes the plugin run that binary
-  instead (for a development build).
+  instead (a development build, or a source install on a platform without
+  a prebuilt release; see below).
 - `QUALIFIER_PLUGIN_HOME=/some/dir` relocates the plugin's installs (an
   absolute path other than `/`; anything else falls back to the default
   with a warning).
+
+Prebuilt releases cover macOS on Apple silicon and Linux on x86_64 and
+aarch64. On any other platform, install the pinned version from source,
+then point the plugin at it with `QUALIFIER_BIN` (a `qualifier` on `PATH`
+is not used):
+
+```bash
+cargo install qualifier --version <pinned> --locked
+```
+
+and set `QUALIFIER_BIN` to the installed binary's absolute path (for
+example `$HOME/.cargo/bin/qualifier`, written out in full) in your shell
+profile, or under `env` in Claude Code's `settings.json`. `<pinned>` is
+`PINNED_VERSION` in `scripts/ensure-qualifier.sh`; in a repository with
+`.qual` files, the SessionStart hook gives the exact command.
 
 ## What it does
 
@@ -70,7 +85,7 @@ environment variables (`PATH`, locale, provider credentials, `EVAL_*`), so
 `QUALIFIER_BIN` does not reach it. The plugin installs its pinned
 qualifier release itself inside the session; no `PATH` setup is needed,
 but the eval sandbox must allow that download (from GitHub releases), or
-runs will report qualifier as not installed. The `scaffold_script` runs
+runs will report that the plugin could not install qualifier. The `scaffold_script` runs
 on the host, outside that sandbox, and needs a qualifier there to seed the
 fixture threads: it uses `QUALIFIER_BIN` if set, else `qualifier` on
 `PATH`. `Bash`, `Write`, and `Edit` are gated tools: listing them in a

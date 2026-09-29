@@ -110,11 +110,17 @@ skill_body="$(awk '
 
 BIN="$("$WRAPPER" 2>/dev/null)" || BIN=""
 pinned_version="$("$WRAPPER" pinned-version 2>/dev/null || true)"
-install_cmd="cargo install qualifier${pinned_version:+ --version $pinned_version}"
+
+# The manual route: the wrapper never looks on PATH, so a cargo-installed
+# qualifier is used only once QUALIFIER_BIN names it.
+cargo_bin="${CARGO_HOME:-${HOME:-~}/.cargo}/bin/qualifier"
+manual_install="Ask the user to run \`cargo install qualifier${pinned_version:+ --version $pinned_version} --locked\`, then set QUALIFIER_BIN to the installed binary's absolute path (\`${cargo_bin}\` by default) in their shell profile or under \`env\` in Claude Code settings, and start a new session. A qualifier on PATH is not used."
 
 summary=""
-if [ -z "$BIN" ]; then
-    call_line="qualifier is not installed and the pinned release could not be installed here. Ask the user to run \`${install_cmd}\`."
+if [ -z "$BIN" ] && ! "$WRAPPER" prebuilt-target >/dev/null 2>&1; then
+    call_line="There is no prebuilt qualifier binary for this platform, so the plugin cannot install its pinned release. ${manual_install}"
+elif [ -z "$BIN" ]; then
+    call_line="The plugin could not install its pinned qualifier release here (download or checksum failed; it retries next session). If that persists (e.g. no network access to GitHub releases): ${manual_install}"
 else
     call_line="Run qualifier as \`\"$WRAPPER\" exec <args>\` (pre-approved in every qual skill); the qual skills write \`qualifier\` for short. A \`qualifier\` on your PATH, if any, is not used and may be a different version."
     summary="$(bounded_summary "$BIN")"

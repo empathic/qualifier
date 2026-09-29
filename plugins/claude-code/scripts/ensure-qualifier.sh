@@ -7,6 +7,9 @@
 #   ensure-qualifier.sh                 print the absolute binary path on stdout
 #   ensure-qualifier.sh exec <args...>  resolve, then run `qualifier <args...>`
 #   ensure-qualifier.sh pinned-version  print PINNED_VERSION (resolves nothing)
+#   ensure-qualifier.sh prebuilt-target print this platform's release target;
+#                                       exit 1 when the pinned release has no
+#                                       verified binary for it (resolves nothing)
 #
 # Everything except the resolved path / exec'd command output goes to stderr.
 #
@@ -176,19 +179,29 @@ check_dependencies() {
     fi
 }
 
+# The manual route, which also applies when a download fails: this script
+# never looks on PATH, so a cargo-installed qualifier is used only once
+# QUALIFIER_BIN names it.
 cargo_fallback() {
     log "Error: $1."
-    log "Install qualifier manually instead: cargo install qualifier --version ${PINNED_VERSION}"
+    log "Install qualifier from source instead: cargo install qualifier --version ${PINNED_VERSION} --locked"
+    log "then set QUALIFIER_BIN to the installed binary's absolute path (${CARGO_HOME:-${HOME:-~}/.cargo}/bin/qualifier by default)"
+    log "in your shell profile or under \"env\" in Claude Code settings. A qualifier on PATH is not used."
     exit 1
 }
 
-resolve_target() {
+# Prints this platform's release target; fails when there is none.
+release_target() {
     case "$(uname -s)-$(uname -m)" in
         Darwin-arm64)              echo "aarch64-apple-darwin" ;;
         Linux-x86_64)              echo "x86_64-unknown-linux-musl" ;;
         Linux-aarch64|Linux-arm64) echo "aarch64-unknown-linux-gnu" ;;
-        *) cargo_fallback "no prebuilt binary for $(uname -s)-$(uname -m)" ;;
+        *) return 1 ;;
     esac
+}
+
+resolve_target() {
+    release_target || cargo_fallback "no prebuilt qualifier binary for $(uname -s)-$(uname -m)"
 }
 
 expected_sha256() {
@@ -355,9 +368,15 @@ main() {
             echo "$PINNED_VERSION"
             return 0
             ;;
+        prebuilt-target)
+            local target
+            target="$(release_target)" && [ -n "$(expected_sha256 "$target")" ] || exit 1
+            echo "$target"
+            return 0
+            ;;
         exec|"") ;;
         *)
-            log "usage: ensure-qualifier.sh [exec <args...> | pinned-version]"
+            log "usage: ensure-qualifier.sh [exec <args...> | pinned-version | prebuilt-target]"
             exit 2
             ;;
     esac
