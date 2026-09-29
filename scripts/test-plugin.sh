@@ -357,24 +357,78 @@ case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call li
 case "$ctx" in *'Call it as `qualifier`'*) fail "context must not route calls to the qualifier on PATH: $ctx" ;; esac
 ok "hook ignores a qualifier on PATH and gives the wrapper call line"
 
-# H8. A slow summary is dropped instead of delaying the session.
+# H8. A slow summary is dropped instead of delaying the session, and
+#     everything it started is killed. The fixture would run for a minute;
+#     the hook's budget is two seconds, and the bound asserted here is
+#     loose enough for a loaded machine while still catching a hook that
+#     waits for the summary (or for a sleep-counting loop, H8b). The fixture
+#     records its own PID and a child's, which must be gone afterwards.
 SLOW="$SANDBOX/slow"
 mkdir -p "$SLOW"
-cat >"$SLOW/qualifier" <<'EOF'
+cat >"$SLOW/qualifier" <<EOF
 #!/usr/bin/env bash
-case "${1:-}" in
+case "\${1:-}" in
     --version) echo "qualifier 9.9.9" ;;
-    threads) sleep 5; echo "qualifier: too late" ;;
+    threads)
+        echo "\$\$" >"$SLOW/summary.pid"
+        /bin/sleep 60 &
+        echo "\$!" >"$SLOW/child.pid"
+        /bin/sleep 60
+        echo "qualifier: too late" ;;
 esac
 EOF
 chmod +x "$SLOW/qualifier"
-start="$(date +%s)"
-out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$SLOW/qualifier" PATH="$HOOK_PATH")"
-elapsed=$(( $(date +%s) - start ))
-[ "$elapsed" -lt 4 ] || fail "hook waited ${elapsed}s for a slow summary"
-ctx="$(printf '%s' "$out" | context_of)"
-case "$ctx" in *"too late"*) fail "a late summary must be dropped" ;; esac
-ok "hook drops a summary that misses its one-second budget"
+
+# Succeeds once no PID listed in the given files is alive, within about 5s
+# (a SIGKILLed process can take a moment to be reaped under load).
+pids_gone() {
+    local pid file
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+        local alive=""
+        for file in "$@"; do
+            pid="$(cat "$file" 2>/dev/null)" || continue
+            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=1
+        done
+        [ -z "$alive" ] && return 0
+        sleep 0.2
+    done
+    return 1
+}
+
+run_slow_summary() {
+    # $1 is the PATH to give the hook.
+    rm -f "$SLOW/summary.pid" "$SLOW/child.pid"
+    start="$(date +%s)"
+    out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$SLOW/qualifier" PATH="$1")"
+    elapsed=$(( $(date +%s) - start ))
+    [ -s "$SLOW/summary.pid" ] || fail "the slow summary never started"
+    ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not the expected JSON: $out"
+    case "$ctx" in *"too late"*) fail "a late summary must be dropped" ;; esac
+    if ! pids_gone "$SLOW/summary.pid" "$SLOW/child.pid"; then
+        kill -KILL "$(cat "$SLOW/summary.pid")" "$(cat "$SLOW/child.pid")" 2>/dev/null
+        fail "the slow summary or its child is still running after the hook returned"
+    fi
+}
+
+run_slow_summary "$HOOK_PATH"
+[ "$elapsed" -lt 15 ] || fail "hook waited ${elapsed}s for a slow summary"
+ok "hook drops a summary that misses its budget (${elapsed}s) and kills everything it started"
+
+# H8b. The budget is wall-clock time, not a count of polling sleeps: with a
+#      `sleep` whose every start costs a second (as an exec can on a loaded
+#      machine), the hook still returns in about budget + one second, where
+#      counting ten 0.1s sleeps would take over ten.
+SLOW_EXEC="$SANDBOX/slow-exec"
+mkdir -p "$SLOW_EXEC"
+cat >"$SLOW_EXEC/sleep" <<'EOF'
+#!/usr/bin/env bash
+/bin/sleep 1
+exec /bin/sleep "$@"
+EOF
+chmod +x "$SLOW_EXEC/sleep"
+run_slow_summary "$SLOW_EXEC:$HOOK_PATH"
+[ "$elapsed" -lt 9 ] || fail "with slow process starts, the hook waited ${elapsed}s: its budget is not wall-clock time"
+ok "the summary budget is wall-clock time even when every sleep starts slowly (${elapsed}s)"
 
 # H9. A summary containing raw control characters (an ANSI color escape, a
 # form feed) must not break the JSON: they are stripped before it is quoted.

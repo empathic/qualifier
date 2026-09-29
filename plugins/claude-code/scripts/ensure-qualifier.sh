@@ -319,6 +319,8 @@ install_qualifier() {
         if stale="$(mktemp -d "$PLUGIN_HOME/.stale.XXXXXX" 2>/dev/null)"; then
             # A concurrent session may have installed a valid one since the
             # check above: re-check just before moving, and keep it if so.
+            # This narrows the race but cannot close it; the validate-and-retry
+            # after the rename below is the safety net.
             if ! is_valid_install "$dest"; then
                 mv "$dest" "$stale/" >/dev/null 2>&1 || true
             fi

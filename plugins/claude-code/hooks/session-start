@@ -43,22 +43,36 @@ has_qual_files() {
     [ -n "$hit" ]
 }
 
-# `threads --summary` with a one-second budget; prints nothing if it isn't
-# done in time.
+# `threads --summary` with a wall-clock budget of SUMMARY_BUDGET seconds;
+# prints nothing if it isn't done in time.
+#
+# A watchdog (one `sleep`, so load delays only that one exec) kills the
+# summary when the budget runs out, while this shell blocks in `wait`, which
+# returns as soon as the summary exits: a quick summary returns at once, a
+# slow one after the budget. $SECONDS is not used: it is whole seconds only.
+#
+# Monitor mode (set -m; this runs in a command-substitution subshell, so it
+# stays local) starts each background job in its own process group, so the
+# watchdog's kill reaches everything the summary started, not only the
+# direct child, and killing the watchdog's group also stops its `sleep`.
+# SIGKILL, so nothing can ignore it and `wait` cannot hang. Both jobs have
+# stdout redirected away from the command substitution, which would
+# otherwise wait for them to close it.
+SUMMARY_BUDGET=2
 bounded_summary() {
-    local out pid
+    local out pid watchdog
     out="$(mktemp)" || return 0
-    (cd "$ROOT" && exec "$1" threads --summary >"$out" 2>/dev/null) &
+    set -m
+    (cd "$ROOT" && exec "$1" threads --summary) </dev/null >"$out" 2>/dev/null &
     pid=$!
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        if ! kill -0 "$pid" 2>/dev/null; then
-            wait "$pid" 2>/dev/null && cat "$out"
-            rm -f "$out"
-            return 0
-        fi
-        sleep 0.1
-    done
-    kill "$pid" 2>/dev/null
+    (sleep "$SUMMARY_BUDGET"; kill -KILL -- -"$pid") </dev/null >/dev/null 2>&1 &
+    watchdog=$!
+    if wait "$pid" 2>/dev/null; then
+        cat "$out"
+    fi
+    kill -KILL -- -"$watchdog" 2>/dev/null
+    wait "$watchdog" 2>/dev/null
+    set +m
     rm -f "$out"
 }
 
