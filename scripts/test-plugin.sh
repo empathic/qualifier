@@ -266,744 +266,6 @@ out="$(env -u QUALIFIER_PLUGIN_HOME -u XDG_DATA_HOME HOME=/ "$BASH" -c \
 [ "$out" = "/.local/share/qualifier/plugin" ] || fail "HOME=/: expected /.local/share/qualifier/plugin, got $out"
 ok "HOME=/ gives the default plugin home /.local/share/qualifier/plugin"
 
-# --- SessionStart hook -----------------------------------------------------
-
-run_hook() {
-    # Runs the hook as Claude Code would, with a project directory. The
-    # plugin root is captured before the cd below: with `cd ... && env
-    # VAR="$PWD/..."`, bash expands the env command's arguments only after
-    # `cd` has already run, so an inline `$PWD` there would resolve to the
-    # project sandbox instead of the plugin directory.
-    local project="$1" plugin_root="$PWD/$PLUGIN"; shift
-    (cd "$project" && env CLAUDE_PROJECT_DIR="$project" CLAUDE_PLUGIN_ROOT="$plugin_root" "$@" "$HOOK" </dev/null)
-}
-
-context_of() {
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'
-}
-
-# Succeeds once no PID listed in the given files is running, within about
-# 5s (a SIGKILLed process can take a moment to be reaped under load). A
-# zombie counts as gone: in a container whose PID 1 does not reap, a killed
-# orphan stays a zombie forever.
-pids_gone() {
-    local pid file state alive
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
-        alive=""
-        for file in "$@"; do
-            pid="$(cat "$file" 2>/dev/null)" || continue
-            [ -n "$pid" ] || continue
-            # -o stat= works with both BSD and procps ps; empty when gone.
-            state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')"
-            case "$state" in ""|Z*) ;; *) alive=1 ;; esac
-        done
-        [ -z "$alive" ] && return 0
-        sleep 0.2
-    done
-    return 1
-}
-
-# The call line every hook context with a binary must give.
-CALL_FORM="Run qualifier as \`\"$PWD/$PLUGIN/scripts/ensure-qualifier.sh\" exec <args>\`"
-
-HOOK_PATH="$NOACCESS:$INTERP:/usr/bin:/bin"
-
-# H1. Silent in a repository without .qual files.
-NOQUAL="$SANDBOX/noqual"
-mkdir -p "$NOQUAL/.git"
-out="$(run_hook "$NOQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
-[ -z "$out" ] || fail "hook must be silent without .qual files, got: $out"
-ok "hook is silent in repositories without .qual files"
-
-# H2. Injects the skill, the wrapper call line, and the summary in a
-#     repository with .qual files.
-WITHQUAL="$SANDBOX/withqual"
-mkdir -p "$WITHQUAL/.git" "$WITHQUAL/src"
-echo '{}' >"$WITHQUAL/src/.qual"
-# Shims first on the hook's PATH, for the fast-path checks below:
-#   sleep     records its PID and, only if it runs to the end, writes
-#             sleep.expired (the summary budget elapsed);
-#   cat, rm   record their process group and their parent's, so a
-#             foreground command run in a group of its own (monitor mode
-#             left on, which hands a terminal's foreground to that group)
-#             shows up even without a terminal.
-FASTPATH="$SANDBOX/fastpath"
-mkdir -p "$FASTPATH/bin"
-cat >"$FASTPATH/bin/sleep" <<EOF
-#!/usr/bin/env bash
-echo "\$\$" >"$FASTPATH/sleep.pid"
-/bin/sleep "\$@"
-touch "$FASTPATH/sleep.expired"
-EOF
-cat >"$FASTPATH/bin/cat" <<EOF
-#!/usr/bin/env bash
-echo "\$(ps -o pgid= -p \$\$ | tr -d ' ') \$(ps -o pgid= -p \$PPID | tr -d ' ')" >>"$FASTPATH/pgids"
-exec /bin/\$(basename "\$0") "\$@"
-EOF
-chmod +x "$FASTPATH/bin/sleep" "$FASTPATH/bin/cat"
-ln -s cat "$FASTPATH/bin/rm"
-out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$FASTPATH/bin:$HOOK_PATH")"
-ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not the expected JSON: $out"
-[ -s "$FASTPATH/sleep.pid" ] || fail "the summary budget's sleep never started"
-[ ! -e "$FASTPATH/sleep.expired" ] || fail "a fast summary made the hook wait out the budget"
-pids_gone "$FASTPATH/sleep.pid" || fail "the summary budget's sleep outlived the hook"
-# A leaked sleep would have run to the end by now (the budget is shorter
-# than pids_gone's wait) and written the marker.
-[ ! -e "$FASTPATH/sleep.expired" ] || fail "the summary budget's sleep was left running after the hook returned"
-[ -s "$FASTPATH/pgids" ] || fail "the pgid shims never ran"
-while read -r own parent; do
-    [ "$own" = "$parent" ] || fail "a foreground command ran in its own process group ($own, parent $parent): monitor mode was left on"
-done <"$FASTPATH/pgids"
-ok "a fast summary returns before its budget, leaves no budget sleep, and runs no foreground job in its own group"
-case "$ctx" in *"qual:recording-design-decisions"*) ;; *) fail "context lacks the using-qualifier map" ;; esac
-case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the thread summary: $ctx" ;; esac
-case "$ctx" in *"name: using-qualifier"*) fail "frontmatter must be stripped" ;; esac
-case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call line ($CALL_FORM): $ctx" ;; esac
-[ "${#ctx}" -lt 10000 ] || fail "context is ${#ctx} chars; the harness caps it at 10000"
-ok "hook injects using-qualifier, the wrapper call line, and the summary (${#ctx} chars)"
-
-# H3. A pre-populated managed install is found without PATH or network.
-rm -f "$CURL_MARKER"
-out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$HOOK_PATH")"
-ctx="$(printf '%s' "$out" | context_of)"
-case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call line: $ctx" ;; esac
-case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the managed binary's summary: $ctx" ;; esac
-[ ! -e "$CURL_MARKER" ] || fail "hook must not download when the managed install is valid"
-ok "hook uses the managed install"
-
-# H4. No binary and no network: still exit 0 with valid JSON.
-out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$SANDBOX/hook-empty-home" PATH="$HOOK_PATH")" \
-    || fail "hook must exit 0 when the binary cannot be installed"
-ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not valid JSON without a binary: $out"
-case "$ctx" in *"cargo install qualifier --version $PINNED --locked"*) ;; *) fail "context must give the pinned install command: $ctx" ;; esac
-case "$ctx" in *"could not install its pinned qualifier release"*"QUALIFIER_BIN"*) ;; *) fail "context must report the failed install and name QUALIFIER_BIN: $ctx" ;; esac
-case "$ctx" in *"no prebuilt"*) fail "a supported platform must not be reported as lacking a prebuilt binary: $ctx" ;; esac
-ok "hook degrades gracefully without a binary or network"
-
-# H4b. On a platform with no prebuilt release, the context says so and gives
-#      the whole manual route: cargo install, then QUALIFIER_BIN (the wrapper
-#      never looks on PATH, so the install alone would not be used).
-out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$SANDBOX/hook-unsupported-home" \
-    FAKE_UNAME_S=Darwin FAKE_UNAME_M=x86_64 PATH="$UNAME_SHIM:$HOOK_PATH")" \
-    || fail "hook must exit 0 on an unsupported platform"
-ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not valid JSON on an unsupported platform: $out"
-case "$ctx" in *"no prebuilt qualifier binary for this platform"*) ;; *) fail "context must say there is no prebuilt binary: $ctx" ;; esac
-case "$ctx" in *"cargo install qualifier --version $PINNED --locked"*"QUALIFIER_BIN"*) ;; *) fail "context must give the cargo install and QUALIFIER_BIN steps: $ctx" ;; esac
-case "$ctx" in *"not installed"*) fail "context must not call the platform's problem 'not installed': $ctx" ;; esac
-[ ! -e "$SANDBOX/hook-unsupported-home" ] || fail "hook on an unsupported platform must not create the plugin home"
-ok "hook on an unsupported platform names the cargo install and QUALIFIER_BIN"
-
-# H5. Works without VCS markers (project dir is the root).
-NOVCS="$SANDBOX/novcs"
-mkdir -p "$NOVCS"
-echo '{}' >"$NOVCS/.qual"
-out="$(run_hook "$NOVCS" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
-printf '%s' "$out" | context_of >/dev/null || fail "hook must work outside a VCS"
-ok "hook works outside a VCS"
-
-# H6. Real git repositories: an untracked .qual is found; no .qual is silent.
-GITQUAL="$SANDBOX/gitqual"
-mkdir -p "$GITQUAL/src"
-git -C "$GITQUAL" init -q
-echo '{}' >"$GITQUAL/src/.qual"
-out="$(run_hook "$GITQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
-printf '%s' "$out" | context_of >/dev/null || fail "an untracked .qual in a git repo must be found"
-GITNOQUAL="$SANDBOX/gitnoqual"
-mkdir -p "$GITNOQUAL"
-git -C "$GITNOQUAL" init -q
-echo "x" >"$GITNOQUAL/a.txt"
-out="$(run_hook "$GITNOQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
-[ -z "$out" ] || fail "a git repo without .qual files must be silent, got: $out"
-ok "hook gates git repositories through the index"
-
-# H6b. A .qual file excluded by .gitignore must be silent: only the git
-# index path (not a filesystem find fallback) is expected to honor it.
-GITIGNORED="$SANDBOX/gitignored"
-mkdir -p "$GITIGNORED/src"
-git -C "$GITIGNORED" init -q
-echo '*.qual' >"$GITIGNORED/.gitignore"
-echo '{}' >"$GITIGNORED/src/.qual"
-out="$(run_hook "$GITIGNORED" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
-[ -z "$out" ] || fail "a gitignored .qual must be silent, got: $out"
-ok "hook honors .gitignore via the git index path"
-
-# H7. A qualifier on PATH (even the pinned version) is ignored, and the call
-#     line is still the wrapper form.
-out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$HOOK_PATH")"
-ctx="$(printf '%s' "$out" | context_of)"
-case "$ctx" in *"PATH-QUALIFIER-SUMMARY"*) fail "the qualifier on PATH must not be run: $ctx" ;; esac
-case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the managed binary's summary: $ctx" ;; esac
-case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call line: $ctx" ;; esac
-# The backticks are a literal call-line quote, not command substitution.
-# shellcheck disable=SC2016
-case "$ctx" in *'Call it as `qualifier`'*) fail "context must not route calls to the qualifier on PATH: $ctx" ;; esac
-ok "hook ignores a qualifier on PATH and gives the wrapper call line"
-
-# H8. A slow summary is dropped instead of delaying the session, and
-#     everything it started is killed. The fixture would run for a minute;
-#     the hook's budget is two seconds, and the bound asserted here is
-#     loose enough for a loaded machine while still catching a hook that
-#     waits for the summary (or for a sleep-counting loop, H8b). The fixture
-#     records its own PID and a child's, which must be gone afterwards.
-SLOW="$SANDBOX/slow"
-mkdir -p "$SLOW"
-cat >"$SLOW/qualifier" <<EOF
-#!/usr/bin/env bash
-case "\${1:-}" in
-    --version) echo "qualifier 9.9.9" ;;
-    threads)
-        echo "\$\$" >"$SLOW/summary.pid"
-        /bin/sleep 60 &
-        echo "\$!" >"$SLOW/child.pid"
-        /bin/sleep 60
-        echo "qualifier: too late" ;;
-esac
-EOF
-chmod +x "$SLOW/qualifier"
-
-run_slow_summary() {
-    # $1 is the PATH to give the hook.
-    rm -f "$SLOW/summary.pid" "$SLOW/child.pid"
-    start="$(date +%s)"
-    out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$SLOW/qualifier" PATH="$1")"
-    elapsed=$(( $(date +%s) - start ))
-    [ -s "$SLOW/summary.pid" ] || fail "the slow summary never started"
-    ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not the expected JSON: $out"
-    case "$ctx" in *"too late"*) fail "a late summary must be dropped" ;; esac
-    if ! pids_gone "$SLOW/summary.pid" "$SLOW/child.pid"; then
-        kill -KILL "$(cat "$SLOW/summary.pid")" "$(cat "$SLOW/child.pid")" 2>/dev/null
-        fail "the slow summary or its child is still running after the hook returned"
-    fi
-}
-
-run_slow_summary "$HOOK_PATH"
-[ "$elapsed" -lt 15 ] || fail "hook waited ${elapsed}s for a slow summary"
-ok "hook drops a summary that misses its budget (${elapsed}s) and kills everything it started"
-
-# H8b. The budget is wall-clock time, not a count of polling sleeps: with a
-#      `sleep` whose every start costs a second (as an exec can on a loaded
-#      machine), the hook still returns in about budget + one second, where
-#      counting ten 0.1s sleeps would take over ten.
-SLOW_EXEC="$SANDBOX/slow-exec"
-mkdir -p "$SLOW_EXEC"
-cat >"$SLOW_EXEC/sleep" <<'EOF'
-#!/usr/bin/env bash
-/bin/sleep 1
-exec /bin/sleep "$@"
-EOF
-chmod +x "$SLOW_EXEC/sleep"
-run_slow_summary "$SLOW_EXEC:$HOOK_PATH"
-[ "$elapsed" -lt 9 ] || fail "with slow process starts, the hook waited ${elapsed}s: its budget is not wall-clock time"
-ok "the summary budget is wall-clock time even when every sleep starts slowly (${elapsed}s)"
-
-# H9. A summary containing raw control characters (an ANSI color escape, a
-# form feed) must not break the JSON: they are stripped before it is quoted.
-CTRLCHARS="$SANDBOX/ctrlchars"
-mkdir -p "$CTRLCHARS"
-# The ${1:-} is a literal shell parameter expansion in the generated
-# script, not one to expand here.
-# shellcheck disable=SC2016
-printf '#!/usr/bin/env bash\ncase "${1:-}" in\n    --version) echo "qualifier 9.9.9" ;;\n    threads) printf "\\033[31m1 blocker\\033[0m\\f\\n" ;;\nesac\n' \
-    >"$CTRLCHARS/qualifier"
-chmod +x "$CTRLCHARS/qualifier"
-out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$CTRLCHARS/qualifier" PATH="$HOOK_PATH")"
-ctx="$(printf '%s' "$out" | context_of)" || fail "control characters in the summary broke the JSON: $out"
-case "$ctx" in *"1 blocker"*) ;; *) fail "context lost the summary text: $ctx" ;; esac
-ok "hook strips control characters that would break the JSON"
-
-# --- skills ----------------------------------------------------------------
-
-python3 - "$PLUGIN" <<'PY' || fail "skill checks"
-import glob, os, re, sys
-
-plugin = sys.argv[1]
-skills_dir = f"{plugin}/skills"
-expected = {
-    "using-qualifier", "recording-design-decisions", "planning-from-threads",
-    "consulting-threads", "closing-the-loop", "reviewing-into-qualifier",
-    "triaging-threads", "escalating-decisions", "handing-off-threads",
-}
-found = {d for d in os.listdir(skills_dir) if os.path.isdir(f"{skills_dir}/{d}")}
-assert found == expected, f"skill set mismatch: missing {expected - found}, extra {found - expected}"
-
-topics = {f[:-3] for f in os.listdir("src/cli/commands/agents/pages") if f.endswith(".md")}
-
-for name in sorted(expected):
-    path = f"{skills_dir}/{name}/SKILL.md"
-    text = open(path).read()
-    m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
-    assert m, f"{path}: missing frontmatter"
-    front, body = m.group(1), m.group(2)
-    fields = dict(line.split(": ", 1) for line in front.splitlines() if ": " in line)
-    assert fields.get("name") == name, f"{path}: name must be {name!r}"
-    assert fields.get("description", "").startswith("Use "), f"{path}: description must start with 'Use '"
-    tools = fields.get("allowed-tools", "")
-    for rule in ("Bash(qualifier:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)"):
-        assert rule in tools, f"{path}: allowed-tools must include {rule}"
-    for topic in re.findall(r"qualifier agents ([a-z_-]+)", body):
-        assert topic in topics, f"{path}: cites missing agents topic {topic!r}"
-    for ref in re.findall(r"qual:([a-z-]+)", body):
-        assert ref in expected, f"{path}: references unknown skill qual:{ref}"
-    for support in re.findall(r"`([a-z-]+-prompt\.md)`", body):
-        assert os.path.exists(f"{skills_dir}/{name}/{support}"), f"{path}: missing {support}"
-    # "Filling the brief" sections document placeholder tokens verbatim on
-    # purpose; check the rest of the body for accidental leftover ones.
-    body_outside_filling = re.sub(r"## Filling the brief\n.*?(\n## |\Z)", "", body, flags=re.S)
-    assert not re.search(r"\bTBD\b|(?<!\$)\{[A-Z_ ]+\}", body_outside_filling), f"{path}: placeholder text"
-    for prompt_path in sorted(glob.glob(f"{skills_dir}/{name}/*-prompt.md")):
-        prompt_text = open(prompt_path).read()
-        for topic in re.findall(r"qualifier agents ([a-z_-]+)", prompt_text):
-            assert topic in topics, f"{prompt_path}: cites missing agents topic {topic!r}"
-        for ref in re.findall(r"qual:([a-z-]+)", prompt_text):
-            assert ref in expected, f"{prompt_path}: references unknown skill qual:{ref}"
-
-bootstrap = open(f"{skills_dir}/using-qualifier/SKILL.md").read()
-assert len(bootstrap) < 8000, f"using-qualifier is {len(bootstrap)} chars; keep it under 8000 (hook context cap)"
-for name in expected - {"using-qualifier"}:
-    assert f"qual:{name}" in bootstrap, f"using-qualifier must map qual:{name}"
-PY
-ok "skills: frontmatter, cited topics, cross-references, supporting files, size"
-
-# The plugin no longer consults PATH, installs to ~/.local/bin, or has a
-# minimum version; nothing under plugins/ may still say so. .qual files hold
-# review-finding prose (data, not plugin statements), so they're excluded.
-if stale="$(grep -rnE --exclude='.qual' 'MIN_VERSION|min-version|QUALIFIER_INSTALL_DIR|\.local/bin|not on PATH' "$PLUGIN")"; then
-    fail "stale PATH/install statements under $PLUGIN:
-$stale"
-fi
-ok "no stale PATH, ~/.local/bin, or minimum-version statements under $PLUGIN"
-
-# --- subagent prompts: placeholders, not bare `qualifier` ------------------
-# Subagent prompt files never assume `qualifier` is on PATH (a subagent gets
-# no wrapper instruction), so every invocation must use the `{QUALIFIER}`
-# placeholder, filled in by the dispatching skill before dispatch.
-
-python3 - "$PLUGIN" <<'PY' || fail "bare qualifier invocations in prompt files"
-import glob, re, sys
-
-plugin = sys.argv[1]
-subcommands = (
-    "record|reply|resolve|emit|show|ls|threads|praise|review|diff|compact"
-    "|agents|init"
-)
-# May flag prose that names a subcommand right after "qualifier" (e.g.
-# "qualifier review results"); reword such prose rather than loosening this.
-pattern = re.compile(r"\bqualifier\s+(?:" + subcommands + r")\b", re.IGNORECASE)
-
-bad = []
-for path in sorted(glob.glob(f"{plugin}/skills/*/*-prompt.md")):
-    text = open(path).read()
-    for m in pattern.finditer(text):
-        bad.append(f"{path}: {m.group(0)!r}")
-assert not bad, "bare qualifier invocations (use {QUALIFIER} instead):\n" + "\n".join(bad)
-PY
-ok "no bare qualifier invocations in *-prompt.md files"
-
-# Every {PLACEHOLDER} a prompt uses is documented in its dispatching skill's
-# "Filling the brief" section, and every placeholder documented there is used
-# by at least one of that skill's prompts.
-python3 - "$PLUGIN" <<'PY' || fail "prompt placeholder documentation"
-import glob, re, sys
-
-plugin = sys.argv[1]
-skills_dir = f"{plugin}/skills"
-
-# Explicit prompt -> dispatching skill map. Every *-prompt.md must be in it.
-dispatch = {
-    "reviewing-into-qualifier": ["reviewer-prompt.md", "verifier-prompt.md"],
-    "triaging-threads": ["triager-prompt.md"],
-}
-mapped = {f"{skills_dir}/{skill}/{prompt}" for skill, prompts in dispatch.items() for prompt in prompts}
-on_disk = set(glob.glob(f"{skills_dir}/*/*-prompt.md"))
-assert on_disk == mapped, (
-    f"prompt files missing from the dispatch map: {sorted(on_disk - mapped)}; "
-    f"mapped but missing on disk: {sorted(mapped - on_disk)}"
-)
-
-placeholder_re = re.compile(r"\{[A-Z][A-Z_ a-z]*\}")
-
-for skill, prompts in dispatch.items():
-    skill_path = f"{skills_dir}/{skill}/SKILL.md"
-    skill_text = open(skill_path).read()
-    m = re.search(r"## Filling the brief\n(.*?)(\n## |\Z)", skill_text, re.S)
-    assert m, f"{skill_path}: missing a 'Filling the brief' section"
-    documented = set(placeholder_re.findall(m.group(1)))
-
-    used = set()
-    for prompt in prompts:
-        prompt_path = f"{skills_dir}/{skill}/{prompt}"
-        text = open(prompt_path).read()
-        found = set(placeholder_re.findall(text))
-        used |= found
-        undocumented = found - documented
-        assert not undocumented, f"{prompt_path}: undocumented placeholders {undocumented}"
-
-    unused = documented - used
-    assert not unused, f"{skill_path}: documents unused placeholders {unused}"
-PY
-ok "every *-prompt.md is mapped to its dispatching skill; placeholders documented both ways"
-
-# --- skill examples against the real binary ---------------------------------
-# Every qualifier command and record line in the skills and subagent briefs
-# runs against a real qualifier in a fixture repository, so no example can
-# use a flag, key, line shape, or subcommand the CLI rejects.
-status=0
-QUALIFIER_BIN="$EXAMPLES_BIN" python3 scripts/check-skill-examples.py || status=$?
-case "$status" in
-    0) ok "skill and brief examples run cleanly against the real qualifier" ;;
-    2) ;; # the checker printed its own skip line
-    *) fail "skill examples" ;;
-esac
-
-# --- closing-the-loop: every non-fresh `qualifier review` status ----------
-# `qualifier review` reports `drifted` and `missing` (file gone, or span past
-# the end of the file); the drift step must say what to do with each.
-
-python3 - "$PLUGIN" <<'PY' || fail "closing-the-loop drift step"
-import re, sys
-
-path = f"{sys.argv[1]}/skills/closing-the-loop/SKILL.md"
-text = open(path).read()
-m = re.search(r"\n3\. \*\*Drift\.\*\*(.*?)\n4\. ", text, re.S)
-assert m, f"{path}: missing step 3 (Drift)"
-step = " ".join(m.group(1).split())
-for needle in ("`drifted`", "`missing`", "--supersedes", "--reason obsolete",
-               "close authority", "cross-subject"):
-    assert needle in step, f"{path}: step 3 must mention {needle}"
-PY
-ok "closing-the-loop step 3 covers drifted and missing review results"
-
-# --- eval cases: structure -----------------------------------------------------
-# Every case under evals/ (except the shared _fixture) must load in
-# `claude plugin eval`, which rejects unknown keys. Key sets are the ones
-# https://code.claude.com/docs/en/plugin-evals.md documents (case.yaml fields,
-# prompt.md fields, grader frontmatter and grader types).
-
-python3 - "$PLUGIN" <<'PY' || fail "eval case structure"
-import os, re, sys
-
-plugin = sys.argv[1]
-evals = f"{plugin}/evals"
-
-CASE_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs",
-             "expected_outcome", "context", "execution", "graders"}
-CASE_NESTED = {
-    "context": {"scaffold_script", "history_file", "add_dirs"},
-    "execution": {"prompt", "model", "max_turns", "timeout_seconds", "allowed_tools",
-                  "append_system_prompt", "env"},
-}
-PROMPT_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs",
-               "expected_outcome", "model", "max_turns", "timeout_seconds", "allowed_tools",
-               "append_system_prompt", "env"}
-GRADER_COMMON = {"type", "weight", "arm"}
-GRADER_TYPES = {  # type -> (options, required options)
-    "regex": ({"pattern", "flags", "match", "target"}, {"pattern"}),
-    "tool_used": ({"tool", "input_match", "min", "max"}, {"tool"}),
-    "tool_order": ({"before", "after"}, {"before", "after"}),
-    "file_exists": ({"path", "exists"}, {"path"}),
-    "llm": ({"criteria", "focus"}, set()),
-    "baseline": ({"baseline_file", "criteria"}, {"baseline_file"}),
-}
-TARGETS = {"last_message", "trace", "files", "mock_calls"}
-REGEX_KEYS = ("pattern", "input_match")
-
-def scalar(raw):
-    """(value, quoted) for a flow scalar; lists and mappings stay raw."""
-    raw = raw.strip()
-    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
-        return raw[1:-1].replace("''", "'"), True
-    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
-        return raw[1:-1].encode().decode("unicode_escape"), True
-    return raw, False
-
-def read_yaml(path):
-    """A minimal reader: `key: scalar` lines, and one level of nested
-    `key:` blocks indented by two spaces. Anything else is an error, so an
-    unsupported construct fails loudly instead of passing unread."""
-    top, current = {}, None
-    for n, line in enumerate(open(path).read().splitlines(), 1):
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        m = re.fullmatch(r"( *)([A-Za-z_][A-Za-z0-9_]*):(?: (.*))?", line)
-        assert m, f"{path}:{n}: unsupported YAML for this checker's reader: {line!r}"
-        indent, key, value = len(m.group(1)), m.group(2), m.group(3)
-        if indent == 0:
-            assert key not in top, f"{path}:{n}: duplicate key {key!r}"
-            if value is None or not value.strip():
-                top[key], current = {}, key
-            else:
-                top[key], current = scalar(value), None
-        else:
-            assert indent == 2 and current, f"{path}:{n}: unsupported nesting: {line!r}"
-            assert value and value.strip(), f"{path}:{n}: unsupported nesting: {line!r}"
-            top[current][key] = scalar(value)
-    return top
-
-def frontmatter(path):
-    text = open(path).read()
-    m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
-    assert m, f"{path}: missing frontmatter"
-    fields = {}
-    for line in m.group(1).splitlines():
-        km = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*):(?: (.*))?", line)
-        assert km and km.group(2), f"{path}: unsupported frontmatter line {line!r}"
-        assert km.group(1) not in fields, f"{path}: duplicate key {km.group(1)!r}"
-        fields[km.group(1)] = scalar(km.group(2))
-    return fields, m.group(2)
-
-def check_regex(where, pattern):
-    # The runner uses JavaScript regexes; Python's `re` compiles the subset
-    # these graders use with the same meaning. Syntax the runner rejects is
-    # refused here, and JavaScript-only syntax Python can't compile (e.g.
-    # `(?<name>...)` groups, variable-width lookbehind, `\u{...}`) fails
-    # too, so keep graders to the common subset.
-    assert not re.search(r"\(\?[aiLmsux-]+[:)]", pattern), (
-        f"{where}: inline flags like (?i) aren't supported by the eval runner; use `flags`")
-    assert not re.search(r"\(\?P[<=>]|\\[AZ]", pattern), (
-        f"{where}: Python-only regex syntax the eval runner (JavaScript) rejects")
-    try:
-        re.compile(pattern)
-    except re.error as e:
-        raise AssertionError(f"{where}: regex does not compile: {e}: {pattern!r}")
-
-cases = sorted(d for d in os.listdir(evals) if os.path.isdir(f"{evals}/{d}") and d != "_fixture")
-assert cases, "no eval cases found"
-for case in cases:
-    d = f"{evals}/{case}"
-    assert os.path.isfile(f"{d}/case.yaml"), f"{d}: missing case.yaml"
-    y = read_yaml(f"{d}/case.yaml")
-    assert set(y) <= CASE_KEYS, f"{d}/case.yaml: unknown keys {sorted(set(y) - CASE_KEYS)}"
-    assert y.get("schema_version") == ("1.1", True), (
-        f"{d}/case.yaml: schema_version must be the string \"1.1\", got {y.get('schema_version')}")
-    assert y.get("name", (None,))[0] == case, f"{d}/case.yaml: name must be {case!r}"
-    for key, allowed in CASE_NESTED.items():
-        if key in y:
-            assert isinstance(y[key], dict), f"{d}/case.yaml: {key} must be a mapping"
-            assert set(y[key]) <= allowed, (
-                f"{d}/case.yaml: unknown {key} keys {sorted(set(y[key]) - allowed)}")
-    scaffold = y.get("context", {}).get("scaffold_script")
-    if scaffold:
-        assert os.path.isfile(os.path.join(d, scaffold[0])), f"{d}/case.yaml: no scaffold {scaffold[0]}"
-
-    if os.path.exists(f"{d}/prompt.md"):
-        fields, body = frontmatter(f"{d}/prompt.md")
-        assert set(fields) <= PROMPT_KEYS, f"{d}/prompt.md: unknown keys {sorted(set(fields) - PROMPT_KEYS)}"
-        if "schema_version" in fields:
-            assert fields["schema_version"] == ("1.1", True), f"{d}/prompt.md: schema_version must be \"1.1\""
-        if "name" in fields:
-            assert fields["name"][0] == case, f"{d}/prompt.md: name must be {case!r}"
-        assert body.strip(), f"{d}/prompt.md: empty prompt"
-    else:
-        assert "prompt" in y.get("execution", {}), f"{d}: no prompt.md and no execution.prompt"
-
-    graders = sorted(f for f in os.listdir(f"{d}/graders") if f.endswith(".md")) \
-        if os.path.isdir(f"{d}/graders") else []
-    assert graders or "graders" in y, f"{d}: no graders"
-    for g in graders:
-        where = f"{d}/graders/{g}"
-        fields, body = frontmatter(where)
-        kind = fields.get("type", (None,))[0]
-        assert kind in GRADER_TYPES, f"{where}: type {kind!r} is not one of {sorted(GRADER_TYPES)}"
-        options, required = GRADER_TYPES[kind]
-        unknown = set(fields) - GRADER_COMMON - options
-        assert not unknown, f"{where}: keys {sorted(unknown)} are not valid for a {kind} grader"
-        missing = required - set(fields)
-        assert not missing, f"{where}: a {kind} grader needs {sorted(missing)}"
-        if kind == "llm":
-            assert "criteria" in fields or body.strip(), f"{where}: an llm grader needs criteria"
-        if "arm" in fields:
-            assert fields["arm"][0] in ("with-only", "both"), f"{where}: arm must be with-only or both"
-        if "weight" in fields:
-            assert float(fields["weight"][0]) > 0, f"{where}: weight must be positive"
-        for key in ("min", "max"):
-            if key in fields:
-                assert fields[key][0].isdigit(), f"{where}: {key} must be a non-negative integer"
-        if "min" in fields and "max" in fields:
-            assert int(fields["min"][0]) <= int(fields["max"][0]), f"{where}: min > max"
-        if "flags" in fields:
-            assert re.fullmatch(r"[dgimsuvy]+", fields["flags"][0]), f"{where}: invalid regex flags"
-        if "match" in fields:
-            assert re.fullmatch(r"not_contains|count:\d+", fields["match"][0]), (
-                f"{where}: match must be not_contains or count:N")
-        # `focus` (llm) takes the same values as `target` (regex).
-        for key in ("target", "focus"):
-            if key in fields:
-                t = fields[key][0]
-                assert t in TARGETS or re.fullmatch(r"\{\s*source:\s*file,\s*path:.+\}", t), (
-                    f"{where}: unknown {key} {t!r}")
-        for key in REGEX_KEYS:
-            if key in fields:
-                check_regex(f"{where} ({key})", fields[key][0])
-        # tool_order's before/after: a tool name, or { tool, input_match }.
-        for key in ("before", "after"):
-            if key in fields:
-                v = fields[key][0]
-                if re.fullmatch(r"[A-Za-z_][\w:*.-]*", v):
-                    continue
-                m = re.fullmatch(r"\{\s*tool:\s*([A-Za-z_][\w:*.-]*)\s*(?:,\s*input_match:\s*(.+?))?\s*\}", v)
-                assert m, f"{where}: {key} must be a tool name or {{ tool, input_match }}, got {v!r}"
-                if m.group(2):
-                    check_regex(f"{where} ({key}.input_match)", scalar(m.group(2))[0])
-print(f"eval cases: {len(cases)} checked")
-PY
-ok "eval cases: case.yaml, prompt.md, and grader keys are documented; every grader regex compiles"
-
-# --- eval graders ------------------------------------------------------------
-# Graders use JavaScript regexes over the JSON-encoded tool input; the
-# patterns here are also valid Python regexes with the same meaning.
-
-python3 - "$PLUGIN" <<'PY' || fail "eval graders"
-import json, os, re, sys
-
-plugin = sys.argv[1]
-evals = f"{plugin}/evals"
-skills = sorted(d for d in os.listdir(f"{plugin}/skills") if os.path.isdir(f"{plugin}/skills/{d}"))
-
-def frontmatter(path):
-    text = open(path).read()
-    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
-    assert m, f"{path}: missing frontmatter"
-    fields = {}
-    for line in m.group(1).splitlines():
-        key, _, value = line.partition(": ")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] == "'":
-            value = value[1:-1].replace("''", "'")
-        fields[key.strip()] = value
-    return fields
-
-def graders(case):
-    d = f"{evals}/{case}/graders"
-    return {f: frontmatter(f"{d}/{f}") for f in sorted(os.listdir(d)) if f.endswith(".md")}
-
-# The no-skill-fired grader catches every qual skill, prefixed or bare.
-g = frontmatter(f"{evals}/no-qual-files/graders/no-skill-fired.md")
-assert g["type"] == "tool_used" and g["tool"] == "Skill", "no-skill-fired must be a Skill tool_used grader"
-assert (g.get("min"), g.get("max"), g.get("arm")) == ("0", "0", "both"), "no-skill-fired must be min 0, max 0, arm both"
-pat = re.compile(g["input_match"])
-for name in skills:
-    for form in (f"qual:{name}", name):
-        for call in ({"skill": form}, {"skill": form, "args": "src/net.rs"}):
-            encoded = json.dumps(call)
-            assert pat.search(encoded), f"no-skill-fired misses {encoded}"
-for other in ("superpowers:brainstorming", "code-review", "other:closing-the-loop", "closing-the-loop-extra"):
-    encoded = json.dumps({"skill": other})
-    assert not pat.search(encoded), f"no-skill-fired must not match {encoded}"
-
-# Every case with a no-record grader also forbids Write and Edit calls on a
-# .qual file, in the same negation form.
-write_inputs = {
-    "Write": lambda p: {"file_path": p, "content": '{"metabox":"1"}\n'},
-    "Edit": lambda p: {"file_path": p, "old_string": "a", "new_string": "b", "replace_all": False},
-}
-qual_paths = ["/tmp/repo/src/.qual", "src/.qual", "/tmp/repo/docs/cache-design.md.qual", ".qual"]
-other_paths = ["/tmp/repo/docs/cache-design.md", "/tmp/repo/.qualifier", "/tmp/repo/src/.qual.bak",
-               "/tmp/repo/.qual/notes.md"]
-cases = [c for c in sorted(os.listdir(evals)) if os.path.isdir(f"{evals}/{c}/graders")]
-with_no_record = [c for c in cases if "no-record.md" in graders(c)]
-assert {"quiet-typo", "quiet-question", "quiet-explore"} <= set(with_no_record), with_no_record
-for case in with_no_record:
-    gs = graders(case)
-    base = gs["no-record.md"]
-    for tool, make in write_inputs.items():
-        found = [f for f, g in gs.items() if g.get("type") == "tool_used" and g.get("tool") == tool]
-        assert len(found) == 1, f"{case}: expected one {tool} grader, found {found}"
-        g = gs[found[0]]
-        assert (g.get("min"), g.get("max")) == ("0", "0"), f"{case}/{found[0]}: must be min 0, max 0"
-        assert g.get("arm") == base.get("arm"), f"{case}/{found[0]}: arm must match no-record.md"
-        pat = re.compile(g["input_match"])
-        for p in qual_paths:
-            assert pat.search(json.dumps(make(p))), f"{case}/{found[0]} misses {tool} on {p}"
-        for p in other_paths:
-            assert not pat.search(json.dumps(make(p))), f"{case}/{found[0]} must not match {tool} on {p}"
-PY
-ok "eval graders: no-skill-fired matches every qual skill; no-record cases also forbid .qual writes"
-
-# --- review-subsystems: no-bare-qualifier grader -----------------------------
-# The plugin keeps its qualifier binary off PATH (scripts/ensure-qualifier.sh),
-# so every call must go through its `exec` form; this grader must catch the
-# bare `qualifier <sub>` form (which would fail outright) without also
-# flagging the wrapper form.
-
-python3 - "$PLUGIN" <<'PY' || fail "review-subsystems no-bare-qualifier grader"
-import json, re, sys
-
-def frontmatter(path):
-    text = open(path).read()
-    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
-    assert m, f"{path}: missing frontmatter"
-    fields = {}
-    for line in m.group(1).splitlines():
-        key, _, value = line.partition(": ")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] == "'":
-            value = value[1:-1].replace("''", "'")
-        fields[key.strip()] = value
-    return fields
-
-plugin = sys.argv[1]
-g = frontmatter(f"{plugin}/evals/review-subsystems/graders/no-bare-qualifier.md")
-assert g["type"] == "tool_used" and g["tool"] == "Bash", g
-assert (g.get("min"), g.get("max")) == ("0", "0"), "no-bare-qualifier must be min 0, max 0"
-pat = re.compile(g["input_match"])
-
-bare = [
-    'qualifier record blocker src/net.rs:1 "msg"',
-    "cd /tmp/repo && qualifier threads --all",
-    'qualifier reply <id> "ok"',
-]
-for cmd in bare:
-    assert pat.search(json.dumps({"command": cmd})), f"no-bare-qualifier misses {cmd!r}"
-
-wrapped = [
-    '"/plugin/scripts/ensure-qualifier.sh" exec record blocker src/net.rs:1 "msg"',
-    '"/plugin/scripts/ensure-qualifier.sh" pinned-version',
-]
-for cmd in wrapped:
-    assert not pat.search(json.dumps({"command": cmd})), f"no-bare-qualifier wrongly matches {cmd!r}"
-PY
-ok "review-subsystems: no-bare-qualifier grader catches bare calls, not the wrapper form"
-
-# --- review-subsystems: verified-tag grader ----------------------------------
-
-python3 - "$PLUGIN" <<'PY' || fail "review-subsystems verified-tag grader"
-import re, sys
-
-def frontmatter(path):
-    text = open(path).read()
-    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
-    assert m, f"{path}: missing frontmatter"
-    fields = {}
-    for line in m.group(1).splitlines():
-        key, _, value = line.partition(": ")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] == "'":
-            value = value[1:-1].replace("''", "'")
-        fields[key.strip()] = value
-    return fields
-
-plugin = sys.argv[1]
-g = frontmatter(f"{plugin}/evals/review-subsystems/graders/verified-tag.md")
-assert g["type"] == "regex" and g.get("target") == "trace", g
-pat = re.compile(g["pattern"])
-for tag in ("verified:confirmed", "verified:refuted", "verified:downgraded"):
-    assert pat.search(tag), f"verified-tag misses {tag}"
-assert not pat.search("verified:maybe"), "verified-tag must not match an unrecognized verdict"
-PY
-ok "review-subsystems: verified-tag grader matches all three verdict tags"
-
-# --- hooks.json: SessionStart matcher sources -------------------------------
-
-python3 -c "
-import json
-data = json.load(open('$PLUGIN/hooks/hooks.json'))
-matcher = data['hooks']['SessionStart'][0]['matcher']
-sources = matcher.split('|')
-missing = [s for s in ('startup', 'resume', 'clear', 'compact', 'fork') if s not in sources]
-assert not missing, f'matcher {matcher!r} is missing {missing}'
-" || fail "hooks.json SessionStart matcher must include startup, resume, clear, compact, fork"
-ok "hooks.json SessionStart matcher includes startup, resume, clear, compact, fork"
-
 # --- managed install against a stubbed release -----------------------------
 # These run copies of the wrapper pinned to fixture releases (with the
 # fixtures' checksums), served by a curl stub.
@@ -1139,12 +401,16 @@ case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)              TARGET="aarch64-apple-darwin";      SHAVAR="SHA256_AARCH64_APPLE_DARWIN" ;;
     Linux-x86_64)              TARGET="x86_64-unknown-linux-musl"; SHAVAR="SHA256_X86_64_UNKNOWN_LINUX_MUSL" ;;
     Linux-aarch64|Linux-arm64) TARGET="aarch64-unknown-linux-gnu"; SHAVAR="SHA256_AARCH64_UNKNOWN_LINUX_GNU" ;;
-    *)
-        echo "skip: no release target for $(uname -s)-$(uname -m); host download tests skipped"
-        echo "test-plugin: $PASS checks passed"
-        exit 0
-        ;;
+    *)                         TARGET="" ;;
 esac
+
+# D1-D10 need a release target for this host (their fixtures are served
+# for it); P1-P3 above cover every target on any host. The body is left
+# unindented so its heredocs keep their column-0 terminators.
+if [ -z "$TARGET" ]; then
+    echo "skip: no release target for $(uname -s)-$(uname -m); host download tests skipped"
+else
+
 
 SHA_999="$(make_fixture 9.9.9 "$TARGET")"
 SHA_9910="$(make_fixture 9.9.10 "$TARGET")"
@@ -1482,6 +748,692 @@ err="$(QUALIFIER_PLUGIN_HOME="$PH_FAIL" PATH="$NOACCESS:$INTERP:/usr/bin:/bin" "
 case "$err" in *"cargo install qualifier --version 9.9.9"*) ;; *) fail "expected the cargo fallback, got: $err" ;; esac
 [ "$(entries_of "$PH_FAIL")" = "9.9.8" ] || fail "failed download changed the plugin home: $(entries_of "$PH_FAIL")"
 ok "a failed download installs nothing and removes nothing"
+
+fi # host download tests
+
+# --- SessionStart hook -----------------------------------------------------
+
+run_hook() {
+    # Runs the hook as Claude Code would, with a project directory. The
+    # plugin root is captured before the cd below: with `cd ... && env
+    # VAR="$PWD/..."`, bash expands the env command's arguments only after
+    # `cd` has already run, so an inline `$PWD` there would resolve to the
+    # project sandbox instead of the plugin directory.
+    local project="$1" plugin_root="$PWD/$PLUGIN"; shift
+    (cd "$project" && env CLAUDE_PROJECT_DIR="$project" CLAUDE_PLUGIN_ROOT="$plugin_root" "$@" "$HOOK" </dev/null)
+}
+
+context_of() {
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'
+}
+
+# Succeeds once no PID listed in the given files is running, within about
+# 5s (a SIGKILLed process can take a moment to be reaped under load). A
+# zombie counts as gone: in a container whose PID 1 does not reap, a killed
+# orphan stays a zombie forever.
+pids_gone() {
+    local pid file state alive
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+        alive=""
+        for file in "$@"; do
+            pid="$(cat "$file" 2>/dev/null)" || continue
+            [ -n "$pid" ] || continue
+            # -o stat= works with both BSD and procps ps; empty when gone.
+            state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')"
+            case "$state" in ""|Z*) ;; *) alive=1 ;; esac
+        done
+        [ -z "$alive" ] && return 0
+        sleep 0.2
+    done
+    return 1
+}
+
+# The call line every hook context with a binary must give.
+CALL_FORM="Run qualifier as \`\"$PWD/$PLUGIN/scripts/ensure-qualifier.sh\" exec <args>\`"
+
+HOOK_PATH="$NOACCESS:$INTERP:/usr/bin:/bin"
+
+# H1. Silent in a repository without .qual files.
+NOQUAL="$SANDBOX/noqual"
+mkdir -p "$NOQUAL/.git"
+out="$(run_hook "$NOQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
+[ -z "$out" ] || fail "hook must be silent without .qual files, got: $out"
+ok "hook is silent in repositories without .qual files"
+
+# H2. Injects the skill, the wrapper call line, and the summary in a
+#     repository with .qual files.
+WITHQUAL="$SANDBOX/withqual"
+mkdir -p "$WITHQUAL/.git" "$WITHQUAL/src"
+echo '{}' >"$WITHQUAL/src/.qual"
+# Shims first on the hook's PATH, for the fast-path checks below:
+#   sleep     records its PID and, only if it runs to the end, writes
+#             sleep.expired (the summary budget elapsed);
+#   cat, rm   record their process group and their parent's, so a
+#             foreground command run in a group of its own (monitor mode
+#             left on, which hands a terminal's foreground to that group)
+#             shows up even without a terminal.
+FASTPATH="$SANDBOX/fastpath"
+mkdir -p "$FASTPATH/bin"
+cat >"$FASTPATH/bin/sleep" <<EOF
+#!/usr/bin/env bash
+echo "\$\$" >"$FASTPATH/sleep.pid"
+/bin/sleep "\$@"
+touch "$FASTPATH/sleep.expired"
+EOF
+cat >"$FASTPATH/bin/cat" <<EOF
+#!/usr/bin/env bash
+echo "\$(ps -o pgid= -p \$\$ | tr -d ' ') \$(ps -o pgid= -p \$PPID | tr -d ' ')" >>"$FASTPATH/pgids"
+exec /bin/\$(basename "\$0") "\$@"
+EOF
+chmod +x "$FASTPATH/bin/sleep" "$FASTPATH/bin/cat"
+ln -s cat "$FASTPATH/bin/rm"
+out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$FASTPATH/bin:$HOOK_PATH")"
+ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not the expected JSON: $out"
+[ -s "$FASTPATH/sleep.pid" ] || fail "the summary budget's sleep never started"
+[ ! -e "$FASTPATH/sleep.expired" ] || fail "a fast summary made the hook wait out the budget"
+pids_gone "$FASTPATH/sleep.pid" || fail "the summary budget's sleep outlived the hook"
+# A leaked sleep would have run to the end by now (the budget is shorter
+# than pids_gone's wait) and written the marker.
+[ ! -e "$FASTPATH/sleep.expired" ] || fail "the summary budget's sleep was left running after the hook returned"
+[ -s "$FASTPATH/pgids" ] || fail "the pgid shims never ran"
+while read -r own parent; do
+    [ "$own" = "$parent" ] || fail "a foreground command ran in its own process group ($own, parent $parent): monitor mode was left on"
+done <"$FASTPATH/pgids"
+ok "a fast summary returns before its budget, leaves no budget sleep, and runs no foreground job in its own group"
+case "$ctx" in *"qual:recording-design-decisions"*) ;; *) fail "context lacks the using-qualifier map" ;; esac
+case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the thread summary: $ctx" ;; esac
+case "$ctx" in *"name: using-qualifier"*) fail "frontmatter must be stripped" ;; esac
+case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call line ($CALL_FORM): $ctx" ;; esac
+[ "${#ctx}" -lt 10000 ] || fail "context is ${#ctx} chars; the harness caps it at 10000"
+ok "hook injects using-qualifier, the wrapper call line, and the summary (${#ctx} chars)"
+
+# H3. A pre-populated managed install is found without PATH or network.
+rm -f "$CURL_MARKER"
+out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$HOOK_PATH")"
+ctx="$(printf '%s' "$out" | context_of)"
+case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call line: $ctx" ;; esac
+case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the managed binary's summary: $ctx" ;; esac
+[ ! -e "$CURL_MARKER" ] || fail "hook must not download when the managed install is valid"
+ok "hook uses the managed install"
+
+# H4. No binary and no network: still exit 0 with valid JSON.
+out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$SANDBOX/hook-empty-home" PATH="$HOOK_PATH")" \
+    || fail "hook must exit 0 when the binary cannot be installed"
+ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not valid JSON without a binary: $out"
+case "$ctx" in *"cargo install qualifier --version $PINNED --locked"*) ;; *) fail "context must give the pinned install command: $ctx" ;; esac
+case "$ctx" in *"could not install its pinned qualifier release"*"QUALIFIER_BIN"*) ;; *) fail "context must report the failed install and name QUALIFIER_BIN: $ctx" ;; esac
+case "$ctx" in *"no prebuilt"*) fail "a supported platform must not be reported as lacking a prebuilt binary: $ctx" ;; esac
+ok "hook degrades gracefully without a binary or network"
+
+# H4b. On a platform with no prebuilt release, the context says so and gives
+#      the whole manual route: cargo install, then QUALIFIER_BIN (the wrapper
+#      never looks on PATH, so the install alone would not be used).
+out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$SANDBOX/hook-unsupported-home" \
+    FAKE_UNAME_S=Darwin FAKE_UNAME_M=x86_64 PATH="$UNAME_SHIM:$HOOK_PATH")" \
+    || fail "hook must exit 0 on an unsupported platform"
+ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not valid JSON on an unsupported platform: $out"
+case "$ctx" in *"no prebuilt qualifier binary for this platform"*) ;; *) fail "context must say there is no prebuilt binary: $ctx" ;; esac
+case "$ctx" in *"cargo install qualifier --version $PINNED --locked"*"QUALIFIER_BIN"*) ;; *) fail "context must give the cargo install and QUALIFIER_BIN steps: $ctx" ;; esac
+case "$ctx" in *"not installed"*) fail "context must not call the platform's problem 'not installed': $ctx" ;; esac
+[ ! -e "$SANDBOX/hook-unsupported-home" ] || fail "hook on an unsupported platform must not create the plugin home"
+ok "hook on an unsupported platform names the cargo install and QUALIFIER_BIN"
+
+# H5. Works without VCS markers (project dir is the root).
+NOVCS="$SANDBOX/novcs"
+mkdir -p "$NOVCS"
+echo '{}' >"$NOVCS/.qual"
+out="$(run_hook "$NOVCS" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
+printf '%s' "$out" | context_of >/dev/null || fail "hook must work outside a VCS"
+ok "hook works outside a VCS"
+
+# H6. Real git repositories: an untracked .qual is found; no .qual is silent.
+GITQUAL="$SANDBOX/gitqual"
+mkdir -p "$GITQUAL/src"
+git -C "$GITQUAL" init -q
+echo '{}' >"$GITQUAL/src/.qual"
+out="$(run_hook "$GITQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
+printf '%s' "$out" | context_of >/dev/null || fail "an untracked .qual in a git repo must be found"
+GITNOQUAL="$SANDBOX/gitnoqual"
+mkdir -p "$GITNOQUAL"
+git -C "$GITNOQUAL" init -q
+echo "x" >"$GITNOQUAL/a.txt"
+out="$(run_hook "$GITNOQUAL" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
+[ -z "$out" ] || fail "a git repo without .qual files must be silent, got: $out"
+ok "hook gates git repositories through the index"
+
+# H6b. A .qual file excluded by .gitignore must be silent: only the git
+# index path (not a filesystem find fallback) is expected to honor it.
+GITIGNORED="$SANDBOX/gitignored"
+mkdir -p "$GITIGNORED/src"
+git -C "$GITIGNORED" init -q
+echo '*.qual' >"$GITIGNORED/.gitignore"
+echo '{}' >"$GITIGNORED/src/.qual"
+out="$(run_hook "$GITIGNORED" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
+[ -z "$out" ] || fail "a gitignored .qual must be silent, got: $out"
+ok "hook honors .gitignore via the git index path"
+
+# H7. A qualifier on PATH (even the pinned version) is ignored, and the call
+#     line is still the wrapper form.
+out="$(run_hook "$WITHQUAL" QUALIFIER_PLUGIN_HOME="$MANAGED" PATH="$PATHQ:$HOOK_PATH")"
+ctx="$(printf '%s' "$out" | context_of)"
+case "$ctx" in *"PATH-QUALIFIER-SUMMARY"*) fail "the qualifier on PATH must not be run: $ctx" ;; esac
+case "$ctx" in *"1 blocker"*) ;; *) fail "context lacks the managed binary's summary: $ctx" ;; esac
+case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call line: $ctx" ;; esac
+# The backticks are a literal call-line quote, not command substitution.
+# shellcheck disable=SC2016
+case "$ctx" in *'Call it as `qualifier`'*) fail "context must not route calls to the qualifier on PATH: $ctx" ;; esac
+ok "hook ignores a qualifier on PATH and gives the wrapper call line"
+
+# H8. A slow summary is dropped instead of delaying the session, and
+#     everything it started is killed. The fixture would run for a minute;
+#     the hook's budget is two seconds, and the bound asserted here is
+#     loose enough for a loaded machine while still catching a hook that
+#     waits for the summary (or for a sleep-counting loop, H8b). The fixture
+#     records its own PID and a child's, which must be gone afterwards.
+SLOW="$SANDBOX/slow"
+mkdir -p "$SLOW"
+cat >"$SLOW/qualifier" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+    --version) echo "qualifier 9.9.9" ;;
+    threads)
+        echo "\$\$" >"$SLOW/summary.pid"
+        /bin/sleep 60 &
+        echo "\$!" >"$SLOW/child.pid"
+        /bin/sleep 60
+        echo "qualifier: too late" ;;
+esac
+EOF
+chmod +x "$SLOW/qualifier"
+
+run_slow_summary() {
+    # $1 is the PATH to give the hook.
+    rm -f "$SLOW/summary.pid" "$SLOW/child.pid"
+    start="$(date +%s)"
+    out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$SLOW/qualifier" PATH="$1")"
+    elapsed=$(( $(date +%s) - start ))
+    [ -s "$SLOW/summary.pid" ] || fail "the slow summary never started"
+    ctx="$(printf '%s' "$out" | context_of)" || fail "hook output is not the expected JSON: $out"
+    case "$ctx" in *"too late"*) fail "a late summary must be dropped" ;; esac
+    if ! pids_gone "$SLOW/summary.pid" "$SLOW/child.pid"; then
+        kill -KILL "$(cat "$SLOW/summary.pid")" "$(cat "$SLOW/child.pid")" 2>/dev/null
+        fail "the slow summary or its child is still running after the hook returned"
+    fi
+}
+
+run_slow_summary "$HOOK_PATH"
+[ "$elapsed" -lt 15 ] || fail "hook waited ${elapsed}s for a slow summary"
+ok "hook drops a summary that misses its budget (${elapsed}s) and kills everything it started"
+
+# H8b. The budget is wall-clock time, not a count of polling sleeps: with a
+#      `sleep` whose every start costs a second (as an exec can on a loaded
+#      machine), the hook still returns in about budget + one second, where
+#      counting ten 0.1s sleeps would take over ten.
+SLOW_EXEC="$SANDBOX/slow-exec"
+mkdir -p "$SLOW_EXEC"
+cat >"$SLOW_EXEC/sleep" <<'EOF'
+#!/usr/bin/env bash
+/bin/sleep 1
+exec /bin/sleep "$@"
+EOF
+chmod +x "$SLOW_EXEC/sleep"
+run_slow_summary "$SLOW_EXEC:$HOOK_PATH"
+[ "$elapsed" -lt 9 ] || fail "with slow process starts, the hook waited ${elapsed}s: its budget is not wall-clock time"
+ok "the summary budget is wall-clock time even when every sleep starts slowly (${elapsed}s)"
+
+# H9. A summary containing raw control characters (an ANSI color escape, a
+# form feed) must not break the JSON: they are stripped before it is quoted.
+CTRLCHARS="$SANDBOX/ctrlchars"
+mkdir -p "$CTRLCHARS"
+# The ${1:-} is a literal shell parameter expansion in the generated
+# script, not one to expand here.
+# shellcheck disable=SC2016
+printf '#!/usr/bin/env bash\ncase "${1:-}" in\n    --version) echo "qualifier 9.9.9" ;;\n    threads) printf "\\033[31m1 blocker\\033[0m\\f\\n" ;;\nesac\n' \
+    >"$CTRLCHARS/qualifier"
+chmod +x "$CTRLCHARS/qualifier"
+out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$CTRLCHARS/qualifier" PATH="$HOOK_PATH")"
+ctx="$(printf '%s' "$out" | context_of)" || fail "control characters in the summary broke the JSON: $out"
+case "$ctx" in *"1 blocker"*) ;; *) fail "context lost the summary text: $ctx" ;; esac
+ok "hook strips control characters that would break the JSON"
+
+# --- hooks.json: SessionStart matcher sources -------------------------------
+
+python3 -c "
+import json
+data = json.load(open('$PLUGIN/hooks/hooks.json'))
+matcher = data['hooks']['SessionStart'][0]['matcher']
+sources = matcher.split('|')
+missing = [s for s in ('startup', 'resume', 'clear', 'compact', 'fork') if s not in sources]
+assert not missing, f'matcher {matcher!r} is missing {missing}'
+" || fail "hooks.json SessionStart matcher must include startup, resume, clear, compact, fork"
+ok "hooks.json SessionStart matcher includes startup, resume, clear, compact, fork"
+
+# --- skills ----------------------------------------------------------------
+
+python3 - "$PLUGIN" <<'PY' || fail "skill checks"
+import glob, os, re, sys
+
+plugin = sys.argv[1]
+skills_dir = f"{plugin}/skills"
+expected = {
+    "using-qualifier", "recording-design-decisions", "planning-from-threads",
+    "consulting-threads", "closing-the-loop", "reviewing-into-qualifier",
+    "triaging-threads", "escalating-decisions", "handing-off-threads",
+}
+found = {d for d in os.listdir(skills_dir) if os.path.isdir(f"{skills_dir}/{d}")}
+assert found == expected, f"skill set mismatch: missing {expected - found}, extra {found - expected}"
+
+topics = {f[:-3] for f in os.listdir("src/cli/commands/agents/pages") if f.endswith(".md")}
+
+for name in sorted(expected):
+    path = f"{skills_dir}/{name}/SKILL.md"
+    text = open(path).read()
+    m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
+    assert m, f"{path}: missing frontmatter"
+    front, body = m.group(1), m.group(2)
+    fields = dict(line.split(": ", 1) for line in front.splitlines() if ": " in line)
+    assert fields.get("name") == name, f"{path}: name must be {name!r}"
+    assert fields.get("description", "").startswith("Use "), f"{path}: description must start with 'Use '"
+    tools = fields.get("allowed-tools", "")
+    for rule in ("Bash(qualifier:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)"):
+        assert rule in tools, f"{path}: allowed-tools must include {rule}"
+    for topic in re.findall(r"qualifier agents ([a-z_-]+)", body):
+        assert topic in topics, f"{path}: cites missing agents topic {topic!r}"
+    for ref in re.findall(r"qual:([a-z-]+)", body):
+        assert ref in expected, f"{path}: references unknown skill qual:{ref}"
+    for support in re.findall(r"`([a-z-]+-prompt\.md)`", body):
+        assert os.path.exists(f"{skills_dir}/{name}/{support}"), f"{path}: missing {support}"
+    # "Filling the brief" sections document placeholder tokens verbatim on
+    # purpose; check the rest of the body for accidental leftover ones.
+    body_outside_filling = re.sub(r"## Filling the brief\n.*?(\n## |\Z)", "", body, flags=re.S)
+    assert not re.search(r"\bTBD\b|(?<!\$)\{[A-Z_ ]+\}", body_outside_filling), f"{path}: placeholder text"
+    for prompt_path in sorted(glob.glob(f"{skills_dir}/{name}/*-prompt.md")):
+        prompt_text = open(prompt_path).read()
+        for topic in re.findall(r"qualifier agents ([a-z_-]+)", prompt_text):
+            assert topic in topics, f"{prompt_path}: cites missing agents topic {topic!r}"
+        for ref in re.findall(r"qual:([a-z-]+)", prompt_text):
+            assert ref in expected, f"{prompt_path}: references unknown skill qual:{ref}"
+
+bootstrap = open(f"{skills_dir}/using-qualifier/SKILL.md").read()
+assert len(bootstrap) < 8000, f"using-qualifier is {len(bootstrap)} chars; keep it under 8000 (hook context cap)"
+for name in expected - {"using-qualifier"}:
+    assert f"qual:{name}" in bootstrap, f"using-qualifier must map qual:{name}"
+PY
+ok "skills: frontmatter, cited topics, cross-references, supporting files, size"
+
+# The plugin no longer consults PATH, installs to ~/.local/bin, or has a
+# minimum version; nothing under plugins/ may still say so. .qual files hold
+# review-finding prose (data, not plugin statements), so they're excluded.
+if stale="$(grep -rnE --exclude='.qual' 'MIN_VERSION|min-version|QUALIFIER_INSTALL_DIR|\.local/bin|not on PATH' "$PLUGIN")"; then
+    fail "stale PATH/install statements under $PLUGIN:
+$stale"
+fi
+ok "no stale PATH, ~/.local/bin, or minimum-version statements under $PLUGIN"
+
+# --- subagent prompts: placeholders, not bare `qualifier` ------------------
+# Subagent prompt files never assume `qualifier` is on PATH (a subagent gets
+# no wrapper instruction), so every invocation must use the `{QUALIFIER}`
+# placeholder, filled in by the dispatching skill before dispatch.
+
+python3 - "$PLUGIN" <<'PY' || fail "bare qualifier invocations in prompt files"
+import glob, re, sys
+
+plugin = sys.argv[1]
+subcommands = (
+    "record|reply|resolve|emit|show|ls|threads|praise|review|diff|compact"
+    "|agents|init"
+)
+# May flag prose that names a subcommand right after "qualifier" (e.g.
+# "qualifier review results"); reword such prose rather than loosening this.
+pattern = re.compile(r"\bqualifier\s+(?:" + subcommands + r")\b", re.IGNORECASE)
+
+bad = []
+for path in sorted(glob.glob(f"{plugin}/skills/*/*-prompt.md")):
+    text = open(path).read()
+    for m in pattern.finditer(text):
+        bad.append(f"{path}: {m.group(0)!r}")
+assert not bad, "bare qualifier invocations (use {QUALIFIER} instead):\n" + "\n".join(bad)
+PY
+ok "no bare qualifier invocations in *-prompt.md files"
+
+# Every {PLACEHOLDER} a prompt uses is documented in its dispatching skill's
+# "Filling the brief" section, and every placeholder documented there is used
+# by at least one of that skill's prompts.
+python3 - "$PLUGIN" <<'PY' || fail "prompt placeholder documentation"
+import glob, re, sys
+
+plugin = sys.argv[1]
+skills_dir = f"{plugin}/skills"
+
+# Explicit prompt -> dispatching skill map. Every *-prompt.md must be in it.
+dispatch = {
+    "reviewing-into-qualifier": ["reviewer-prompt.md", "verifier-prompt.md"],
+    "triaging-threads": ["triager-prompt.md"],
+}
+mapped = {f"{skills_dir}/{skill}/{prompt}" for skill, prompts in dispatch.items() for prompt in prompts}
+on_disk = set(glob.glob(f"{skills_dir}/*/*-prompt.md"))
+assert on_disk == mapped, (
+    f"prompt files missing from the dispatch map: {sorted(on_disk - mapped)}; "
+    f"mapped but missing on disk: {sorted(mapped - on_disk)}"
+)
+
+placeholder_re = re.compile(r"\{[A-Z][A-Z_ a-z]*\}")
+
+for skill, prompts in dispatch.items():
+    skill_path = f"{skills_dir}/{skill}/SKILL.md"
+    skill_text = open(skill_path).read()
+    m = re.search(r"## Filling the brief\n(.*?)(\n## |\Z)", skill_text, re.S)
+    assert m, f"{skill_path}: missing a 'Filling the brief' section"
+    documented = set(placeholder_re.findall(m.group(1)))
+
+    used = set()
+    for prompt in prompts:
+        prompt_path = f"{skills_dir}/{skill}/{prompt}"
+        text = open(prompt_path).read()
+        found = set(placeholder_re.findall(text))
+        used |= found
+        undocumented = found - documented
+        assert not undocumented, f"{prompt_path}: undocumented placeholders {undocumented}"
+
+    unused = documented - used
+    assert not unused, f"{skill_path}: documents unused placeholders {unused}"
+PY
+ok "every *-prompt.md is mapped to its dispatching skill; placeholders documented both ways"
+
+# --- skill examples against the real binary ---------------------------------
+# Every qualifier command and record line in the skills and subagent briefs
+# runs against a real qualifier in a fixture repository, so no example can
+# use a flag, key, line shape, or subcommand the CLI rejects.
+status=0
+QUALIFIER_BIN="$EXAMPLES_BIN" python3 scripts/check-skill-examples.py || status=$?
+case "$status" in
+    0) ok "skill and brief examples run cleanly against the real qualifier" ;;
+    2) ;; # the checker printed its own skip line
+    *) fail "skill examples" ;;
+esac
+
+# --- closing-the-loop: every non-fresh `qualifier review` status ----------
+# `qualifier review` reports `drifted` and `missing` (file gone, or span past
+# the end of the file); the drift step must say what to do with each.
+
+python3 - "$PLUGIN" <<'PY' || fail "closing-the-loop drift step"
+import re, sys
+
+path = f"{sys.argv[1]}/skills/closing-the-loop/SKILL.md"
+text = open(path).read()
+m = re.search(r"\n3\. \*\*Drift\.\*\*(.*?)\n4\. ", text, re.S)
+assert m, f"{path}: missing step 3 (Drift)"
+step = " ".join(m.group(1).split())
+for needle in ("`drifted`", "`missing`", "--supersedes", "--reason obsolete",
+               "close authority", "cross-subject"):
+    assert needle in step, f"{path}: step 3 must mention {needle}"
+PY
+ok "closing-the-loop step 3 covers drifted and missing review results"
+
+# --- eval cases: structure and graders ----------------------------------------
+# Every case under evals/ (except the shared _fixture) must load in
+# `claude plugin eval`, which rejects unknown keys. Key sets are the ones
+# https://code.claude.com/docs/en/plugin-evals.md documents (case.yaml fields,
+# prompt.md fields, grader frontmatter and grader types). Graders use
+# JavaScript regexes over the JSON-encoded tool input; the patterns here are
+# also valid Python regexes with the same meaning. Each line the script
+# prints is one passed check.
+
+python3 - "$PLUGIN" >"$SANDBOX/eval-checks" <<'PY' || fail "eval cases and graders"
+import json, os, re, sys
+
+plugin = sys.argv[1]
+evals = f"{plugin}/evals"
+
+CASE_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs",
+             "expected_outcome", "context", "execution", "graders"}
+CASE_NESTED = {
+    "context": {"scaffold_script", "history_file", "add_dirs"},
+    "execution": {"prompt", "model", "max_turns", "timeout_seconds", "allowed_tools",
+                  "append_system_prompt", "env"},
+}
+PROMPT_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs",
+               "expected_outcome", "model", "max_turns", "timeout_seconds", "allowed_tools",
+               "append_system_prompt", "env"}
+GRADER_COMMON = {"type", "weight", "arm"}
+GRADER_TYPES = {  # type -> (options, required options)
+    "regex": ({"pattern", "flags", "match", "target"}, {"pattern"}),
+    "tool_used": ({"tool", "input_match", "min", "max"}, {"tool"}),
+    "tool_order": ({"before", "after"}, {"before", "after"}),
+    "file_exists": ({"path", "exists"}, {"path"}),
+    "llm": ({"criteria", "focus"}, set()),
+    "baseline": ({"baseline_file", "criteria"}, {"baseline_file"}),
+}
+TARGETS = {"last_message", "trace", "files", "mock_calls"}
+REGEX_KEYS = ("pattern", "input_match")
+
+def scalar(raw):
+    """(value, quoted) for a flow scalar; lists and mappings stay raw."""
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
+        return raw[1:-1].replace("''", "'"), True
+    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
+        return raw[1:-1].encode().decode("unicode_escape"), True
+    return raw, False
+
+def read_yaml(path):
+    """A minimal reader: `key: scalar` lines, and one level of nested
+    `key:` blocks indented by two spaces. Anything else is an error, so an
+    unsupported construct fails loudly instead of passing unread."""
+    top, current = {}, None
+    for n, line in enumerate(open(path).read().splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        m = re.fullmatch(r"( *)([A-Za-z_][A-Za-z0-9_]*):(?: (.*))?", line)
+        assert m, f"{path}:{n}: unsupported YAML for this checker's reader: {line!r}"
+        indent, key, value = len(m.group(1)), m.group(2), m.group(3)
+        if indent == 0:
+            assert key not in top, f"{path}:{n}: duplicate key {key!r}"
+            if value is None or not value.strip():
+                top[key], current = {}, key
+            else:
+                top[key], current = scalar(value), None
+        else:
+            assert indent == 2 and current, f"{path}:{n}: unsupported nesting: {line!r}"
+            assert value and value.strip(), f"{path}:{n}: unsupported nesting: {line!r}"
+            top[current][key] = scalar(value)
+    return top
+
+def frontmatter(path):
+    text = open(path).read()
+    m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
+    assert m, f"{path}: missing frontmatter"
+    fields = {}
+    for line in m.group(1).splitlines():
+        km = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*):(?: (.*))?", line)
+        assert km and km.group(2), f"{path}: unsupported frontmatter line {line!r}"
+        assert km.group(1) not in fields, f"{path}: duplicate key {km.group(1)!r}"
+        fields[km.group(1)] = scalar(km.group(2))
+    return fields, m.group(2)
+
+def check_regex(where, pattern):
+    # The runner uses JavaScript regexes; Python's `re` compiles the subset
+    # these graders use with the same meaning. Syntax the runner rejects is
+    # refused here, and JavaScript-only syntax Python can't compile (e.g.
+    # `(?<name>...)` groups, variable-width lookbehind, `\u{...}`) fails
+    # too, so keep graders to the common subset.
+    assert not re.search(r"\(\?[aiLmsux-]+[:)]", pattern), (
+        f"{where}: inline flags like (?i) aren't supported by the eval runner; use `flags`")
+    assert not re.search(r"\(\?P[<=>]|\\[AZ]", pattern), (
+        f"{where}: Python-only regex syntax the eval runner (JavaScript) rejects")
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        raise AssertionError(f"{where}: regex does not compile: {e}: {pattern!r}")
+
+cases = sorted(d for d in os.listdir(evals) if os.path.isdir(f"{evals}/{d}") and d != "_fixture")
+assert cases, "no eval cases found"
+for case in cases:
+    d = f"{evals}/{case}"
+    assert os.path.isfile(f"{d}/case.yaml"), f"{d}: missing case.yaml"
+    y = read_yaml(f"{d}/case.yaml")
+    assert set(y) <= CASE_KEYS, f"{d}/case.yaml: unknown keys {sorted(set(y) - CASE_KEYS)}"
+    assert y.get("schema_version") == ("1.1", True), (
+        f"{d}/case.yaml: schema_version must be the string \"1.1\", got {y.get('schema_version')}")
+    assert y.get("name", (None,))[0] == case, f"{d}/case.yaml: name must be {case!r}"
+    for key, allowed in CASE_NESTED.items():
+        if key in y:
+            assert isinstance(y[key], dict), f"{d}/case.yaml: {key} must be a mapping"
+            assert set(y[key]) <= allowed, (
+                f"{d}/case.yaml: unknown {key} keys {sorted(set(y[key]) - allowed)}")
+    scaffold = y.get("context", {}).get("scaffold_script")
+    if scaffold:
+        assert os.path.isfile(os.path.join(d, scaffold[0])), f"{d}/case.yaml: no scaffold {scaffold[0]}"
+
+    if os.path.exists(f"{d}/prompt.md"):
+        fields, body = frontmatter(f"{d}/prompt.md")
+        assert set(fields) <= PROMPT_KEYS, f"{d}/prompt.md: unknown keys {sorted(set(fields) - PROMPT_KEYS)}"
+        if "schema_version" in fields:
+            assert fields["schema_version"] == ("1.1", True), f"{d}/prompt.md: schema_version must be \"1.1\""
+        if "name" in fields:
+            assert fields["name"][0] == case, f"{d}/prompt.md: name must be {case!r}"
+        assert body.strip(), f"{d}/prompt.md: empty prompt"
+    else:
+        assert "prompt" in y.get("execution", {}), f"{d}: no prompt.md and no execution.prompt"
+
+    graders = sorted(f for f in os.listdir(f"{d}/graders") if f.endswith(".md")) \
+        if os.path.isdir(f"{d}/graders") else []
+    assert graders or "graders" in y, f"{d}: no graders"
+    for g in graders:
+        where = f"{d}/graders/{g}"
+        fields, body = frontmatter(where)
+        kind = fields.get("type", (None,))[0]
+        assert kind in GRADER_TYPES, f"{where}: type {kind!r} is not one of {sorted(GRADER_TYPES)}"
+        options, required = GRADER_TYPES[kind]
+        unknown = set(fields) - GRADER_COMMON - options
+        assert not unknown, f"{where}: keys {sorted(unknown)} are not valid for a {kind} grader"
+        missing = required - set(fields)
+        assert not missing, f"{where}: a {kind} grader needs {sorted(missing)}"
+        if kind == "llm":
+            assert "criteria" in fields or body.strip(), f"{where}: an llm grader needs criteria"
+        if "arm" in fields:
+            assert fields["arm"][0] in ("with-only", "both"), f"{where}: arm must be with-only or both"
+        if "weight" in fields:
+            assert float(fields["weight"][0]) > 0, f"{where}: weight must be positive"
+        for key in ("min", "max"):
+            if key in fields:
+                assert fields[key][0].isdigit(), f"{where}: {key} must be a non-negative integer"
+        if "min" in fields and "max" in fields:
+            assert int(fields["min"][0]) <= int(fields["max"][0]), f"{where}: min > max"
+        if "flags" in fields:
+            assert re.fullmatch(r"[dgimsuvy]+", fields["flags"][0]), f"{where}: invalid regex flags"
+        if "match" in fields:
+            assert re.fullmatch(r"not_contains|count:\d+", fields["match"][0]), (
+                f"{where}: match must be not_contains or count:N")
+        # `focus` (llm) takes the same values as `target` (regex).
+        for key in ("target", "focus"):
+            if key in fields:
+                t = fields[key][0]
+                assert t in TARGETS or re.fullmatch(r"\{\s*source:\s*file,\s*path:.+\}", t), (
+                    f"{where}: unknown {key} {t!r}")
+        for key in REGEX_KEYS:
+            if key in fields:
+                check_regex(f"{where} ({key})", fields[key][0])
+        # tool_order's before/after: a tool name, or { tool, input_match }.
+        for key in ("before", "after"):
+            if key in fields:
+                v = fields[key][0]
+                if re.fullmatch(r"[A-Za-z_][\w:*.-]*", v):
+                    continue
+                m = re.fullmatch(r"\{\s*tool:\s*([A-Za-z_][\w:*.-]*)\s*(?:,\s*input_match:\s*(.+?))?\s*\}", v)
+                assert m, f"{where}: {key} must be a tool name or {{ tool, input_match }}, got {v!r}"
+                if m.group(2):
+                    check_regex(f"{where} ({key}.input_match)", scalar(m.group(2))[0])
+print("eval cases: case.yaml, prompt.md, and grader keys are documented; every grader regex compiles")
+
+def values(path):
+    """A grader's frontmatter as plain strings."""
+    return {k: v for k, (v, _) in frontmatter(path)[0].items()}
+
+skills = sorted(d for d in os.listdir(f"{plugin}/skills") if os.path.isdir(f"{plugin}/skills/{d}"))
+
+def graders(case):
+    d = f"{evals}/{case}/graders"
+    return {f: values(f"{d}/{f}") for f in sorted(os.listdir(d)) if f.endswith(".md")}
+
+# The no-skill-fired grader catches every qual skill, prefixed or bare.
+g = values(f"{evals}/no-qual-files/graders/no-skill-fired.md")
+assert g["type"] == "tool_used" and g["tool"] == "Skill", "no-skill-fired must be a Skill tool_used grader"
+assert (g.get("min"), g.get("max"), g.get("arm")) == ("0", "0", "both"), "no-skill-fired must be min 0, max 0, arm both"
+pat = re.compile(g["input_match"])
+for name in skills:
+    for form in (f"qual:{name}", name):
+        for call in ({"skill": form}, {"skill": form, "args": "src/net.rs"}):
+            encoded = json.dumps(call)
+            assert pat.search(encoded), f"no-skill-fired misses {encoded}"
+for other in ("superpowers:brainstorming", "code-review", "other:closing-the-loop", "closing-the-loop-extra"):
+    encoded = json.dumps({"skill": other})
+    assert not pat.search(encoded), f"no-skill-fired must not match {encoded}"
+
+# Every case with a no-record grader also forbids Write and Edit calls on a
+# .qual file, in the same negation form.
+write_inputs = {
+    "Write": lambda p: {"file_path": p, "content": '{"metabox":"1"}\n'},
+    "Edit": lambda p: {"file_path": p, "old_string": "a", "new_string": "b", "replace_all": False},
+}
+qual_paths = ["/tmp/repo/src/.qual", "src/.qual", "/tmp/repo/docs/cache-design.md.qual", ".qual"]
+other_paths = ["/tmp/repo/docs/cache-design.md", "/tmp/repo/.qualifier", "/tmp/repo/src/.qual.bak",
+               "/tmp/repo/.qual/notes.md"]
+cases = [c for c in sorted(os.listdir(evals)) if os.path.isdir(f"{evals}/{c}/graders")]
+with_no_record = [c for c in cases if "no-record.md" in graders(c)]
+assert {"quiet-typo", "quiet-question", "quiet-explore"} <= set(with_no_record), with_no_record
+for case in with_no_record:
+    gs = graders(case)
+    base = gs["no-record.md"]
+    for tool, make in write_inputs.items():
+        found = [f for f, g in gs.items() if g.get("type") == "tool_used" and g.get("tool") == tool]
+        assert len(found) == 1, f"{case}: expected one {tool} grader, found {found}"
+        g = gs[found[0]]
+        assert (g.get("min"), g.get("max")) == ("0", "0"), f"{case}/{found[0]}: must be min 0, max 0"
+        assert g.get("arm") == base.get("arm"), f"{case}/{found[0]}: arm must match no-record.md"
+        pat = re.compile(g["input_match"])
+        for p in qual_paths:
+            assert pat.search(json.dumps(make(p))), f"{case}/{found[0]} misses {tool} on {p}"
+        for p in other_paths:
+            assert not pat.search(json.dumps(make(p))), f"{case}/{found[0]} must not match {tool} on {p}"
+print("eval graders: no-skill-fired matches every qual skill; no-record cases also forbid .qual writes")
+
+# review-subsystems no-bare-qualifier: the plugin keeps its qualifier binary
+# off PATH (scripts/ensure-qualifier.sh), so every call must go through its
+# `exec` form; this grader must catch the bare `qualifier <sub>` form (which
+# would fail outright) without also flagging the wrapper form.
+g = values(f"{plugin}/evals/review-subsystems/graders/no-bare-qualifier.md")
+assert g["type"] == "tool_used" and g["tool"] == "Bash", g
+assert (g.get("min"), g.get("max")) == ("0", "0"), "no-bare-qualifier must be min 0, max 0"
+pat = re.compile(g["input_match"])
+
+bare = [
+    'qualifier record blocker src/net.rs:1 "msg"',
+    "cd /tmp/repo && qualifier threads --all",
+    'qualifier reply <id> "ok"',
+]
+for cmd in bare:
+    assert pat.search(json.dumps({"command": cmd})), f"no-bare-qualifier misses {cmd!r}"
+
+wrapped = [
+    '"/plugin/scripts/ensure-qualifier.sh" exec record blocker src/net.rs:1 "msg"',
+    '"/plugin/scripts/ensure-qualifier.sh" pinned-version',
+]
+for cmd in wrapped:
+    assert not pat.search(json.dumps({"command": cmd})), f"no-bare-qualifier wrongly matches {cmd!r}"
+print("review-subsystems: no-bare-qualifier grader catches bare calls, not the wrapper form")
+
+g = values(f"{plugin}/evals/review-subsystems/graders/verified-tag.md")
+assert g["type"] == "regex" and g.get("target") == "trace", g
+pat = re.compile(g["pattern"])
+for tag in ("verified:confirmed", "verified:refuted", "verified:downgraded"):
+    assert pat.search(tag), f"verified-tag misses {tag}"
+assert not pat.search("verified:maybe"), "verified-tag must not match an unrecognized verdict"
+print("review-subsystems: verified-tag grader matches all three verdict tags")
+PY
+while IFS= read -r msg; do
+    ok "$msg"
+done <"$SANDBOX/eval-checks"
 
 # Nothing above may have written to ~/.local/bin.
 [ ! -e "$HOME/.local/bin" ] || fail "the wrapper wrote to ~/.local/bin"

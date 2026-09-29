@@ -6,14 +6,16 @@ briefs) for:
 
   - JSONL record lines: every line of a ```json fence, and every inline
     backticked object with a "kind", "location", "references", or
-    "supersedes" key (so a line that lost its kind still fails). Each file's lines run as one
-    `record --stdin --dry-run` batch in a copy of the fixture. Their keys must
-    also be ones the binary's `record --help` lists for an overrides line,
-    since the CLI ignores unknown keys rather than rejecting them.
+    "supersedes" key (so a line that lost its kind still fails). Each
+    file's lines run as one `record --stdin --dry-run` batch in a copy of
+    the fixture. Their keys must also be ones the binary's `record --help`
+    lists for an overrides line, since the CLI ignores unknown keys rather
+    than rejecting them.
   - qualifier invocations: `qualifier <sub> ...` or `{QUALIFIER} <sub> ...`
     at the start of a line in a shell fence, or as a whole inline code span.
-    Read commands run in the fixture; every other command runs in a
-    throwaway copy of it.
+    Every subcommand and flag must be one the binary's `--help` lists;
+    anything else fails before it runs. Read commands run in the fixture;
+    every other command runs in a throwaway copy of it.
 
 Each example must exit 0. Two markers, each alone on the line before an
 example (or before the fence that holds it), change that:
@@ -70,10 +72,8 @@ def placeholder_table(fx, thread):
         ("<root.id>", thread["root"]),
         ("<B's root.id>", thread["root"]),
         ("<id>", thread["root"]),
-        ("<target>", thread["root"]),
         ("<reply.id>", thread["reply"] or thread["root"]),  # a live reply in that thread
         ("<A's origin>", other["origin"]),               # another thread's origin
-        ("<prefix>", thread["root"][:8]),
         ("<A prefix>", other["root"][:8]),
         # Subjects and spans: the targeted thread's file and new lines in it.
         ("<root.subject>", thread["subject"]),
@@ -402,14 +402,23 @@ def prepare_command(ex, fx):
         words.append(tok)
         i += 1
     sub = words[1] if len(words) > 1 else ""
-    # An unknown subcommand or flag is left for the CLI to reject.
-    grammar = fx["grammar"].get(sub, {})
-    flags = grammar.get("flags", {})
-    argv, positional, i = [fx["bin"], sub], 0, 2
+    # An unknown subcommand or flag fails here, before anything runs, so an
+    # expect-fail example can't pass on a typo instead of the failure it
+    # documents.
+    if sub not in fx["grammar"]:
+        raise ValueError(f"unknown subcommand {sub!r}: `qualifier --help` does not list it")
+    grammar = fx["grammar"][sub]
+    flags = grammar["flags"]
+    argv, positional, i, options_done = [fx["bin"], sub], 0, 2, False
     while i < len(words):
         tok, value = words[i], None
         flag = tok.partition("=")[0]
-        if tok.startswith("-") and flags.get(flag, False):
+        if tok == "--":
+            options_done = True
+        elif tok.startswith("-") and len(tok) > 1 and not options_done and flag not in flags:
+            raise ValueError(f"unknown flag {flag} for qualifier {sub}: "
+                             f"`qualifier {sub} --help` does not list it")
+        if tok.startswith("-") and not options_done and flags.get(flag, False):
             flag, eq, inline = tok.partition("=")
             if eq:
                 tok, value = flag, inline
