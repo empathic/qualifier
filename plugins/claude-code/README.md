@@ -15,7 +15,9 @@ consult threads before editing, and hand off threads a fresh session can act on.
 The plugin keeps its own copy of the qualifier release it pins, under
 `~/.local/share/qualifier/plugin/<version>/` (`$XDG_DATA_HOME/qualifier/plugin/`
 when `XDG_DATA_HOME` is set). It downloads that release on first use,
-verified against checksums shipped in the plugin, and installs the new
+verified against checksums shipped in the plugin, and records the
+binary's sha256 beside it; a binary that no longer matches that record is
+reinstalled before it is run. It installs the new
 release automatically when a plugin update pins a newer one, removing
 older versions' directories (never a newer one). It never runs, replaces, or installs over a
 `qualifier` on your `PATH`, so the one you use in your shell can be any

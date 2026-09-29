@@ -20,8 +20,12 @@ jobs:
       - run: cargo test --all-features
 
   plugin:
-    name: plugin checks
-    runs-on: ubuntu-latest
+    name: plugin checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - run: scripts/test-plugin.sh

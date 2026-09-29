@@ -93,10 +93,25 @@ exit 7
 EOF
 chmod +x "$NOACCESS/curl"
 
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+# Writes <dir>/qualifier.sha256, the record of <dir>/qualifier's sha256 an
+# install leaves beside the binary.
+record_install_hash() {
+    sha256_file "$1/qualifier" >"$1/qualifier.sha256"
+}
+
 # A managed install of the real pinned version, for tests of the shipped
 # wrapper that must not download anything.
 populate_managed() {
     make_fake_qualifier "$1/$PINNED/qualifier" "$PINNED" qualifier "${2:-qualifier: 1 blocker and 0 concerns open on files changed since main}"
+    record_install_hash "$1/$PINNED"
 }
 
 # --- ensure-qualifier.sh: modes and $QUALIFIER_BIN -------------------------
@@ -486,60 +501,37 @@ assert not missing, f'matcher {matcher!r} is missing {missing}'
 ok "hooks.json SessionStart matcher includes startup, resume, clear, compact, fork"
 
 # --- managed install against a stubbed release -----------------------------
-# These run copies of the wrapper pinned to fixture releases (9.9.9 and
-# 9.9.10, with the fixtures' checksums), served by a curl stub.
-
-case "$(uname -s)-$(uname -m)" in
-    Darwin-arm64)              TARGET="aarch64-apple-darwin";      SHAVAR="SHA256_AARCH64_APPLE_DARWIN" ;;
-    Linux-x86_64)              TARGET="x86_64-unknown-linux-musl"; SHAVAR="SHA256_X86_64_UNKNOWN_LINUX_MUSL" ;;
-    Linux-aarch64|Linux-arm64) TARGET="aarch64-unknown-linux-gnu"; SHAVAR="SHA256_AARCH64_UNKNOWN_LINUX_GNU" ;;
-    *)
-        echo "skip: no release target for $(uname -s)-$(uname -m); download tests skipped"
-        echo "test-plugin: $PASS checks passed"
-        exit 0
-        ;;
-esac
-
-sha256_file() {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
-    else
-        shasum -a 256 "$1" | awk '{print $1}'
-    fi
-}
+# These run copies of the wrapper pinned to fixture releases (with the
+# fixtures' checksums), served by a curl stub.
 
 export FIXTURE_DIR="$SANDBOX/release"
-# Builds the fixture release tarball for version $1 and prints its sha256.
+# Builds the fixture release tarball for version $1 and target $2 and prints
+# its sha256. The payload's `threads` output is $3 (default: the target), so
+# each target's tarball, and the binary installed from it, is distinct.
 make_fixture() {
-    local version="$1" payload="$SANDBOX/payload-$1"
-    make_fake_qualifier "$payload/qualifier" "$version"
+    local version="$1" target="$2" payload="$SANDBOX/payload-$1-$2"
+    make_fake_qualifier "$payload/qualifier" "$version" qualifier "${3:-$target}"
     mkdir -p "$FIXTURE_DIR/v$version"
-    tar -C "$payload" -czf "$FIXTURE_DIR/v$version/qualifier-$TARGET.tar.gz" qualifier
-    sha256_file "$FIXTURE_DIR/v$version/qualifier-$TARGET.tar.gz"
+    tar -C "$payload" -czf "$FIXTURE_DIR/v$version/qualifier-$target.tar.gz" qualifier
+    sha256_file "$FIXTURE_DIR/v$version/qualifier-$target.tar.gz"
 }
-SHA_999="$(make_fixture 9.9.9)"
-SHA_9910="$(make_fixture 9.9.10)"
 
-# A copy of the wrapper pinned to version $2 with checksum $3 for this
-# platform's target.
+# A copy of the wrapper pinned to version $2 with checksum $3 in the
+# checksum variable $4 (default: this platform's, $SHAVAR).
 pinned_copy() {
-    local dest="$1" version="$2" sha="$3"
+    local dest="$1" version="$2" sha="$3" var="${4:-$SHAVAR}"
     sed -e "s/^PINNED_VERSION=.*/PINNED_VERSION=\"${version}\"/" \
-        -e "s/^${SHAVAR}=.*/${SHAVAR}=\"${sha}\"/" "$ENSURE" >"$dest"
+        -e "s/^${var}=.*/${var}=\"${sha}\"/" "$ENSURE" >"$dest"
     chmod +x "$dest"
     # Fail-fast check, not if/then/else: either grep failing should fail.
     # shellcheck disable=SC2015
-    grep -q "^PINNED_VERSION=\"${version}\"$" "$dest" && grep -q "^${SHAVAR}=\"${sha}\"$" "$dest" \
+    grep -q "^PINNED_VERSION=\"${version}\"$" "$dest" && grep -q "^${var}=\"${sha}\"$" "$dest" \
         || fail "could not pin a wrapper copy"
 }
-pinned_copy "$SANDBOX/ensure-999.sh" 9.9.9 "$SHA_999"
-pinned_copy "$SANDBOX/ensure-9910.sh" 9.9.10 "$SHA_9910"
-pinned_copy "$SANDBOX/ensure-unverified.sh" 9.9.9 ""
-pinned_copy "$SANDBOX/ensure-wrong-sha.sh" 9.9.9 "0000000000000000000000000000000000000000000000000000000000000000"
 
 # Serves the fixture releases. When CURL_RACE_DEST is set, it first plays a
 # concurrent session that finishes its install there while this download is
-# in flight, copying CURL_RACE_SRC into place.
+# in flight, copying CURL_RACE_SRC and its recorded hash into place.
 CURL_STUB="$SANDBOX/curl-stub"
 mkdir -p "$CURL_STUB"
 cat >"$CURL_STUB/curl" <<'EOF'
@@ -557,6 +549,7 @@ done
 if [ -n "${CURL_RACE_DEST:-}" ]; then
     mkdir -p "$CURL_RACE_DEST"
     cp "$CURL_RACE_SRC" "$CURL_RACE_DEST/qualifier"
+    cp "$CURL_RACE_SRC.sha256" "$CURL_RACE_DEST/qualifier.sha256"
 fi
 case "$url" in
     https://github.com/empathic/qualifier/releases/download/v*/*)
@@ -569,6 +562,100 @@ esac
 EOF
 chmod +x "$CURL_STUB/curl"
 SAFE_PATH="$CURL_STUB:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# A uname shim that reports FAKE_UNAME_S for -s and FAKE_UNAME_M for -m, so
+# every platform mapping in resolve_target runs on any host.
+UNAME_SHIM="$SANDBOX/uname-shim"
+mkdir -p "$UNAME_SHIM"
+cat >"$UNAME_SHIM/uname" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    -m) echo "$FAKE_UNAME_M" ;;
+    *) echo "$FAKE_UNAME_S" ;;
+esac
+EOF
+chmod +x "$UNAME_SHIM/uname"
+
+# P1. Every platform mapping in the shipped wrapper resolves to its release
+#     target, and that target has a 64-hex-digit embedded checksum.
+# uname-s uname-m target checksum-variable
+PLATFORMS="Darwin arm64 aarch64-apple-darwin SHA256_AARCH64_APPLE_DARWIN
+Linux x86_64 x86_64-unknown-linux-musl SHA256_X86_64_UNKNOWN_LINUX_MUSL
+Linux aarch64 aarch64-unknown-linux-gnu SHA256_AARCH64_UNKNOWN_LINUX_GNU
+Linux arm64 aarch64-unknown-linux-gnu SHA256_AARCH64_UNKNOWN_LINUX_GNU"
+while read -r os arch target var; do
+    # The single-quoted script expands its positional parameters in the
+    # inner shell.
+    # shellcheck disable=SC2016
+    out="$(FAKE_UNAME_S="$os" FAKE_UNAME_M="$arch" PATH="$UNAME_SHIM:/usr/bin:/bin" /bin/bash -c \
+        '. "$1"; t="$(resolve_target)"; echo "$t $(expected_sha256 "$t")"' _ "$SANDBOX/ensure-functions.sh")" \
+        || fail "$os-$arch: resolve_target failed"
+    [ "${out%% *}" = "$target" ] || fail "$os-$arch: expected target $target, got ${out%% *}"
+    sha="${out#* }"
+    case "$sha" in
+        *[!0-9a-f]*|"") fail "$os-$arch: checksum for $target is not hex: '$sha'" ;;
+    esac
+    [ "${#sha}" -eq 64 ] || fail "$os-$arch: checksum for $target is ${#sha} chars, not 64"
+    grep -q "^${var}=\"${sha}\"$" "$ENSURE" || fail "$os-$arch: $target's checksum does not come from $var"
+done <<EOF
+$PLATFORMS
+EOF
+ok "every platform mapping resolves to its target with a 64-hex-digit embedded checksum"
+
+# P2. The full download/verify/install path for each target, whatever the
+#     host: the wrapper fetches that target's tarball, verifies it against
+#     that target's checksum variable (the others keep the real release
+#     checksums, which the fixtures don't match), and installs it.
+while read -r os arch target var; do
+    sha="$(make_fixture 9.8.0 "$target")"
+    pinned_copy "$SANDBOX/ensure-$target.sh" 9.8.0 "$sha" "$var"
+    ph="$SANDBOX/home-$target-$arch"
+    rm -f "$CURL_MARKER"
+    out="$(FAKE_UNAME_S="$os" FAKE_UNAME_M="$arch" QUALIFIER_PLUGIN_HOME="$ph" \
+        PATH="$UNAME_SHIM:$SAFE_PATH" "$SANDBOX/ensure-$target.sh" 2>/dev/null)" \
+        || fail "$os-$arch: install of $target failed"
+    [ "$out" = "$ph/9.8.0/qualifier" ] || fail "$os-$arch: expected $ph/9.8.0/qualifier, got $out"
+    [ -e "$CURL_MARKER" ] || fail "$os-$arch: expected a download"
+    [ "$("$out" threads)" = "$target" ] || fail "$os-$arch: installed the wrong tarball: $("$out" threads)"
+    [ "$(cat "$ph/9.8.0/qualifier.sha256")" = "$(sha256_file "$out")" ] \
+        || fail "$os-$arch: the install's recorded hash does not match its binary"
+done <<EOF
+$PLATFORMS
+EOF
+ok "downloads, verifies, and installs the release for every target"
+
+# P3. A platform without a release target falls back to cargo: exit 1,
+#     nothing downloaded, nothing created.
+for platform in "Darwin x86_64" "FreeBSD amd64" "Linux armv7l"; do
+    os="${platform% *}"; arch="${platform#* }"
+    ph="$SANDBOX/home-unsupported-$os-$arch"
+    rm -f "$CURL_MARKER"
+    err="$(FAKE_UNAME_S="$os" FAKE_UNAME_M="$arch" QUALIFIER_PLUGIN_HOME="$ph" \
+        PATH="$UNAME_SHIM:$SAFE_PATH" "$ENSURE" 2>&1 >/dev/null)" \
+        && fail "$os-$arch: an unsupported platform must fail"
+    case "$err" in *"cargo install qualifier --version $PINNED"*) ;; *) fail "$os-$arch: expected the cargo fallback, got: $err" ;; esac
+    [ ! -e "$CURL_MARKER" ] || fail "$os-$arch: an unsupported platform must not download"
+    [ ! -e "$ph" ] || fail "$os-$arch: an unsupported platform must not create the plugin home"
+done
+ok "an unsupported platform falls back to cargo without downloading"
+
+case "$(uname -s)-$(uname -m)" in
+    Darwin-arm64)              TARGET="aarch64-apple-darwin";      SHAVAR="SHA256_AARCH64_APPLE_DARWIN" ;;
+    Linux-x86_64)              TARGET="x86_64-unknown-linux-musl"; SHAVAR="SHA256_X86_64_UNKNOWN_LINUX_MUSL" ;;
+    Linux-aarch64|Linux-arm64) TARGET="aarch64-unknown-linux-gnu"; SHAVAR="SHA256_AARCH64_UNKNOWN_LINUX_GNU" ;;
+    *)
+        echo "skip: no release target for $(uname -s)-$(uname -m); host download tests skipped"
+        echo "test-plugin: $PASS checks passed"
+        exit 0
+        ;;
+esac
+
+SHA_999="$(make_fixture 9.9.9 "$TARGET")"
+SHA_9910="$(make_fixture 9.9.10 "$TARGET")"
+pinned_copy "$SANDBOX/ensure-999.sh" 9.9.9 "$SHA_999"
+pinned_copy "$SANDBOX/ensure-9910.sh" 9.9.10 "$SHA_9910"
+pinned_copy "$SANDBOX/ensure-unverified.sh" 9.9.9 ""
+pinned_copy "$SANDBOX/ensure-wrong-sha.sh" 9.9.9 "0000000000000000000000000000000000000000000000000000000000000000"
 
 # Lists a plugin home's entries, dotfiles included, space-separated.
 entries_of() {
@@ -594,7 +681,9 @@ out="$(QUALIFIER_PLUGIN_HOME="$PH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>
 [ "$out" = "$PH/9.9.9/qualifier" ] || fail "expected install to $PH/9.9.9/qualifier, got $out"
 [ "$("$out" --version)" = "qualifier 9.9.9" ] || fail "installed binary does not run"
 [ "$(entries_of "$PH")" = "9.9.9" ] || fail "plugin home must hold only 9.9.9, has: $(entries_of "$PH")"
-ok "downloads, verifies, and installs the pinned release into the plugin home"
+[ "$(entries_of "$PH/9.9.9")" = "qualifier qualifier.sha256" ] || fail "install must hold the binary and its hash, has: $(entries_of "$PH/9.9.9")"
+[ "$(cat "$PH/9.9.9/qualifier.sha256")" = "$(sha256_file "$out")" ] || fail "the recorded hash does not match the installed binary"
+ok "downloads, verifies, and installs the pinned release into the plugin home, recording the binary's sha256"
 
 # D3. A second run reuses the install without calling curl.
 rm -f "$CURL_MARKER"
@@ -614,6 +703,64 @@ out="$(QUALIFIER_PLUGIN_HOME="$PH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>
 [ "$(entries_of "$PH")" = ".staging.live 9.9.9" ] || fail "reuse cleanup left: $(entries_of "$PH")"
 rm -rf "$PH/.staging.live"
 ok "the reuse path removes install leftovers older than an hour, keeps fresh ones"
+
+# D3c. A managed install whose binary no longer matches its recorded hash is
+#      reinstalled, even when it reports the pinned version. The tampered
+#      binary is never run: the hash is checked first. Also in exec mode.
+PH_HASH="$SANDBOX/home-hash"
+QUALIFIER_PLUGIN_HOME="$PH_HASH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" >/dev/null 2>&1 \
+    || fail "hash tests: initial install failed"
+TAMPER_MARKER="$SANDBOX/tampered-binary-ran"
+tamper() {
+    cat >"$PH_HASH/9.9.9/qualifier" <<EOF
+#!/usr/bin/env bash
+touch "$TAMPER_MARKER"
+case "\${1:-}" in
+    --version) echo "qualifier 9.9.9" ;;
+    *) echo "TAMPERED" ;;
+esac
+EOF
+    chmod +x "$PH_HASH/9.9.9/qualifier"
+}
+for mode in resolve exec; do
+    tamper
+    rm -f "$CURL_MARKER" "$TAMPER_MARKER"
+    if [ "$mode" = exec ]; then
+        out="$(QUALIFIER_PLUGIN_HOME="$PH_HASH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" exec threads 2>/dev/null)"
+        [ "$out" = "$TARGET" ] || fail "tampered binary (exec): expected the reinstalled binary's output, got $out"
+    else
+        out="$(QUALIFIER_PLUGIN_HOME="$PH_HASH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"
+        [ "$out" = "$PH_HASH/9.9.9/qualifier" ] || fail "tampered binary: got $out"
+    fi
+    [ -e "$CURL_MARKER" ] || fail "tampered binary ($mode): expected a reinstall"
+    [ ! -e "$TAMPER_MARKER" ] || fail "tampered binary ($mode): it must not be run"
+    [ "$("$PH_HASH/9.9.9/qualifier" threads)" = "$TARGET" ] || fail "tampered binary ($mode): not replaced"
+    [ "$(entries_of "$PH_HASH")" = "9.9.9" ] || fail "tampered binary ($mode) left: $(entries_of "$PH_HASH")"
+done
+ok "a binary that does not match its recorded hash is reinstalled without being run"
+
+# D3d. A missing, empty, or garbled hash record makes the install invalid.
+for record in missing empty garbled; do
+    case "$record" in
+        missing) rm -f "$PH_HASH/9.9.9/qualifier.sha256" ;;
+        empty) : >"$PH_HASH/9.9.9/qualifier.sha256" ;;
+        garbled) echo "not-a-hash" >"$PH_HASH/9.9.9/qualifier.sha256" ;;
+    esac
+    rm -f "$CURL_MARKER"
+    out="$(QUALIFIER_PLUGIN_HOME="$PH_HASH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"
+    [ "$out" = "$PH_HASH/9.9.9/qualifier" ] || fail "$record hash record: got $out"
+    [ -e "$CURL_MARKER" ] || fail "$record hash record: expected a reinstall"
+    [ "$(cat "$PH_HASH/9.9.9/qualifier.sha256")" = "$(sha256_file "$out")" ] \
+        || fail "$record hash record: the reinstall did not record the binary's hash"
+done
+ok "a missing, empty, or garbled hash record triggers a reinstall"
+
+# D3e. A valid install with a matching record is reused with no download.
+rm -f "$CURL_MARKER"
+out="$(QUALIFIER_PLUGIN_HOME="$PH_HASH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" exec threads 2>/dev/null)"
+[ "$out" = "$TARGET" ] || fail "valid install: got $out"
+[ ! -e "$CURL_MARKER" ] || fail "a valid install with a matching hash record must not download"
+ok "a valid install with a matching hash record is reused without a download"
 
 # D4. exec mode on the managed install.
 out="$(QUALIFIER_PLUGIN_HOME="$PH" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" exec --version)"
@@ -680,12 +827,13 @@ ok "replaces a managed dir holding the wrong version"
 #     is used and this run's download is discarded.
 PH_RACE="$SANDBOX/home-race"
 make_fake_qualifier "$SANDBOX/race-winner/qualifier" "9.9.9" qualifier "RACE-WINNER"
+record_install_hash "$SANDBOX/race-winner"
 out="$(CURL_RACE_DEST="$PH_RACE/9.9.9" CURL_RACE_SRC="$SANDBOX/race-winner/qualifier" \
     QUALIFIER_PLUGIN_HOME="$PH_RACE" PATH="$SAFE_PATH" "$SANDBOX/ensure-999.sh" 2>/dev/null)"
 [ "$out" = "$PH_RACE/9.9.9/qualifier" ] || fail "race: got $out"
 [ "$("$out" threads)" = "RACE-WINNER" ] || fail "race: the concurrent install must be kept"
 [ "$(entries_of "$PH_RACE")" = "9.9.9" ] || fail "race left: $(entries_of "$PH_RACE")"
-[ "$(entries_of "$PH_RACE/9.9.9")" = "qualifier" ] || fail "race: the discarded download leaked into 9.9.9: $(entries_of "$PH_RACE/9.9.9")"
+[ "$(entries_of "$PH_RACE/9.9.9")" = "qualifier qualifier.sha256" ] || fail "race: the discarded download leaked into 9.9.9: $(entries_of "$PH_RACE/9.9.9")"
 ok "a concurrent install that lands first is used and this download discarded"
 
 # An mv shim, first on the wrapper's PATH, that plays a concurrent session
@@ -703,7 +851,8 @@ case "${MV_SHIM_MODE:-}" in
         case "$1" in
             */.staging.*)
                 mkdir -p "$MV_SHIM_DEST"
-                cp "$MV_SHIM_SRC" "$MV_SHIM_DEST/qualifier" ;;
+                cp "$MV_SHIM_SRC" "$MV_SHIM_DEST/qualifier"
+                cp "$MV_SHIM_SRC.sha256" "$MV_SHIM_DEST/qualifier.sha256" ;;
         esac ;;
     dest-taken)
         if [ "$1" = "$MV_SHIM_DEST" ]; then
@@ -724,7 +873,7 @@ out="$(MV_SHIM_MODE=dest-appears MV_SHIM_DEST="$PH_NEST/9.9.9" MV_SHIM_SRC="$SAN
 [ "$out" = "$PH_NEST/9.9.9/qualifier" ] || fail "nested rename: got $out"
 [ "$("$out" threads)" = "RACE-WINNER" ] || fail "nested rename: the other install must be kept"
 [ "$(entries_of "$PH_NEST")" = "9.9.9" ] || fail "nested rename left: $(entries_of "$PH_NEST")"
-[ "$(entries_of "$PH_NEST/9.9.9")" = "qualifier" ] || fail "nested rename leaked staging: $(entries_of "$PH_NEST/9.9.9")"
+[ "$(entries_of "$PH_NEST/9.9.9")" = "qualifier qualifier.sha256" ] || fail "nested rename leaked staging: $(entries_of "$PH_NEST/9.9.9")"
 ok "a rename that nests staging inside a concurrent install is cleaned up"
 
 # D7c. Two sessions replacing the same invalid install: the other one moves
@@ -762,7 +911,7 @@ cat >"$MV_SHIM/mv-late" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
     */.staging.*)
-        ( sleep 0.3; mkdir -p "$MV_SHIM_DEST"; cp "$MV_SHIM_SRC" "$MV_SHIM_DEST/qualifier" ) >/dev/null 2>&1 &
+        ( sleep 0.3; mkdir -p "$MV_SHIM_DEST"; cp "$MV_SHIM_SRC" "$MV_SHIM_DEST/qualifier"; cp "$MV_SHIM_SRC.sha256" "$MV_SHIM_DEST/qualifier.sha256" ) >/dev/null 2>&1 &
         exit 1 ;;
 esac
 exec /bin/mv "$@"

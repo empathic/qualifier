@@ -13,11 +13,20 @@
 # Resolution order:
 #   1. $QUALIFIER_BIN, when set to the absolute path of a qualifier.
 #   2. The managed install $PLUGIN_HOME/$PINNED_VERSION/qualifier, when its
-#      `--version` is exactly `qualifier $PINNED_VERSION`.
+#      sha256 matches the one recorded beside it at install time
+#      (qualifier.sha256) and its `--version` is then exactly
+#      `qualifier $PINNED_VERSION`. The hash is checked first, so a binary
+#      that no longer matches is never run; it is checked on every
+#      resolution, `exec` included (about 6 ms with sha256sum and 30 ms with
+#      shasum for the 0.8.0 binary). A missing or mismatching record makes
+#      the install invalid, and step 3 replaces it. The record detects a
+#      damaged or replaced binary; someone who can write both files can
+#      forge it, so it is not a defense against that.
 #   3. Otherwise download the PINNED_VERSION release for this platform,
 #      verify it against the checksum embedded below, and install it as the
 #      managed install: extracted into a staging directory inside
-#      $PLUGIN_HOME, then renamed to $PLUGIN_HOME/$PINNED_VERSION. After a
+#      $PLUGIN_HOME, its binary's sha256 recorded there, then renamed to
+#      $PLUGIN_HOME/$PINNED_VERSION. After a
 #      successful install, version directories (N.N.N) older than
 #      PINNED_VERSION are removed; never a newer version, and nothing else.
 #      A failed download or checksum installs and removes nothing.
@@ -47,8 +56,9 @@ REPO="empathic/qualifier"
 # The release this plugin runs, and the sha256 of its tarball per target.
 # Bumped together, in a plugin release, after the skills are checked against
 # the new CLI. The checksums live here rather than being fetched from the
-# release so a tampered release is detected. Empty means no verified binary
-# for that target yet.
+# release so a tampered release is detected at download time (resolution
+# step 2 covers the installed binary). Empty means no verified binary for
+# that target yet.
 PINNED_VERSION="0.8.0"
 SHA256_AARCH64_APPLE_DARWIN="9f4bdfd7c7742948c4c24f89c5f5beebf414632ba5a4d95028294b20912f8c72"
 SHA256_X86_64_UNKNOWN_LINUX_MUSL="f39f525234cc7e473d20d88b5fca64b6b9c514de248cb7b7efe8958a8796f1ec"
@@ -114,6 +124,21 @@ is_pinned() {
         && [ "$("$1" --version </dev/null 2>/dev/null)" = "qualifier $PINNED_VERSION" ]
 }
 
+# Succeeds when directory $1 holds a valid managed install: a qualifier
+# whose sha256 matches the record beside it, then reporting exactly the
+# pinned version. The hash is checked before the binary is run.
+is_valid_install() {
+    local bin="$1/qualifier" record="$1/qualifier.sha256" recorded actual
+    [ -f "$bin" ] && [ -x "$bin" ] && [ -f "$record" ] || return 1
+    recorded="$(cat "$record" 2>/dev/null)" || return 1
+    case "$recorded" in
+        *[!0-9a-f]*|"") return 1 ;;
+    esac
+    [ "${#recorded}" -eq 64 ] || return 1
+    actual="$(sha256_of "$bin" 2>/dev/null)" || return 1
+    [ "$actual" = "$recorded" ] && is_pinned "$bin"
+}
+
 # Prints $QUALIFIER_BIN when it is set to the absolute path of a qualifier.
 # Set but unusable is a warning.
 resolve_override() {
@@ -132,9 +157,9 @@ resolve_override() {
     return 1
 }
 
-# Prints the managed install when it reports exactly the pinned version.
+# Prints the managed install when it is valid (see is_valid_install).
 resolve_managed() {
-    is_pinned "$PLUGIN_HOME/$PINNED_VERSION/qualifier" || return 1
+    is_valid_install "$PLUGIN_HOME/$PINNED_VERSION" || return 1
     echo "$PLUGIN_HOME/$PINNED_VERSION/qualifier"
 }
 
@@ -184,7 +209,9 @@ sha256_of() {
 }
 
 # Downloads, verifies, and extracts the release into $STAGING, leaving only
-# the release's contents there.
+# the release's contents there plus qualifier.sha256, the binary's sha256.
+# The record is written inside the staging directory, so it lands with the
+# binary in the one rename that installs them.
 download_and_verify() {
     local target="$1" expected actual
     local tarball="qualifier-${target}.tar.gz"
@@ -206,6 +233,7 @@ download_and_verify() {
     chmod +x "${STAGING}/qualifier"
     is_pinned "${STAGING}/qualifier" \
         || { log "Error: the downloaded binary does not report qualifier ${PINNED_VERSION}."; exit 1; }
+    sha256_of "${STAGING}/qualifier" >"${STAGING}/qualifier.sha256"
 }
 
 # Splits $1 into VERSION_PARTS (three numbers) when it is exactly N.N.N
@@ -283,8 +311,9 @@ install_qualifier() {
     trap 'rm -rf "$STAGING"' EXIT
     download_and_verify "$target"
 
-    if [ -e "$dest" ] && ! is_pinned "$dest/qualifier"; then
-        # An invalid install (wrong version, or damaged): set it aside, so
+    if [ -e "$dest" ] && ! is_valid_install "$dest"; then
+        # An invalid install (wrong version, damaged, or no matching hash
+        # record): set it aside, so
         # the rename below can put the new one in its place.
         # Best-effort: a concurrent session may have moved it already; the
         # checks below settle the outcome either way.
@@ -300,11 +329,11 @@ install_qualifier() {
     # check and the rename above, mv nested the staging directory inside it
     # (or left it where it was); either way, discard this run's copy.
     rm -rf "${dest:?}/${STAGING##*/}" "$STAGING"
-    if ! is_pinned "$dest/qualifier"; then
+    if ! is_valid_install "$dest"; then
         # A concurrent session's rename may land a moment after ours
         # failed: look once more before giving up.
         sleep 1
-        if ! is_pinned "$dest/qualifier"; then
+        if ! is_valid_install "$dest"; then
             log "Error: could not install qualifier ${PINNED_VERSION} to ${dest}."
             exit 1
         fi
