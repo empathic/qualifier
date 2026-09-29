@@ -77,8 +77,10 @@ this session saw.
   and batch lines) take the full 64-character ID of a live record, from
   `qualifier threads --format json` (`root.id`) — never a prefix or
   location.
-- More than two writes: one `record --stdin` batch, written to a file with
-  the Write tool, dry-run first (`qualifier agents batch`).
+- More than two writes: one `record --stdin` batch, written with the Write
+  tool to a file outside the repository (e.g. in a `mktemp -d` directory),
+  so it can never be committed by accident, and dry-run first
+  (`qualifier agents batch`).
 - Leave `--issuer` and `--issuer-type` unset; qualifier marks records from
   this session as `ai` and tags them with the session. Override only in
   `qual:escalating-decisions`.

@@ -1,7 +1,7 @@
 # Triager brief
 
-Triage these threads: `{IDS or SCOPE}`. Read them with
-`{QUALIFIER} threads --format json`. Do not write anything.
+Triage these threads: `{IDS or SCOPE}`. Read them, and only them, with
+`{QUALIFIER} threads {IDS or SCOPE} --format json`. Do not write anything.
 
 For each thread, check the root's claim against the current code and
 propose exactly one outcome:

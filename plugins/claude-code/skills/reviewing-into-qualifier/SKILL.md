@@ -11,7 +11,8 @@ a count and the command that lists them.
 
 ## Review
 
-- Small scope (a few files): review inline and write one batch.
+- Small scope (a few files): review inline and write one batch, in a file
+  outside the repository, as in `qual:using-qualifier` Mechanics.
 - Large scope: split by subsystem and dispatch one subagent per part with
   `reviewer-prompt.md`, filling in the scope. Each returns only the IDs it
   wrote.
@@ -46,9 +47,11 @@ In order:
    (the session issued these findings, so close authority allows it):
    `qualifier resolve <root.id> "<cite the refuting reply ID>" --reason invalid`.
 2. Re-record every `verified:downgraded` finding with the corrected kind —
-   same location, message, detail, suggested fix, and tags, superseding
-   the original: `qualifier record <kind> <location> "<message>" --detail
-   "<detail>" --suggested-fix "<fix>" --tag <tag> --supersedes <root.id>`.
+   same location, message, detail, suggested fix, and tags (every original
+   tag passed again with `--tag` except `session:*`; the new session tag is
+   added automatically), superseding the original: `qualifier record <kind>
+   <location> "<message>" --detail "<detail>" --suggested-fix "<fix>" --tag
+   <tag> --supersedes <root.id>`.
 3. Commit the review's own records — the `.qual` files this review created
    or changed — in their own commit on the branch under review, e.g.
    `chore(qual): record review <tag>`.
@@ -86,11 +89,14 @@ Counts come from queries, not by hand:
   (each thread's `root.body.kind` and `open`), or the count line
   `qualifier threads --all --tag review:<tag>` prints ("N threads (M
   open)").
-- Verdicts: `qualifier threads --tag verified:confirmed` and
-  `qualifier threads --tag verified:downgraded` (those threads stay open,
-  no `--all` needed); `qualifier threads --all --tag verified:refuted`
+- Verdicts, scoped to this review (repeated `--tag`s must all match):
+  `qualifier threads --tag review:<tag> --tag verified:confirmed` and
+  `qualifier threads --tag review:<tag> --tag verified:downgraded` (those
+  threads stay open, no `--all` needed);
+  `qualifier threads --all --tag review:<tag> --tag verified:refuted`
   (resolving a refuted finding closes its thread, so `--all` is required
-  to still see it).
+  to still see it). Without `review:<tag>`, each count includes every
+  earlier review's verdicts too.
 
 "Recorded N findings (B blockers, C concerns, S suggestions); V confirmed,
 D downgraded, R refuted. List: `qualifier threads --all --tag review:<tag>`."

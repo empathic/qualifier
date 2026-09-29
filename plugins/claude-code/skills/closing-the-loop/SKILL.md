@@ -54,6 +54,7 @@ Run this checklist before you say the work is done.
    session that is not in a record: reply on the relevant thread, or record
    an `alternative`/`waiver` on the spec (`qual:recording-design-decisions`).
 
-More than two writes: one `record --stdin` batch (`qualifier agents batch`).
+More than two writes: one `record --stdin` batch, in a file outside the
+repository, as in `qual:using-qualifier` Mechanics (`qualifier agents batch`).
 
 Next: `qual:handing-off-threads` if the session is ending.

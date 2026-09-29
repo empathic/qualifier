@@ -33,8 +33,10 @@ never send a brief with an unfilled `{…}`:
 - `{QUALIFIER}` — the exact command the session context gives for running
   qualifier (the plugin's wrapper `exec` form), copied verbatim. If you are
   running a qualifier you installed yourself, its path instead.
-- `{IDS or SCOPE}` — the thread IDs or scope (path, glob, `--kind`, `--tag`)
-  this subagent triages.
+- `{IDS or SCOPE}` — the threads this subagent triages, written as
+  `qualifier threads` arguments, since the brief passes it to that
+  command: thread IDs (space-separated), or a scope (paths, globs,
+  `--kind`, `--tag`).
 
 ## Approval
 
@@ -48,9 +50,9 @@ Apply only the rows they approve.
 
 ## Writing
 
-All writes in one batch, written outside the working tree so it can't be
-committed by accident: Write tool → `<scratch>/triage.jsonl`, where
-`<scratch>` is your scratch directory or a `mktemp -d` directory, then
+All writes in one batch, in a file outside the repository, as in
+`qual:using-qualifier` Mechanics: Write tool → `<scratch>/triage.jsonl`,
+where `<scratch>` is your scratch directory or a `mktemp -d` directory, then
 `qualifier record --stdin --dry-run < <scratch>/triage.jsonl`, then the
 real run.
 

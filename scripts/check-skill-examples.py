@@ -65,6 +65,7 @@ def placeholder_table(fx, thread):
         ("{QUALIFIER}", fx["bin"]),                      # the binary under test
         ("{SCRATCH}", fx["scratch"]),                    # a directory outside the repo
         ("{TAG}", "review:fixture"),                     # the review-scoped tag
+        ("{IDS or SCOPE}", thread["root"]),              # the threads a triager reads
         # IDs: the targeted thread's live root (full 64-hex ID).
         ("<root.id>", thread["root"]),
         ("<B's root.id>", thread["root"]),

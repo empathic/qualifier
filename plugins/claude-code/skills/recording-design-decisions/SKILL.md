@@ -32,7 +32,8 @@ them as one batch:
 {"kind": "waiver", "location": "docs/specs/cache.md:60:64", "message": "No cache warm-up on deploy", "detail": "Cold starts cost ~2s p99 for 1 minute; acceptable for internal tools"}
 ```
 
-Write that to a file with the Write tool, then
+Write that to a batch file outside the repository, as in
+`qual:using-qualifier` Mechanics, then
 `qualifier record --stdin --dry-run < file` and `qualifier record --stdin < file`.
 Line shapes: `qualifier agents batch`.
 
