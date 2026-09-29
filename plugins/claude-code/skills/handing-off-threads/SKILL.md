@@ -25,12 +25,7 @@ do?
 
 ## Fix
 
-Rewrite your own records that fail the checks below — a reply with
-`qualifier reply <root.id> "<new text>" --supersedes <reply.id>`, a root
-with `qualifier record <kind> <location> "<new text>" --supersedes <root.id>`
-(same kind, location, and tags). Both IDs are full 64-character IDs of live
-records, from `qualifier threads --format json` (`root.id`, and each live
-reply's `record.id`). Rewrite records that:
+Rewrite your own records that:
 
 - cite a brief, a prompt, "principle N", "as discussed", or anything else
   only this session saw (a public, stable URL — e.g. the Claude Code docs —
@@ -38,6 +33,19 @@ reply's `record.id`). Rewrite records that:
 - cite record IDs that are now superseded — use the live ID;
 - leave a resolution vague ("fix the locking") instead of saying where and
   how.
+
+Rewrite a reply with
+`qualifier reply <root.id> "<message>" --detail "<detail>" --tag <tag> --supersedes <reply.id>`
+and a root with `qualifier record <kind> <location> "<message>" --detail
+"<detail>" --suggested-fix "<fix>" --tag <tag> --supersedes <root.id>`.
+Carry over every field you are not rewriting exactly as it was — the kind,
+location, `--detail`, and `--suggested-fix`, and every original tag passed
+again with `--tag` except `session:*` (the new session tag is added
+automatically); a dropped detail loses a blocker's `Failure:` line, and a
+dropped tag drops the thread out of the queries that depend on it. Both IDs
+are full 64-character IDs of live records, from
+`qualifier threads --format json` (`root.id`, and each live reply's
+`record.id`).
 
 To comment on a thread this session closed, reply to the closing `resolve`
 record — the reply joins the thread, which stays closed. To reopen it,
