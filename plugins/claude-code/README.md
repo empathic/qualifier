@@ -75,10 +75,13 @@ run is marked on the line before it with `<!-- example: skip — <reason> -->`
 
 `plugins/claude-code/evals/` is a trigger-eval suite for `claude plugin eval`:
 one case per skill, seeded by `evals/_fixture/scaffold.sh` (a git repo with a
-spec, a source file, and open qualifier threads including a blocker on
-`src/net.rs`), plus three quiet cases that must *not* write a record and a
-`no-qual-files` case that must not fire any `qual:` skill at all. Running
-evals calls the model and costs money — confirm before running.
+spec, three source files under `src/`, and open qualifier threads including
+a blocker on `src/net.rs`); `review-subsystems`, a large-scope review that
+should dispatch reviewer and verifier subagents (see
+[its README](evals/review-subsystems/README.md)); three quiet cases that
+must *not* write a record; and a `no-qual-files` case that must not fire
+any `qual:` skill at all. Running evals calls the model and costs money —
+confirm before running.
 
 Each run's agent session is isolated and inherits only an allowlist of
 environment variables (`PATH`, locale, provider credentials, `EVAL_*`), so
@@ -115,13 +118,13 @@ form of `plugins:` has not been run yet — smoke-test it on one case first
 (`--case <name> --runs 1`) and confirm both skills are actually available
 before trusting a full-suite comparison.
 
-Expected: each positive case passes `skill-fired` in at least 2 of 3 runs.
+Expected: each non-quiet case passes its graders in at least 2 of 3 runs.
 `review-spec` accepts either `recording-design-decisions` or
 `reviewing-into-qualifier` firing — a "review this spec" prompt can
 legitimately trigger either skill, and the case exists to watch that
 overlap rather than force one winner. Every quiet case and `no-qual-files`
-should pass in 3 of 3, and the no-plugin baseline should pass the positive
-cases far less often than the with-plugin arm.
+should pass in 3 of 3, and the no-plugin baseline should pass the
+non-quiet cases far less often than the with-plugin arm.
 
 ### Results
 
@@ -158,9 +161,9 @@ Before a plugin release:
    QUALIFIER_BIN="$PWD/target/debug/qualifier" claude plugin eval plugins/claude-code \
      --runs 3 --scaffold --allow-tools Write Edit Bash
    ```
-2. Every positive case (one that should fire a skill and write a record)
-   must pass at least 2 of 3 runs. Every quiet/negative case (`quiet-typo`,
-   `quiet-question`, `quiet-explore`, `no-qual-files`) must pass 3 of 3.
+2. Every non-quiet case (each one but `quiet-typo`, `quiet-question`,
+   `quiet-explore`, and `no-qual-files`) must pass at least 2 of 3 runs.
+   Every quiet case (those four) must pass 3 of 3.
    `review-spec` passes on either of its two accepted skills firing.
 3. Record the outcome in the [Results](#results) table above: pass rate
    for each configuration, the date, and the qualifier/plugin version pair

@@ -1,7 +1,7 @@
 ---
 type: tool_used
 tool: Bash
-input_match: '(?:\bqualifier\b|ensure-qualifier\.sh(?:\\?")?\s+exec)\s+(record|reply|resolve|emit)'
+input_match: '"command"\s*:\s*"(?:[^"\\]|\\.)*?(?:(?<![\w-])qualifier|ensure-qualifier\.sh(?:\\")?\s+exec)\s+(?:emit|record|reply|resolve)\b'
 min: 0
 max: 0
 ---

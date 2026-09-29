@@ -57,6 +57,13 @@ PINNED="$("$BASH" "$ENSURE" pinned-version)"
 # The binary the skill-example check runs (the wrapper tests below unset
 # QUALIFIER_BIN); empty means the check looks under target/.
 EXAMPLES_BIN="${QUALIFIER_BIN:-}"
+# The binary the eval-grader checks run (the qualifier subcommand list, the
+# fixture scaffold); empty when there is none, and those checks skip.
+GRADER_BIN="$EXAMPLES_BIN"
+for candidate in target/debug/qualifier target/release/qualifier; do
+    [ -n "$GRADER_BIN" ] && break
+    [ -x "$candidate" ] && GRADER_BIN="$PWD/$candidate"
+done
 
 # --- sandbox and stubs -----------------------------------------------------
 
@@ -1179,10 +1186,10 @@ ok "closing-the-loop step 3 covers drifted and missing review results"
 # also valid Python regexes with the same meaning. Each line the script
 # prints is one passed check.
 
-python3 - "$PLUGIN" >"$SANDBOX/eval-checks" <<'PY' || fail "eval cases and graders"
-import json, os, re, sys
+python3 - "$PLUGIN" "$GRADER_BIN" "$SANDBOX" >"$SANDBOX/eval-checks" <<'PY' || fail "eval cases and graders"
+import json, os, re, subprocess, sys
 
-plugin = sys.argv[1]
+plugin, qbin, sandbox = sys.argv[1], sys.argv[2], sys.argv[3]
 evals = f"{plugin}/evals"
 
 CASE_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs",
@@ -1250,6 +1257,27 @@ def frontmatter(path):
         assert km.group(1) not in fields, f"{path}: duplicate key {km.group(1)!r}"
         fields[km.group(1)] = scalar(km.group(2))
     return fields, m.group(2)
+
+def file_target(where, raw):
+    """Validates the `{ source: file, path: <path> }` target form: exactly
+    those two keys, source `file`, and one workspace-relative file path (no
+    glob, no `..`). Returns the path."""
+    assert raw.startswith("{") and raw.endswith("}"), (
+        f"{where}: {raw!r} is not one of {sorted(TARGETS)} or {{ source: file, path: <path> }}")
+    entries = {}
+    for item in raw[1:-1].split(","):
+        km = re.fullmatch(r"\s*([a-z_]+):\s*(\S.*?)\s*", item)
+        assert km, f"{where}: cannot read {item!r} in {raw!r}"
+        assert km.group(1) not in entries, f"{where}: duplicate key {km.group(1)!r}"
+        entries[km.group(1)] = scalar(km.group(2))[0]
+    assert set(entries) == {"source", "path"}, (
+        f"{where}: a file target takes exactly source and path, got {sorted(entries)}")
+    assert entries["source"] == "file", f"{where}: source must be file, got {entries['source']!r}"
+    path = entries["path"]
+    assert not path.startswith("/") and ".." not in path.split("/"), (
+        f"{where}: path must be relative to the workspace, got {path!r}")
+    assert not re.search(r"[*?\[\]{}]", path), f"{where}: path is one file, not a glob: {path!r}"
+    return path
 
 def check_regex(where, pattern):
     # The runner uses JavaScript regexes; Python's `re` compiles the subset
@@ -1329,8 +1357,8 @@ for case in cases:
         for key in ("target", "focus"):
             if key in fields:
                 t = fields[key][0]
-                assert t in TARGETS or re.fullmatch(r"\{\s*source:\s*file,\s*path:.+\}", t), (
-                    f"{where}: unknown {key} {t!r}")
+                if t not in TARGETS:
+                    file_target(f"{where} ({key})", t)
         for key in REGEX_KEYS:
             if key in fields:
                 check_regex(f"{where} ({key})", fields[key][0])
@@ -1398,41 +1426,154 @@ for case in with_no_record:
             assert not pat.search(json.dumps(make(p))), f"{case}/{found[0]} must not match {tool} on {p}"
 print("eval graders: no-skill-fired matches every qual skill; no-record cases also forbid .qual writes")
 
-# review-subsystems no-bare-qualifier: the plugin keeps its qualifier binary
-# off PATH (scripts/ensure-qualifier.sh), so every call must go through its
-# `exec` form; this grader must catch the bare `qualifier <sub>` form (which
-# would fail outright) without also flagging the wrapper form.
-g = values(f"{plugin}/evals/review-subsystems/graders/no-bare-qualifier.md")
-assert g["type"] == "tool_used" and g["tool"] == "Bash", g
-assert (g.get("min"), g.get("max")) == ("0", "0"), "no-bare-qualifier must be min 0, max 0"
-pat = re.compile(g["input_match"])
+# Bash graders match the JSON-encoded tool input, which also carries the
+# call's free-text `description`, so each is anchored inside the `command`
+# string and names real subcommands. The plugin keeps its qualifier binary
+# off PATH (scripts/ensure-qualifier.sh): no-bare-qualifier catches a bare
+# `qualifier <sub>` (which would fail outright) but not the wrapper form;
+# no-record and wrote-record accept either form. Every copy of a grader is
+# identical, and its subcommand list is checked against `qualifier --help`
+# so it can't drift from the CLI.
+WRAPPER = '"/plugin/scripts/ensure-qualifier.sh"'
 
-bare = [
-    'qualifier record blocker src/net.rs:1 "msg"',
-    "cd /tmp/repo && qualifier threads --all",
-    'qualifier reply <id> "ok"',
+def bash_call(command, description=None, description_first=False):
+    call = {"command": command}
+    if description is not None:
+        call = {"description": description, **call} if description_first else {**call, "description": description}
+    return json.dumps(call)
+
+def copies(name):
+    found = {c: f"{evals}/{c}/graders/{name}" for c in cases if os.path.isfile(f"{evals}/{c}/graders/{name}")}
+    texts = {open(p).read() for p in found.values()}
+    assert found and len(texts) == 1, f"every {name} must be identical: {sorted(found)}"
+    g = values(next(iter(found.values())))
+    assert g["type"] == "tool_used" and g["tool"] == "Bash", f"{name}: must be a Bash tool_used grader"
+    return g, sorted(found)
+
+def subcommands_of(g, name):
+    m = re.search(r"\\s\+\(\?:([a-z|]+)\)\\b$", g["input_match"])
+    assert m, f"{name}: must end in a (?:sub|sub...)\\b subcommand group"
+    return set(m.group(1).split("|"))
+
+def check_calls(name, pat, hits, misses):
+    for call in hits:
+        assert pat.search(call), f"{name} misses {call}"
+    for call in misses:
+        assert not pat.search(call), f"{name} wrongly matches {call}"
+
+# Calls that name qualifier subcommands only outside the command string,
+# or run something that is not a qualifier subcommand.
+DESCRIPTION_ONLY = [
+    bash_call(f"{WRAPPER} exec threads --format json", "List qualifier threads for this review"),
+    bash_call("ls src", "Read qualifier records in src/.qual"),
+    bash_call("git status", "qualifier record check before commit"),
+    bash_call("ls src", "Run qualifier reply on the blocker", description_first=True),
+    bash_call("cargo install qualifier --version 0.8.0 --locked"),
+    bash_call("grep -rn 'verified' src/.qual"),
 ]
-for cmd in bare:
-    assert pat.search(json.dumps({"command": cmd})), f"no-bare-qualifier misses {cmd!r}"
 
-wrapped = [
-    '"/plugin/scripts/ensure-qualifier.sh" exec record blocker src/net.rs:1 "msg"',
-    '"/plugin/scripts/ensure-qualifier.sh" pinned-version',
-]
-for cmd in wrapped:
-    assert not pat.search(json.dumps({"command": cmd})), f"no-bare-qualifier wrongly matches {cmd!r}"
-print("review-subsystems: no-bare-qualifier grader catches bare calls, not the wrapper form")
+no_bare, no_bare_cases = copies("no-bare-qualifier.md")
+assert (no_bare.get("min"), no_bare.get("max")) == ("0", "0"), "no-bare-qualifier must be min 0, max 0"
+no_record, no_record_cases = copies("no-record.md")
+wrote, wrote_cases = copies("wrote-record.md")
 
-g = values(f"{plugin}/evals/review-subsystems/graders/verified-tag.md")
-assert g["type"] == "regex" and g.get("target") == "trace", g
+if not qbin:
+    print("skip: no qualifier binary; Bash grader subcommand and fixture checks skipped")
+else:
+    top = subprocess.run([qbin, "--help"], capture_output=True, text=True, check=True).stdout
+    all_subs = set(re.findall(r"^  ([a-z][a-z-]*)\s{2,}\S", top, re.M))
+    section = re.search(r"^Record observations:\n((?:  .*\n)+)", top, re.M)
+    assert section, "`qualifier --help` has no 'Record observations:' section"
+    write_subs = set(re.findall(r"^  ([a-z][a-z-]*)\s{2,}", section.group(1), re.M))
+    assert {"record", "reply", "resolve", "threads"} <= all_subs, all_subs
+    assert subcommands_of(no_bare, "no-bare-qualifier") == all_subs, (
+        f"no-bare-qualifier subcommands must be `qualifier --help`'s: {sorted(all_subs)}")
+    assert subcommands_of(no_record, "no-record") == write_subs, (
+        f"no-record subcommands must be the 'Record observations' ones: {sorted(write_subs)}")
+    assert subcommands_of(wrote, "wrote-record") == write_subs - {"emit"}, (
+        f"wrote-record subcommands must be {sorted(write_subs - {'emit'})}")
+
+    # Escaped quotes earlier in the command must not stop the match.
+    QUOTED = 'git commit -m "fix: \\"retry\\" budget" && '
+    pat = re.compile(no_bare["input_match"])
+    check_calls("no-bare-qualifier", pat,
+        [bash_call(f"qualifier {sub} --help") for sub in sorted(all_subs)] + [
+            bash_call('qualifier record blocker src/net.rs:1 "msg"'),
+            bash_call("cd /tmp/repo && qualifier threads --all"),
+            bash_call(QUOTED + 'qualifier reply 1a2b3c4d "ok"'),
+            bash_call('qualifier record concern src/net.rs:1 "a \\"quoted\\" word"', "Record a finding"),
+        ],
+        DESCRIPTION_ONLY + [
+            bash_call(f'{WRAPPER} exec record blocker src/net.rs:1 "msg"'),
+            bash_call(f"{WRAPPER} pinned-version"),
+            bash_call(QUOTED + f"{WRAPPER} exec threads"),
+            bash_call("/opt/bin/qualifier threads"),
+        ])
+    for name, g, subs in (("no-record", no_record, write_subs), ("wrote-record", wrote, write_subs - {"emit"})):
+        pat = re.compile(g["input_match"])
+        check_calls(name, pat,
+            [bash_call(f'qualifier {sub} src/net.rs "m"') for sub in sorted(subs)]
+            + [bash_call(f'{WRAPPER} exec {sub} src/net.rs "m"') for sub in sorted(subs)] + [
+                bash_call(QUOTED + f'{WRAPPER} exec record concern src/net.rs:1 "m"', "Record it"),
+                bash_call(QUOTED + 'qualifier reply 1a2b3c4d "ok"'),
+                bash_call("/repo/target/debug/qualifier record --stdin < /tmp/x/batch.jsonl"),
+            ],
+            DESCRIPTION_ONLY + [
+                bash_call(f"{WRAPPER} exec threads --format json", "Record qualifier reply targets"),
+                bash_call("qualifier threads --all"),
+                bash_call("qualifier records"),
+                bash_call(f"{WRAPPER} exec agents batch"),
+            ])
+    print(f"eval graders: Bash graders match only the command, and name `qualifier --help`'s "
+          f"subcommands (no-bare-qualifier: {len(no_bare_cases)}, no-record: {len(no_record_cases)}, "
+          f"wrote-record: {len(wrote_cases)} cases)")
+
+# verified-tag grades the file the verifier's replies land in, not the
+# trace (which also holds the loaded skill and the filled verifier brief,
+# both quoting the verdict tags). Scaffold the fixture, then write replies
+# the way verifier-prompt.md documents; the grader must match the file only
+# after they land.
+g = values(f"{evals}/review-subsystems/graders/verified-tag.md")
+assert g["type"] == "regex" and g.get("match", "contains") == "contains", g
+target = file_target("verified-tag", g.get("target", ""))
 pat = re.compile(g["pattern"])
-for tag in ("verified:confirmed", "verified:refuted", "verified:downgraded"):
-    assert pat.search(tag), f"verified-tag misses {tag}"
-assert not pat.search("verified:maybe"), "verified-tag must not match an unrecognized verdict"
-print("review-subsystems: verified-tag grader matches all three verdict tags")
+for text in ("verified:maybe", '"verified:maybe"', "verified:confirmed"):
+    assert not pat.search(text), f"verified-tag must not match {text!r}"
+brief = open(f"{plugin}/skills/reviewing-into-qualifier/verifier-prompt.md").read()
+templates = re.findall(r"^`(\{.*\})`$", brief, re.M)
+verdicts = sorted(t for line in templates for t in json.loads(line).get("tags", []))
+assert verdicts == ["verified:confirmed", "verified:downgraded", "verified:refuted"], verdicts
+if qbin:
+    work = f"{sandbox}/verified-tag-fixture"
+    os.makedirs(work)
+    env = {**os.environ, "QUALIFIER_BIN": qbin, "GIT_CONFIG_GLOBAL": os.devnull}
+    scaffold = os.path.abspath(f"{evals}/_fixture/scaffold.sh")
+    subprocess.run(["bash", scaffold], cwd=work, env=env, check=True, capture_output=True)
+    def q(*args, stdin=None):
+        return subprocess.run([qbin, *args], cwd=work, env=env, input=stdin, check=True,
+                              capture_output=True, text=True).stdout
+    for i, path in enumerate(("src/net.rs", "src/auth.rs", "src/cache.rs")):
+        q("record", "concern", f"{path}:1", f"finding {i}", "--tag", "review", "--tag", "review:fixture")
+    graded = f"{work}/{target}"
+    assert os.path.isfile(graded), f"verified-tag reads {target}, which the fixture does not have"
+    assert not pat.search(open(graded).read()), "verified-tag matches the fixture before any verdict"
+    roots = [t["root"] for t in json.loads(q("threads", "--tag", "review:fixture", "--format", "json"))]
+    assert len(roots) == len(templates) == 3, (roots, templates)
+    for n, (root, line) in enumerate(zip(roots, templates), 1):
+        reply = json.loads(line.replace("<root.subject>", root["subject"]).replace("<root.id>", root["id"]))
+        reply = {k: (re.sub(r"<[^<>]+>", "sample", v) if isinstance(v, str) else v) for k, v in reply.items()}
+        q("record", "--stdin", stdin=json.dumps(reply) + "\n")
+        assert len(pat.findall(open(graded).read())) == n, (
+            f"verified-tag misses a {reply['tags'][0]} reply in {target}")
+    print(f"review-subsystems: verified-tag grades {target}, where the fixture's verdict replies land")
+else:
+    print("skip: no qualifier binary; verified-tag fixture check skipped")
 PY
 while IFS= read -r msg; do
-    ok "$msg"
+    case "$msg" in
+        skip:*) echo "$msg" ;;
+        *) ok "$msg" ;;
+    esac
 done <"$SANDBOX/eval-checks"
 
 # Nothing above may have written to ~/.local/bin.
