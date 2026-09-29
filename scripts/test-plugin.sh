@@ -466,7 +466,9 @@ subcommands = (
     "record|reply|resolve|emit|show|ls|threads|praise|review|diff|compact"
     "|agents|init"
 )
-pattern = re.compile(r"\bqualifier\s+(?:" + subcommands + r")\b")
+# May flag prose that names a subcommand right after "qualifier" (e.g.
+# "qualifier review results"); reword such prose rather than loosening this.
+pattern = re.compile(r"\bqualifier\s+(?:" + subcommands + r")\b", re.IGNORECASE)
 
 bad = []
 for path in sorted(glob.glob(f"{plugin}/skills/*/*-prompt.md")):
@@ -481,16 +483,22 @@ ok "no bare qualifier invocations in *-prompt.md files"
 # "Filling the brief" section, and every placeholder documented there is used
 # by at least one of that skill's prompts.
 python3 - "$PLUGIN" <<'PY' || fail "prompt placeholder documentation"
-import re, sys
+import glob, re, sys
 
 plugin = sys.argv[1]
 skills_dir = f"{plugin}/skills"
 
-# Explicit prompt -> dispatching skill map.
+# Explicit prompt -> dispatching skill map. Every *-prompt.md must be in it.
 dispatch = {
     "reviewing-into-qualifier": ["reviewer-prompt.md", "verifier-prompt.md"],
     "triaging-threads": ["triager-prompt.md"],
 }
+mapped = {f"{skills_dir}/{skill}/{prompt}" for skill, prompts in dispatch.items() for prompt in prompts}
+on_disk = set(glob.glob(f"{skills_dir}/*/*-prompt.md"))
+assert on_disk == mapped, (
+    f"prompt files missing from the dispatch map: {sorted(on_disk - mapped)}; "
+    f"mapped but missing on disk: {sorted(mapped - on_disk)}"
+)
 
 placeholder_re = re.compile(r"\{[A-Z][A-Z_ a-z]*\}")
 
@@ -513,7 +521,7 @@ for skill, prompts in dispatch.items():
     unused = documented - used
     assert not unused, f"{skill_path}: documents unused placeholders {unused}"
 PY
-ok "prompt placeholders are documented in their dispatching skill, and vice versa"
+ok "every *-prompt.md is mapped to its dispatching skill; placeholders documented both ways"
 
 # --- skill examples against the real binary ---------------------------------
 # Every qualifier command and record line in the skills and subagent briefs
@@ -544,6 +552,169 @@ for needle in ("`drifted`", "`missing`", "--supersedes", "--reason obsolete",
     assert needle in step, f"{path}: step 3 must mention {needle}"
 PY
 ok "closing-the-loop step 3 covers drifted and missing review results"
+
+# --- eval cases: structure -----------------------------------------------------
+# Every case under evals/ (except the shared _fixture) must load in
+# `claude plugin eval`, which rejects unknown keys. Key sets are the ones
+# https://code.claude.com/docs/en/plugin-evals.md documents (case.yaml fields,
+# prompt.md fields, grader frontmatter and grader types).
+
+python3 - "$PLUGIN" <<'PY' || fail "eval case structure"
+import os, re, sys
+
+plugin = sys.argv[1]
+evals = f"{plugin}/evals"
+
+CASE_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs",
+             "expected_outcome", "context", "execution", "graders"}
+CASE_NESTED = {
+    "context": {"scaffold_script", "history_file", "add_dirs"},
+    "execution": {"prompt", "model", "max_turns", "timeout_seconds", "allowed_tools",
+                  "append_system_prompt", "env"},
+}
+PROMPT_KEYS = {"schema_version", "name", "description", "tags", "plugins", "runs",
+               "expected_outcome", "model", "max_turns", "timeout_seconds", "allowed_tools",
+               "append_system_prompt", "env"}
+GRADER_COMMON = {"type", "weight", "arm"}
+GRADER_TYPES = {  # type -> (options, required options)
+    "regex": ({"pattern", "flags", "match", "target"}, {"pattern"}),
+    "tool_used": ({"tool", "input_match", "min", "max"}, {"tool"}),
+    "tool_order": ({"before", "after"}, {"before", "after"}),
+    "file_exists": ({"path", "exists"}, {"path"}),
+    "llm": ({"criteria", "focus"}, set()),
+    "baseline": ({"baseline_file", "criteria"}, {"baseline_file"}),
+}
+TARGETS = {"last_message", "trace", "files", "mock_calls"}
+REGEX_KEYS = ("pattern", "input_match")
+
+def scalar(raw):
+    """(value, quoted) for a flow scalar; lists and mappings stay raw."""
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
+        return raw[1:-1].replace("''", "'"), True
+    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
+        return raw[1:-1].encode().decode("unicode_escape"), True
+    return raw, False
+
+def read_yaml(path):
+    """A minimal reader: `key: scalar` lines, and one level of nested
+    `key:` blocks indented by two spaces. Anything else is an error, so an
+    unsupported construct fails loudly instead of passing unread."""
+    top, current = {}, None
+    for n, line in enumerate(open(path).read().splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        m = re.fullmatch(r"( *)([A-Za-z_][A-Za-z0-9_]*):(?: (.*))?", line)
+        assert m, f"{path}:{n}: unsupported YAML for this checker's reader: {line!r}"
+        indent, key, value = len(m.group(1)), m.group(2), m.group(3)
+        if indent == 0:
+            assert key not in top, f"{path}:{n}: duplicate key {key!r}"
+            if value is None or not value.strip():
+                top[key], current = {}, key
+            else:
+                top[key], current = scalar(value), None
+        else:
+            assert indent == 2 and current, f"{path}:{n}: unsupported nesting: {line!r}"
+            assert value and value.strip(), f"{path}:{n}: unsupported nesting: {line!r}"
+            top[current][key] = scalar(value)
+    return top
+
+def frontmatter(path):
+    text = open(path).read()
+    m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
+    assert m, f"{path}: missing frontmatter"
+    fields = {}
+    for line in m.group(1).splitlines():
+        km = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*):(?: (.*))?", line)
+        assert km and km.group(2), f"{path}: unsupported frontmatter line {line!r}"
+        assert km.group(1) not in fields, f"{path}: duplicate key {km.group(1)!r}"
+        fields[km.group(1)] = scalar(km.group(2))
+    return fields, m.group(2)
+
+def check_regex(where, pattern):
+    # The runner uses JavaScript regexes; Python's `re` compiles the subset
+    # these graders use with the same meaning. Syntax the runner rejects is
+    # refused here, and JavaScript-only syntax Python can't compile (e.g.
+    # `(?<name>...)` groups, variable-width lookbehind, `\u{...}`) fails
+    # too, so keep graders to the common subset.
+    assert not re.search(r"\(\?[aiLmsux-]+[:)]", pattern), (
+        f"{where}: inline flags like (?i) aren't supported by the eval runner; use `flags`")
+    assert not re.search(r"\(\?P[<=>]|\\[AZ]", pattern), (
+        f"{where}: Python-only regex syntax the eval runner (JavaScript) rejects")
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        raise AssertionError(f"{where}: regex does not compile: {e}: {pattern!r}")
+
+cases = sorted(d for d in os.listdir(evals) if os.path.isdir(f"{evals}/{d}") and d != "_fixture")
+assert cases, "no eval cases found"
+for case in cases:
+    d = f"{evals}/{case}"
+    assert os.path.isfile(f"{d}/case.yaml"), f"{d}: missing case.yaml"
+    y = read_yaml(f"{d}/case.yaml")
+    assert set(y) <= CASE_KEYS, f"{d}/case.yaml: unknown keys {sorted(set(y) - CASE_KEYS)}"
+    assert y.get("schema_version") == ("1.1", True), (
+        f"{d}/case.yaml: schema_version must be the string \"1.1\", got {y.get('schema_version')}")
+    assert y.get("name", (None,))[0] == case, f"{d}/case.yaml: name must be {case!r}"
+    for key, allowed in CASE_NESTED.items():
+        if key in y:
+            assert isinstance(y[key], dict), f"{d}/case.yaml: {key} must be a mapping"
+            assert set(y[key]) <= allowed, (
+                f"{d}/case.yaml: unknown {key} keys {sorted(set(y[key]) - allowed)}")
+    scaffold = y.get("context", {}).get("scaffold_script")
+    if scaffold:
+        assert os.path.isfile(os.path.join(d, scaffold[0])), f"{d}/case.yaml: no scaffold {scaffold[0]}"
+
+    if os.path.exists(f"{d}/prompt.md"):
+        fields, body = frontmatter(f"{d}/prompt.md")
+        assert set(fields) <= PROMPT_KEYS, f"{d}/prompt.md: unknown keys {sorted(set(fields) - PROMPT_KEYS)}"
+        if "schema_version" in fields:
+            assert fields["schema_version"] == ("1.1", True), f"{d}/prompt.md: schema_version must be \"1.1\""
+        if "name" in fields:
+            assert fields["name"][0] == case, f"{d}/prompt.md: name must be {case!r}"
+        assert body.strip(), f"{d}/prompt.md: empty prompt"
+    else:
+        assert "prompt" in y.get("execution", {}), f"{d}: no prompt.md and no execution.prompt"
+
+    graders = sorted(f for f in os.listdir(f"{d}/graders") if f.endswith(".md")) \
+        if os.path.isdir(f"{d}/graders") else []
+    assert graders or "graders" in y, f"{d}: no graders"
+    for g in graders:
+        where = f"{d}/graders/{g}"
+        fields, body = frontmatter(where)
+        kind = fields.get("type", (None,))[0]
+        assert kind in GRADER_TYPES, f"{where}: type {kind!r} is not one of {sorted(GRADER_TYPES)}"
+        options, required = GRADER_TYPES[kind]
+        unknown = set(fields) - GRADER_COMMON - options
+        assert not unknown, f"{where}: keys {sorted(unknown)} are not valid for a {kind} grader"
+        missing = required - set(fields)
+        assert not missing, f"{where}: a {kind} grader needs {sorted(missing)}"
+        if kind == "llm":
+            assert "criteria" in fields or body.strip(), f"{where}: an llm grader needs criteria"
+        if "arm" in fields:
+            assert fields["arm"][0] in ("with-only", "both"), f"{where}: arm must be with-only or both"
+        if "weight" in fields:
+            assert float(fields["weight"][0]) > 0, f"{where}: weight must be positive"
+        for key in ("min", "max"):
+            if key in fields:
+                assert fields[key][0].isdigit(), f"{where}: {key} must be a non-negative integer"
+        if "min" in fields and "max" in fields:
+            assert int(fields["min"][0]) <= int(fields["max"][0]), f"{where}: min > max"
+        if "flags" in fields:
+            assert re.fullmatch(r"[dgimsuvy]+", fields["flags"][0]), f"{where}: invalid regex flags"
+        if "match" in fields:
+            assert re.fullmatch(r"not_contains|count:\d+", fields["match"][0]), (
+                f"{where}: match must be not_contains or count:N")
+        if "target" in fields:
+            t = fields["target"][0]
+            assert t in TARGETS or re.fullmatch(r"\{\s*source:\s*file,\s*path:.+\}", t), (
+                f"{where}: unknown target {t!r}")
+        for key in REGEX_KEYS:
+            if key in fields:
+                check_regex(f"{where} ({key})", fields[key][0])
+print(f"eval cases: {len(cases)} checked")
+PY
+ok "eval cases: case.yaml, prompt.md, and grader keys are documented; every grader regex compiles"
 
 # --- eval graders ------------------------------------------------------------
 # Graders use JavaScript regexes over the JSON-encoded tool input; the
