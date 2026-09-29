@@ -32,6 +32,12 @@ jobs:
           - os: macos-latest
             bash: /bin/bash
     runs-on: ${{ matrix.os }}
+    env:
+      # The skill-example check runs every skill's qualifier examples
+      # against this build; with QUALIFIER_BIN set it fails, never skips,
+      # when the binary is missing.
+      QUALIFIER_BIN: ${{ github.workspace }}/target/debug/qualifier
     steps:
       - uses: actions/checkout@v4
+      - run: cargo build --bin qualifier
       - run: ${{ matrix.bash }} scripts/test-plugin.sh

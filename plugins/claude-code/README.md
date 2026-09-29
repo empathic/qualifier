@@ -48,6 +48,14 @@ QUALIFIER_BIN=$PWD/target/debug/qualifier claude --plugin-dir ./plugins/claude-c
 scripts/test-plugin.sh                            # offline checks
 ```
 
+`scripts/test-plugin.sh` also runs every qualifier command and record line
+in the skills and subagent briefs against a real binary in a fixture
+repository (`scripts/check-skill-examples.py`): `$QUALIFIER_BIN`, else
+`target/debug/qualifier` or `target/release/qualifier`. Placeholders such as
+`<root.id>` are filled from the table in that script; an example that can't
+run is marked on the line before it with `<!-- example: skip — <reason> -->`
+(or `<!-- example: expect-fail -->` for an intended failure).
+
 ## Evals
 
 `plugins/claude-code/evals/` is a trigger-eval suite for `claude plugin eval`:

@@ -54,6 +54,10 @@ fi
 
 PINNED="$("$BASH" "$ENSURE" pinned-version)"
 
+# The binary the skill-example check runs (the wrapper tests below unset
+# QUALIFIER_BIN); empty means the check looks under target/.
+EXAMPLES_BIN="${QUALIFIER_BIN:-}"
+
 # --- sandbox and stubs -----------------------------------------------------
 
 SANDBOX="$(mktemp -d)"
@@ -510,6 +514,18 @@ for skill, prompts in dispatch.items():
     assert not unused, f"{skill_path}: documents unused placeholders {unused}"
 PY
 ok "prompt placeholders are documented in their dispatching skill, and vice versa"
+
+# --- skill examples against the real binary ---------------------------------
+# Every qualifier command and record line in the skills and subagent briefs
+# runs against a real qualifier in a fixture repository, so no example can
+# use a flag, key, line shape, or subcommand the CLI rejects.
+status=0
+QUALIFIER_BIN="$EXAMPLES_BIN" python3 scripts/check-skill-examples.py || status=$?
+case "$status" in
+    0) ok "skill and brief examples run cleanly against the real qualifier" ;;
+    2) ;; # the checker printed its own skip line
+    *) fail "skill examples" ;;
+esac
 
 # --- closing-the-loop: every non-fresh `qualifier review` status ----------
 # `qualifier review` reports `drifted` and `missing` (file gone, or span past
