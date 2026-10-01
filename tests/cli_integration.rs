@@ -6280,3 +6280,31 @@ fn test_record_reversed_span_is_an_error_not_a_panic() {
     }
     assert!(!dir.path().join(".qual").exists());
 }
+
+#[test]
+fn test_malformed_sibling_qual_warns_on_read_and_blocks_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "fn x() {}\n").unwrap();
+    write_id(dir.path(), &["record", "concern", "x.rs", "still visible"]);
+    std::fs::create_dir_all(dir.path().join("other")).unwrap();
+    let bad = r#"{"metabox":"1","type":"annotation","subject":"other/y.rs","issuer":"mailto:t@t.com","created_at":"2026-01-01T00:00:00Z","id":"","body":{"kind":"concern"}}"#;
+    std::fs::write(dir.path().join("other/.qual"), format!("{bad}\n")).unwrap();
+
+    for args in [&["threads", "x.rs"][..], &["show", "x.rs"][..], &["ls"][..]] {
+        let (stdout, stderr, code) = run_qualifier(dir.path(), args);
+        assert_eq!(code, 0, "{args:?}: {stdout}{stderr}");
+        assert!(
+            stderr.contains("other/.qual:1:") && stderr.contains("summary"),
+            "{args:?} should name the bad line: {stderr}"
+        );
+    }
+    let (stdout, _, _) = run_qualifier(dir.path(), &["show", "x.rs"]);
+    assert!(stdout.contains("still visible"), "{stdout}");
+
+    // A rewrite of the malformed file must fail rather than drop the line.
+    let (_, stderr, code) = run_qualifier(dir.path(), &["compact", "--all"]);
+    assert_ne!(code, 0, "{stderr}");
+    assert!(stderr.contains("other/.qual:1:"), "{stderr}");
+    let after = std::fs::read_to_string(dir.path().join("other/.qual")).unwrap();
+    assert_eq!(after, format!("{bad}\n"));
+}
