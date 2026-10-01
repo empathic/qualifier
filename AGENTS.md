@@ -15,6 +15,7 @@
 - `./scripts/dev.sh` — serve the Eleventy site locally; installs pnpm deps on first run.
 - `./scripts/release.sh [--execute] [--allow-dirty]` — dry-run publish by default; `--execute` actually publishes after tests/clippy.
 - `scripts/test-plugin.sh` — offline checks for the Claude Code plugin (manifests, binary wrapper, SessionStart hook, skills, eval cases), including running every skill's qualifier examples against `target/debug/qualifier` or `$QUALIFIER_BIN` (`scripts/check-skill-examples.py`).
+- `scripts/eval-plugin.sh [--with <plugin-dir>] [claude plugin eval options]` — run the plugin's eval suite (calls the model and costs money; `--max-cost-usd 40` unless given). `--with` also loads another plugin, such as superpowers. Results go in the plugin README's Results table before a plugin release.
 
 ## Coding Style & Naming Conventions
 - Rust 2024; prefer small, deterministic functions and explicit error handling via `Result` + `thiserror` types.

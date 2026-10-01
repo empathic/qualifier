@@ -139,31 +139,33 @@ qualifier there to seed the fixture threads. It receives only `PATH`,
 does not reach it either: put the built binary first on `PATH`. `Bash`,
 `Write`, and `Edit` are gated tools: listing them in a case's
 `allowed_tools` is not enough, they also need an operator grant on the
-command line. From the repository root, smoke-test one case first, then
-run the full suite:
+command line. `scripts/eval-plugin.sh` does all of this: it builds
+qualifier, puts it first on `PATH`, passes `--scaffold` and the tool
+grants, runs from any directory, and sets a `--max-cost-usd 40` ceiling
+unless you give one. Any other option goes through to
+`claude plugin eval`. Smoke-test one case first, then run the full suite:
 
 ```bash
-cargo build --bin qualifier
-PATH="$PWD/target/debug:$PATH" claude plugin eval plugins/claude-code \
-  --case design-rejects-option --runs 1 --scaffold --allow-tools Write Edit Bash
-
-PATH="$PWD/target/debug:$PATH" claude plugin eval plugins/claude-code \
-  --runs 3 --scaffold --allow-tools Write Edit Bash
+scripts/eval-plugin.sh --case design-rejects-option --runs 1
+scripts/eval-plugin.sh --runs 3
 ```
 
 Each case also runs against a no-plugin baseline by default (`--ablation
 with-without`, automatic once the plugin resolves), so the summary reports
 `WITH`, `W/OUT`, and `Δ`.
 
-To also run with `superpowers` loaded alongside `qual`, add its plugin
-directory to the `plugins:` list in each case (`prompt.md` frontmatter, or
-`case.yaml`; it defaults to just the enclosing `qual` plugin) — for example
-`plugins: ["../..", "/path/to/superpowers"]` — then run the same command
-again. `claude plugin eval` has no flag for adding a second plugin to a run;
-`plugins:` is the documented way to list more than one. This two-plugin
-form of `plugins:` has not been run yet — smoke-test it on one case first
-(`--case <name> --runs 1`) and confirm both skills are actually available
-before trusting a full-suite comparison.
+To also load `superpowers` (or any other plugin) alongside `qual`, pass
+its directory with `--with`:
+
+```bash
+scripts/eval-plugin.sh --with ~/.claude/plugins/cache/claude-plugins-official/superpowers/<version> --runs 3
+```
+
+A case's `plugins:` list can load more than one plugin, but only from
+inside the plugin under test, so `--with` runs the suite from a temporary
+copy of `plugins/claude-code` with the extra plugin copied under
+`.eval-plugins/` and added to every case. Reports still land in
+`evals/results/`.
 
 Expected: each of the four negative cases passes in 3 of 3 runs, and
 every other case in at least 2 of 3. `review-spec` accepts either
@@ -176,28 +178,33 @@ less often than the with-plugin arm.
 ### Results
 
 Pass rate per case, per configuration. "Plugin alone" is `qual` with no
-other plugin loaded; "with superpowers" adds `superpowers`'s plugin
-directory to `plugins:` as described above. The negative cases
+other plugin loaded; "with superpowers" is the same suite run with
+`--with` pointing at `superpowers`, as described above. The negative cases
 (`no-qual-files`, `quiet-explore`, `quiet-question`, `quiet-typo`) need 3
-of 3; every other case needs at least 2 of 3. Fill this in from an actual
-`claude plugin eval` run — nothing below has been run yet.
+of 3; every other case needs at least 2 of 3. Each cell is passing
+with-plugin runs out of 3, with the no-plugin baseline's in parentheses.
+The baseline has qualifier on `PATH` (the scaffold needs it there) and
+learns its conventions from `qualifier agents`, so a case whose prompt
+names qualifier threads (`handoff`, `plan-from-threads`, `triage-open`)
+can pass without the plugin; there the plugin's value is in the other
+cases, where nothing in the prompt mentions qualifier.
 
 | Case | Plugin alone | With superpowers | Date | qualifier / plugin version |
 | :- | :- | :- | :- | :- |
-| design-rejects-option | not yet run | not yet run | — | — |
-| done-change | not yet run | not yet run | — | — |
-| edit-annotated-file | not yet run | not yet run | — | — |
-| handoff | not yet run | not yet run | — | — |
-| needs-decision | not yet run | not yet run | — | — |
-| no-qual-files | not yet run | not yet run | — | — |
-| plan-from-threads | not yet run | not yet run | — | — |
-| quiet-explore | not yet run | not yet run | — | — |
-| quiet-question | not yet run | not yet run | — | — |
-| quiet-typo | not yet run | not yet run | — | — |
-| review-branch | not yet run | not yet run | — | — |
-| review-spec | not yet run | not yet run | — | — |
-| review-subsystems | not yet run | not yet run | — | — |
-| triage-open | not yet run | not yet run | — | — |
+| design-rejects-option | 3/3 (0/3) | 3/3 (0/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| done-change | 3/3 (0/3) | 3/3 (0/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| edit-annotated-file | 3/3 (0/3) | 3/3 (0/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| handoff | 3/3 (3/3) | 3/3 (3/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| needs-decision | 3/3 (0/3) | 3/3 (1/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| no-qual-files | 3/3 (3/3) | 3/3 (3/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| plan-from-threads | 3/3 (3/3) | 3/3 (3/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| quiet-explore | 3/3 (3/3) | 3/3 (3/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| quiet-question | 3/3 (3/3) | 3/3 (3/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| quiet-typo | 3/3 (3/3) | 3/3 (3/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| review-branch | 3/3 (0/3) | 3/3 (0/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| review-spec | 3/3 (0/3) | 3/3 (0/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| review-subsystems | 3/3 (0/3) | 3/3 (0/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
+| triage-open | 3/3 (3/3) | 2/3 (3/3) | 2026-10-01 | 0.8.0 / 0.1.0 |
 
 ### Release checklist
 
@@ -207,8 +214,8 @@ Before a plugin release:
    both configurations (plugin alone, then again with `superpowers`
    loaded), at least 3 runs per case:
    ```
-   PATH="$PWD/target/debug:$PATH" claude plugin eval plugins/claude-code \
-     --runs 3 --scaffold --allow-tools Write Edit Bash
+   scripts/eval-plugin.sh --runs 3
+   scripts/eval-plugin.sh --with <superpowers plugin dir> --runs 3
    ```
 2. Every negative case (`quiet-typo`, `quiet-question`, `quiet-explore`,
    and `no-qual-files`) must pass 3 of 3 runs; every other case must pass

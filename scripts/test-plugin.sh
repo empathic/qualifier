@@ -75,7 +75,7 @@ ok "manifests parse and agree (plugin 'qual', versions match)"
 "$BASH" -n "$HOOK" || fail "session-start does not parse"
 python3 -c "import json; json.load(open('$PLUGIN/hooks/hooks.json'))" || fail "hooks.json is not valid JSON"
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck "$ENSURE" "$HOOK" "$SCAFFOLD" "$0" || fail "shellcheck"
+    shellcheck "$ENSURE" "$HOOK" "$SCAFFOLD" "$0" scripts/eval-plugin.sh || fail "shellcheck"
     ok "shellcheck clean"
 else
     echo "skip: shellcheck not installed"
