@@ -22,6 +22,7 @@ const PROVENANCE_ENV: &[&str] = &[
     "QUALIFIER_ISSUER",
     "QUALIFIER_ISSUER_TYPE",
     "QUALIFIER_SESSION",
+    "QUALIFIER_FORMAT",
     "CLAUDECODE",
     "CLAUDE_CODE_SESSION_ID",
 ];
@@ -5538,6 +5539,84 @@ fn test_batch_dry_run_creates_no_directories() {
 }
 
 // --- write path: envelopes, pointers, containment ---
+
+#[test]
+fn test_config_supplies_issuer_and_format_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_init(&repo);
+    let home = dir.path().join("home");
+    let user_cfg = home.join(".config/qualifier");
+    std::fs::create_dir_all(&user_cfg).unwrap();
+    std::fs::write(
+        user_cfg.join("config.toml"),
+        "issuer = \"mailto:user@x\"\nformat = \"json\"\n",
+    )
+    .unwrap();
+    let home_env = ("HOME", home.to_str().unwrap());
+    let record = |extra: &[&str], env: &[(&str, &str)]| {
+        let mut args = vec!["record", "comment", "a.rs", "cfg"];
+        args.extend_from_slice(extra);
+        let mut env = env.to_vec();
+        env.push(home_env);
+        run_qualifier_env(&repo, &args, &env)
+    };
+    let json_issuer = |stdout: &str| -> String {
+        let v: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("expected JSON output ({e}): {stdout}"));
+        v["issuer"].as_str().unwrap().to_string()
+    };
+
+    // User config alone.
+    let (stdout, stderr, code) = record(&[], &[]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(json_issuer(&stdout), "mailto:user@x");
+
+    // Project config overrides user config.
+    std::fs::write(repo.join(".qualifier.toml"), "issuer = \"mailto:proj@x\"\n").unwrap();
+    let (stdout, _, _) = record(&[], &[]);
+    assert_eq!(json_issuer(&stdout), "mailto:proj@x");
+
+    // Environment overrides config files; values are strings.
+    let (stdout, stderr, code) = record(&[], &[("QUALIFIER_ISSUER", "12345")]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(json_issuer(&stdout), "mailto:12345");
+    let (stdout, _, _) = record(&[], &[("QUALIFIER_FORMAT", "human")]);
+    assert!(stdout.starts_with("comment a.rs cfg"), "{stdout}");
+
+    // Flags override everything.
+    let (stdout, _, _) = record(
+        &["--issuer", "mailto:flag@x", "--format", "json"],
+        &[
+            ("QUALIFIER_ISSUER", "mailto:env@x"),
+            ("QUALIFIER_FORMAT", "human"),
+        ],
+    );
+    assert_eq!(json_issuer(&stdout), "mailto:flag@x");
+    let (stdout, _, _) = record(&["--format", "human"], &[]);
+    assert!(stdout.starts_with("comment a.rs cfg"), "{stdout}");
+
+    // A config format default applies to read commands too.
+    let (stdout, stderr, code) = run_qualifier_env(&repo, &["threads"], &[home_env]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.trim_start().starts_with('['), "{stdout}");
+}
+
+#[test]
+fn test_numeric_env_values_do_not_break_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier_env(
+        dir.path(),
+        &["haiku"],
+        &[("QUALIFIER_ISSUER", "12345"), ("QUALIFIER_SESSION", "7")],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let (_, stderr, code) =
+        run_qualifier_env(dir.path(), &["haiku"], &[("QUALIFIER_FORMAT", "jsn")]);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("invalid configuration"), "{stderr}");
+}
 
 #[test]
 fn test_format_typo_is_rejected_before_writing() {

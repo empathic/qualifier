@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 
 use crate::annotation::IssuerType;
 
-pub const ENV_ISSUER: &str = "QUALIFIER_ISSUER";
+pub const ENV_ISSUER: &str = crate::cli::config::ENV_ISSUER;
 pub const ENV_ISSUER_TYPE: &str = "QUALIFIER_ISSUER_TYPE";
 pub const ENV_SESSION: &str = "QUALIFIER_SESSION";
 
@@ -48,6 +48,7 @@ pub fn issuer(explicit: Option<&str>) -> String {
     let raw = explicit
         .map(String::from)
         .or_else(|| env_nonempty(ENV_ISSUER))
+        .or_else(|| crate::cli::config::current().issuer.clone())
         .unwrap_or_else(|| DETECTED.get_or_init(detect_issuer).clone());
     normalize_issuer_uri(raw)
 }
