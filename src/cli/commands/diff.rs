@@ -721,7 +721,7 @@ fn find_changed(old: &[Record], new: &[Record], old_ids: &HashSet<&str>) -> Vec<
 }
 
 fn created_at(r: &Record) -> Option<chrono::DateTime<chrono::Utc>> {
-    r.as_annotation().map(|a| a.created_at)
+    r.as_annotation().map(|a| *a.created_at)
 }
 
 fn sort_key(r: &Record) -> (String, u32) {

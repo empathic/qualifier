@@ -233,7 +233,7 @@ pub(crate) fn build_annotation(
         None => location_span,
     };
     if let Some(ref mut s) = span
-        && let Some(hash) = content_hash::compute_span_hash(&locator.file(&subject), s)
+        && let Ok(hash) = content_hash::compute_span_hash(&locator.file(&subject), s)
     {
         s.content_hash = Some(hash);
     }
@@ -248,7 +248,7 @@ pub(crate) fn build_annotation(
         subject,
         issuer,
         issuer_type,
-        created_at: Utc::now(),
+        created_at: Utc::now().into(),
         id: String::new(),
         body: AnnotationBody {
             detail: input.detail,
@@ -260,6 +260,7 @@ pub(crate) fn build_annotation(
             summary: input.message,
             supersedes: input.supersedes,
             tags: provenance::with_session_tag(tags),
+            extra: Default::default(),
         },
     });
     let errors = annotation::validate(&att);

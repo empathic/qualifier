@@ -554,9 +554,9 @@ pub(crate) fn check_pointers(
 
 pub(crate) fn record_created_at(r: &Record) -> chrono::DateTime<chrono::Utc> {
     match r {
-        Record::Annotation(a) => a.created_at,
-        Record::Epoch(e) => e.created_at,
-        Record::Dependency(d) => d.created_at,
+        Record::Annotation(a) => *a.created_at,
+        Record::Epoch(e) => *e.created_at,
+        Record::Dependency(d) => *d.created_at,
         Record::Unknown(v) => v
             .get("created_at")
             .and_then(|x| x.as_str())

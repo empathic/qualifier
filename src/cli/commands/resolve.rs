@@ -79,7 +79,7 @@ pub(crate) fn build_resolve(target: &Record, input: ResolveInput) -> crate::Resu
         subject: target.subject().to_string(),
         issuer: provenance::issuer(input.issuer.as_deref()),
         issuer_type: provenance::issuer_type(input.issuer_type.as_deref())?,
-        created_at: Utc::now(),
+        created_at: Utc::now().into(),
         id: String::new(),
         body: AnnotationBody {
             detail: None,
@@ -91,6 +91,7 @@ pub(crate) fn build_resolve(target: &Record, input: ResolveInput) -> crate::Resu
             summary: input.message.unwrap_or_else(|| "Resolved".into()),
             supersedes: Some(target.id().to_string()),
             tags: provenance::with_session_tag(tags),
+            extra: Default::default(),
         },
     });
     let errors = annotation::validate(&att);
