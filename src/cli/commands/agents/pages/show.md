@@ -74,5 +74,5 @@ artifacts).
 - Resolved records are hidden by default. If an artifact appears to have no
   annotations but you expect some, try `--all` to check whether they were
   resolved.
-- The `artifact` argument is the subject name as stored in the `.qual` file
-  (e.g., `src/auth.rs`), not a filesystem glob. There is no wildcard matching.
+- The artifact is a path relative to the current directory (subjects are
+  stored relative to the project root); there is no wildcard matching.
