@@ -193,7 +193,7 @@ fn print_record(
         // Dependency records are graph metadata, not quality signals.
         // `qualifier show <subject>` is for surfacing quality signals
         // (annotations, epochs); skip dependencies in human output.
-        // They remain visible in `--format json` and via `qualifier graph`.
+        // They remain visible in `--format json`.
         return;
     } else {
         // Fallback for unknown / extension record types — preserve substrate
