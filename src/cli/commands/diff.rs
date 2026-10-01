@@ -39,7 +39,7 @@ use crate::cli::span_context;
 use crate::compact::filter_superseded;
 use crate::content_hash::{self, FreshnessStatus};
 use crate::qual_file;
-use crate::threads::build_threads;
+use crate::threads::{self, build_threads};
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -198,14 +198,20 @@ pub fn run(args: Args) -> crate::Result<()> {
     };
     let old_records = load_records_at_ref(&repo, effective_oid, ignore.as_mut())?;
 
-    let kind_filter = parse_kind_list(args.kind.as_deref());
-    let fail_on = parse_kind_list(args.fail_on.as_deref());
-    for kind in unknown_kinds(
-        kind_filter.iter().chain(fail_on.iter()).flatten(),
-        &old_records,
-        &new_records,
+    let kind_filter = args.kind.as_deref().map(threads::parse_kind_list);
+    let fail_on = args.fail_on.as_deref().map(threads::parse_kind_list);
+    let requested: Vec<Kind> = kind_filter
+        .iter()
+        .chain(fail_on.iter())
+        .flatten()
+        .cloned()
+        .collect();
+    for warning in threads::unknown_kind_warnings(
+        "qualifier diff",
+        &requested,
+        old_records.iter().chain(&new_records),
     ) {
-        eprintln!("qualifier diff: warning: kind '{kind}' matches no known kind");
+        eprintln!("{warning}");
     }
 
     let mut diff = compute_diff(&old_records, &new_records, &project_root);
@@ -230,54 +236,7 @@ pub fn run(args: Args) -> crate::Result<()> {
     Ok(())
 }
 
-/// Split a comma-separated `--kind` / `--fail-on` value, dropping blanks.
-fn parse_kind_list(list: Option<&str>) -> Option<Vec<String>> {
-    list.map(|s| {
-        s.split(',')
-            .map(|k| k.trim().to_string())
-            .filter(|k| !k.is_empty())
-            .collect()
-    })
-}
-
-/// Kinds in `requested` that are neither built in nor carried by any record
-/// on either side, in first-seen order. Custom kinds are legal, so these
-/// are only warned about: a typo such as `blockers` would otherwise make a
-/// `--fail-on` gate pass silently.
-fn unknown_kinds<'a>(
-    requested: impl Iterator<Item = &'a String>,
-    old: &[Record],
-    new: &[Record],
-) -> Vec<&'a str> {
-    const BUILT_IN: &[&str] = &[
-        "pass",
-        "fail",
-        "blocker",
-        "concern",
-        "comment",
-        "resolve",
-        "praise",
-        "suggestion",
-        "waiver",
-    ];
-    let present: HashSet<String> = old
-        .iter()
-        .chain(new)
-        .filter_map(|r| r.kind().map(|k| k.to_string()))
-        .collect();
-    let mut out: Vec<&str> = Vec::new();
-    for kind in requested {
-        if !BUILT_IN.contains(&kind.as_str())
-            && !present.contains(kind)
-            && !out.contains(&kind.as_str())
-        {
-            out.push(kind);
-        }
-    }
-    out
-}
-
-fn apply_filters(diff: &mut Diff, kinds: Option<&[String]>, args: &Args) -> crate::Result<()> {
+fn apply_filters(diff: &mut Diff, kinds: Option<&[Kind]>, args: &Args) -> crate::Result<()> {
     let issuer_type = match &args.issuer_type {
         Some(s) => Some(
             s.parse::<crate::annotation::IssuerType>()
@@ -288,10 +247,7 @@ fn apply_filters(diff: &mut Diff, kinds: Option<&[String]>, args: &Args) -> crat
 
     let kind_match = |r: &Record| -> bool {
         match kinds {
-            Some(list) => r
-                .kind()
-                .map(|k| list.iter().any(|allowed| allowed == &k.to_string()))
-                .unwrap_or(false),
+            Some(list) => r.kind().is_some_and(|k| list.contains(k)),
             None => true,
         }
     };
@@ -378,7 +334,7 @@ impl DiffHeader {
 
 /// Apply --fail-on / --fail-on-drift after the diff has printed. We always
 /// surface the diff first so the user sees *what* triggered the failure.
-fn enforce_fail_flags(args: &Args, fail_on: Option<&[String]>, diff: &Diff) -> crate::Result<()> {
+fn enforce_fail_flags(args: &Args, fail_on: Option<&[Kind]>, diff: &Diff) -> crate::Result<()> {
     if args.fail_on_drift && !diff.drifted.is_empty() {
         return Err(crate::Error::Validation(format!(
             "diff failed: {} drifted record(s) (--fail-on-drift)",
@@ -389,13 +345,9 @@ fn enforce_fail_flags(args: &Args, fail_on: Option<&[String]>, diff: &Diff) -> c
         let matched: Vec<&Record> = diff
             .added
             .iter()
-            .filter(|r| {
-                r.kind()
-                    .map(|k| kinds.contains(&k.to_string()))
-                    .unwrap_or(false)
-            })
+            .filter(|r| r.kind().is_some_and(|k| kinds.contains(k)))
             .collect();
-        let in_list = |k: Option<&Kind>| k.is_some_and(|k| kinds.contains(&k.to_string()));
+        let in_list = |k: Option<&Kind>| k.is_some_and(|k| kinds.contains(k));
         let escalated = diff
             .changed
             .iter()

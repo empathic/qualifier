@@ -389,6 +389,20 @@ pub fn threads_touching<'a>(records: &'a [Record], subject: &str, all: bool) -> 
 
 // ─── Kind filters ───────────────────────────────────────────────────────────
 
+/// Parse a comma-separated kind filter (`--kind`, `--fail-on`), trimming
+/// each entry and dropping blanks. Unknown names become [`Kind::Custom`];
+/// [`unknown_kind_warnings`] reports the ones that can never match.
+pub fn parse_kind_list(list: &str) -> Vec<Kind> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(|k| match k.parse::<Kind>() {
+            Ok(kind) => kind,
+            Err(never) => match never {},
+        })
+        .collect()
+}
+
 /// Warnings for kind filters (`--kind`, `--fail-on`) that can never match:
 /// one `<command>: warning: kind 'X' matches no known kind` per requested
 /// kind that is neither a built-in [`Kind`] nor the kind of any record in
