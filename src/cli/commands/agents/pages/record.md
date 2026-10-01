@@ -104,6 +104,10 @@ Recognized keys on the **overrides** form:
 - `issuer`, `issuer_type` — optional, with the same defaults as non-batch
   mode. As an agent, leave them unset; see `qualifier agents concepts` for
   defaults (`QUALIFIER_*` variables, agent-harness detection).
+- Any other key, or a value of the wrong type (`tags` must be an array of
+  strings; every other key takes a string), fails the line with an error
+  naming the key, so a misspelled `supersedes` cannot silently become an
+  unlinked new record.
 
 `--file` is rejected with `--stdin`.
 

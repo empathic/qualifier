@@ -1,5 +1,6 @@
 use chrono::Utc;
 use clap::Args as ClapArgs;
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
@@ -79,6 +80,7 @@ pub struct Args {
     ///      "issuer":"mailto:agent@example.com","issuer_type":"ai",
     ///      "ref":"git:abc123","supersedes":"<id>","references":"<id>",
     ///      "span":"42:58"}`
+    ///      Any other key, or a wrongly typed value, fails the line.
     ///   2. A complete record envelope (forward-compat) — recognized when the
     ///      object has both `subject` and `body` keys. Its `subject` is
     ///      relative to the project root and must stay inside it.
@@ -456,21 +458,6 @@ pub(crate) fn set_subject(record: &mut Record, subject: String) {
     }
 }
 
-fn str_field(obj: &Map<String, Value>, key: &str) -> Option<String> {
-    obj.get(key).and_then(|v| v.as_str()).map(String::from)
-}
-
-fn tags_field(obj: &Map<String, Value>) -> Vec<String> {
-    obj.get("tags")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|t| t.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 struct BatchError {
     line: usize,
     error: String,
@@ -544,24 +531,53 @@ fn emit_batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Resul
     Ok(())
 }
 
-/// The [`AnnotationInput`] an overrides line describes.
+/// An overrides line on `record --stdin`. Every key is optional to serde
+/// so a missing required key gets its own message (see
+/// [`overrides_input`]); unknown keys and wrongly typed values are errors.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OverridesLine {
+    kind: Option<String>,
+    location: Option<String>,
+    message: Option<String>,
+    detail: Option<String>,
+    suggested_fix: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    issuer: Option<String>,
+    issuer_type: Option<String>,
+    #[serde(rename = "ref")]
+    r#ref: Option<String>,
+    span: Option<String>,
+    supersedes: Option<String>,
+    references: Option<String>,
+}
+
+/// The [`AnnotationInput`] an overrides line describes. Each key is
+/// checked on its own first so an error names the key at fault.
 fn overrides_input(obj: &Map<String, Value>) -> crate::Result<AnnotationInput> {
-    let required = |key: &str| {
-        str_field(obj, key)
-            .ok_or_else(|| crate::Error::Validation(format!("stdin object missing '{key}'")))
+    for (key, value) in obj {
+        let single = Map::from_iter([(key.clone(), value.clone())]);
+        serde_json::from_value::<OverridesLine>(Value::Object(single))
+            .map_err(|e| crate::Error::Validation(format!("key '{key}': {e}")))?;
+    }
+    let line: OverridesLine = serde_json::from_value(Value::Object(obj.clone()))
+        .map_err(|e| crate::Error::Validation(e.to_string()))?;
+    let required = |value: Option<String>, key: &str| {
+        value.ok_or_else(|| crate::Error::Validation(format!("stdin object missing '{key}'")))
     };
     Ok(AnnotationInput {
-        kind: required("kind")?,
-        location: required("location")?,
-        message: required("message")?,
-        detail: str_field(obj, "detail"),
-        suggested_fix: str_field(obj, "suggested_fix"),
-        tags: tags_field(obj),
-        issuer: str_field(obj, "issuer"),
-        issuer_type: str_field(obj, "issuer_type"),
-        r#ref: str_field(obj, "ref"),
-        span: str_field(obj, "span"),
-        supersedes: str_field(obj, "supersedes"),
-        references: str_field(obj, "references"),
+        kind: required(line.kind, "kind")?,
+        location: required(line.location, "location")?,
+        message: required(line.message, "message")?,
+        detail: line.detail,
+        suggested_fix: line.suggested_fix,
+        tags: line.tags,
+        issuer: line.issuer,
+        issuer_type: line.issuer_type,
+        r#ref: line.r#ref,
+        span: line.span,
+        supersedes: line.supersedes,
+        references: line.references,
     })
 }
