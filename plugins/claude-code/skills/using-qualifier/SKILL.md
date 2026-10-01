@@ -1,7 +1,7 @@
 ---
 name: using-qualifier
 description: Use in any repository that contains .qual files — maps which qualifier skill applies at each point in design, planning, implementation, review, and handoff, and sets the bar for what is worth recording
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)
 ---
 
 # Using qualifier

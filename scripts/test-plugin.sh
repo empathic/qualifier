@@ -1092,8 +1092,11 @@ for name in sorted(expected):
     assert fields.get("name") == name, f"{path}: name must be {name!r}"
     assert fields.get("description", "").startswith("Use "), f"{path}: description must start with 'Use '"
     tools = fields.get("allowed-tools", "")
-    for rule in ("Bash(qualifier:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)"):
-        assert rule in tools, f"{path}: allowed-tools must include {rule}"
+    rule = "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)"
+    assert rule in tools, f"{path}: allowed-tools must include {rule}"
+    # A bare `qualifier` would run whatever is on PATH, which the plugin
+    # never uses; it must prompt rather than be pre-approved.
+    assert not re.search(r"Bash\(qualifier\b", tools), f"{path}: allowed-tools must not pre-approve a bare qualifier on PATH"
     for topic in re.findall(r"qualifier agents ([a-z_-]+)", body):
         assert topic in topics, f"{path}: cites missing agents topic {topic!r}"
     for ref in re.findall(r"qual:([a-z-]+)", body):

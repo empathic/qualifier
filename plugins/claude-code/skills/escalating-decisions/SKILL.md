@@ -1,7 +1,7 @@
 ---
 name: escalating-decisions
 description: Use when a qualifier thread needs a human judgment call — design trade-offs, won't-fix calls, or conflicting findings — to mark it as waiting on a decision, walk the human through the options, and record their answer under their own identity
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
 ---
 
 # Escalating decisions
