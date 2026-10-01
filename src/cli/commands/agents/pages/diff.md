@@ -11,7 +11,7 @@ since = "0.6.0"
 
 Compare the active set of records on this branch against a git ref (default
 `main`). Use this before opening a PR to see what you've added, what you've
-resolved, and whether any spans you didn't touch have drifted underneath
+edited or re-anchored, what you've resolved, and whether any spans you didn't touch have drifted underneath
 existing annotations.
 
 ## When to use it
@@ -27,17 +27,22 @@ existing annotations.
 
 ## What it shows
 
-Three sections, all reckoned by record `id`:
+Four sections:
 
 1. **Added** — records active on `HEAD` whose `id` is not present at `<ref>`
    at all. Annotation records only; epoch and dependency records are not
    review signals.
-2. **Resolved** — records active at `<ref>` that are no longer active on
+2. **Changed** — threads open on both sides whose root was edited or
+   re-anchored on this branch (`--supersedes` without resolving). Matched
+   by thread origin, so several edits in a row still pair with the root at
+   `<ref>`. Each row shows the new root and, under it, what it was at
+   `<ref>`. These records appear here instead of under Added and Resolved.
+3. **Resolved** — records active at `<ref>` that are no longer active on
    `HEAD`. Each row names every closer record (each new annotation whose
    `supersedes` points at it; more than one after merging branches that
    each closed it), or marks the record as *removed* if no successor was
    authored.
-3. **Drifted** — records present at *both* refs whose `body.span.content_hash`
+4. **Drifted** — records present at *both* refs whose `body.span.content_hash`
    no longer matches the file's current content. Drift on records that are
    freshly added on this branch is suppressed (you just authored them; their
    span IS the current code).
@@ -82,9 +87,9 @@ qualifier diff origin/main --format json
 
 | Flag | Effect |
 |------|--------|
-| `--kind <K[,K...]>` | Show only records whose kind matches one of the comma-separated list. Applies to all three buckets. |
+| `--kind <K[,K...]>` | Show only records whose kind matches one of the comma-separated list. Applies to every section; a Changed row matches on its old or new kind. |
 | `--issuer-type <T>` | Show only records whose issuer-type is `T` (`human`, `ai`, `tool`, `unknown`). |
-| `--fail-on <K[,K...]>` | Exit non-zero if Added contains any record matching one of the listed kinds. The diff is still printed first. |
+| `--fail-on <K[,K...]>` | Exit non-zero if Added contains any record matching one of the listed kinds, or a Changed record's kind moved into the list (e.g. `concern` -> `blocker`). Re-anchoring or rewording an existing blocker does not trip it. The diff is still printed first. |
 | `--fail-on-drift` | Exit non-zero if Drifted is non-empty. |
 | `--subjects-only` | Print only the affected subjects, deduplicated and sorted, one per line. Suppresses all other output. |
 | `--from-tip` | Compare against `<ref>`'s tip rather than the merge-base of HEAD with `<ref>`. |
@@ -125,6 +130,7 @@ Drifted (1)
   "from_tip": false,
   "comparison": "merge-base",
   "added":    [<full record envelopes>],
+  "changed":  [{"record": <head-side root>, "previous": <ref-side root>}],
   "resolved": [{"record": <ref-side record>, "closer": <newest head-side closer or null>, "closers": [<every head-side closer, oldest first>]}],
   "drifted":  [{"record": <head-side record>, "expected": "<hash>", "actual": "<hash>"}]
 }

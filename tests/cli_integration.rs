@@ -4388,6 +4388,79 @@ fn test_diff_lists_every_closer_of_a_resolved_record() {
     assert!(v["resolved"][0]["closer"].is_object(), "{stdout}");
 }
 
+/// A repo whose `main` has a `kind` record on `a.rs:3`; on branch `feat`
+/// that record is superseded by a `new_kind` record on `a.rs:4`.
+fn diff_changed_setup(dir: &Path, kind: &str, new_kind: &str) -> (String, String) {
+    git_init(dir);
+    std::fs::write(dir.join("a.rs"), "one\ntwo\nthree\nfour\n").unwrap();
+    let old = record_as_ab(dir, &[kind, "a.rs:3", "same problem"]);
+    git_commit_all(dir, "baseline");
+    git_checkout_new(dir, "feat");
+    let new = record_as_ab(
+        dir,
+        &[
+            new_kind,
+            "a.rs:4",
+            "same problem, moved",
+            "--supersedes",
+            &old,
+        ],
+    );
+    (old, new)
+}
+
+#[test]
+fn test_diff_reports_reanchored_record_as_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (old, new) = diff_changed_setup(dir.path(), "blocker", "blocker");
+
+    let (stdout, stderr, code) =
+        run_qualifier(dir.path(), &["diff", "main", "--fail-on", "blocker"]);
+    assert_eq!(
+        code, 0,
+        "re-anchoring an existing blocker must not trip --fail-on: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("Changed on this branch (1)"),
+        "edit should be listed under Changed: {stdout}"
+    );
+    assert!(!stdout.contains("Added on this branch"), "{stdout}");
+    assert!(!stdout.contains("Resolved on this branch"), "{stdout}");
+    assert!(
+        stdout.contains(&new[..8]) && stdout.contains(&old[..8]),
+        "{stdout}"
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["added"].as_array().unwrap().len(), 0, "{stdout}");
+    assert_eq!(v["resolved"].as_array().unwrap().len(), 0, "{stdout}");
+    let changed = v["changed"].as_array().expect("changed array");
+    assert_eq!(changed.len(), 1, "{stdout}");
+    assert_eq!(changed[0]["record"]["id"], new.as_str());
+    assert_eq!(changed[0]["previous"]["id"], old.as_str());
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["diff", "main", "--subjects-only"]);
+    assert_eq!(stdout.trim(), "a.rs");
+}
+
+#[test]
+fn test_diff_fail_on_trips_when_changed_record_escalates() {
+    let dir = tempfile::tempdir().unwrap();
+    diff_changed_setup(dir.path(), "concern", "blocker");
+
+    let (stdout, stderr, code) =
+        run_qualifier(dir.path(), &["diff", "main", "--fail-on", "blocker"]);
+    assert_ne!(code, 0, "concern -> blocker must trip --fail-on blocker");
+    assert!(stdout.contains("Changed on this branch (1)"), "{stdout}");
+    assert!(stderr.contains("--fail-on"), "{stderr}");
+
+    // Shown by --kind when either side matches.
+    let (stdout, _, _) = run_qualifier(dir.path(), &["diff", "main", "--kind", "concern"]);
+    assert!(stdout.contains("Changed on this branch (1)"), "{stdout}");
+}
+
 #[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
