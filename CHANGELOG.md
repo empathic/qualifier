@@ -5,22 +5,14 @@ All notable changes to this project are documented here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (with
 the pre-1.0 caveat that any breaking change bumps the minor version).
 
-## [Unreleased] — Claude Code plugin
+## [Unreleased] — Claude Code plugin 0.2.0
 
 Changes to the `qual` plugin (`plugins/claude-code/`). The plugin is
-versioned separately from the crate.
+versioned separately from the crate. 0.2.0 still pins qualifier 0.8.0;
+the plugin release that pins 0.9.0 follows the 0.9.0 tag.
 
 ### Added
 
-- **Claude Code plugin `qual`** (`plugins/claude-code/`, plugin version
-  0.1.0): lifecycle skills and a SessionStart hook; install with
-  `/plugin marketplace add empathic/qualifier`. The plugin runs the
-  qualifier release it pins (0.8.0), which it downloads, verifies against
-  embedded checksums, and keeps under
-  `~/.local/share/qualifier/plugin/<version>/`; a plugin update that pins
-  a newer release installs it on next use. A `qualifier` on `PATH` is
-  neither used nor modified. `QUALIFIER_BIN` selects a development build;
-  `QUALIFIER_PLUGIN_HOME` relocates the installs.
 - **Getting started message.** The first session after the plugin is
   installed or upgraded, in any directory (including one without `.qual`
   files), shows a short message once per plugin version: what the plugin
@@ -48,6 +40,20 @@ versioned separately from the crate.
   (`aarch64-unknown-linux-musl`), like x86_64, so they also run on musl
   systems such as Alpine. The wrapper's target mapping and checksums move
   to the new target with the first release built this way.
+
+## Claude Code plugin 0.1.0
+
+### Added
+
+- **Claude Code plugin `qual`** (`plugins/claude-code/`, plugin version
+  0.1.0): lifecycle skills and a SessionStart hook; install with
+  `/plugin marketplace add empathic/qualifier`. The plugin runs the
+  qualifier release it pins (0.8.0), which it downloads, verifies against
+  embedded checksums, and keeps under
+  `~/.local/share/qualifier/plugin/<version>/`; a plugin update that pins
+  a newer release installs it on next use. A `qualifier` on `PATH` is
+  neither used nor modified. `QUALIFIER_BIN` selects a development build;
+  `QUALIFIER_PLUGIN_HOME` relocates the installs.
 
 ## [0.9.0] — unreleased
 
