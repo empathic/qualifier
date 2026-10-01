@@ -72,5 +72,7 @@ It requires a supported VCS to be detected.
   the JSON output always includes the full URI.
 - `--vcs` requires git or hg. For other VCS systems the command exits with
   an error and suggests running your VCS tool directly on the `.qual` file.
-- `praise` exits with an error if no records are found for the artifact, the
-  same as `show`.
+- An artifact with no records is not an error, the same as `show`: `praise`
+  exits 0, printing `No records found for '<subject>'.` in human output, or
+  empty `records` and `threads` arrays in JSON. (`--vcs` still fails when
+  there is no `.qual` file to blame.)

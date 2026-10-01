@@ -45,10 +45,11 @@ pub fn run(args: Args) -> crate::Result<()> {
         .flat_map(|qf| qf.records)
         .collect();
 
-    if !records.iter().any(|r| r.subject() == subject) {
-        return Err(crate::Error::Validation(format!(
-            "No records found for '{subject}'"
-        )));
+    // No records is an answer, not an error: JSON output carries empty
+    // arrays, human output says so.
+    if args.format != "json" && !records.iter().any(|r| r.subject() == subject) {
+        println!("No records found for '{subject}'.");
+        return Ok(());
     }
 
     let type_matches = |t: &str| args.record_type.as_deref().is_none_or(|f| f == t);
