@@ -6047,3 +6047,157 @@ fn test_compact_keeps_custom_body_fields_and_their_id() {
         "custom record must survive byte-for-byte:\n{after}"
     );
 }
+
+// --- compact scope and thread structure ---
+
+/// Threads built from every `.qual` file under `dir`.
+fn open_thread_summaries(dir: &Path) -> Vec<String> {
+    let files = qualifier::qual_file::discover(dir, false).unwrap();
+    let records: Vec<_> = files.into_iter().flat_map(|qf| qf.records).collect();
+    qualifier::threads::build_threads(&records)
+        .into_iter()
+        .filter(|t| t.open)
+        .map(|t| t.root.as_annotation().unwrap().body.summary.clone())
+        .collect()
+}
+
+#[test]
+fn test_compact_keeps_resolved_thread_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "a\nb\nc\n").unwrap();
+    let c = write_id(dir.path(), &["record", "concern", "x.rs:2", "a concern"]);
+    write_id(dir.path(), &["reply", &c, "a reply comment"]);
+    write_id(dir.path(), &["resolve", &c, "fixed"]);
+    assert!(open_thread_summaries(dir.path()).is_empty());
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "x.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(
+        open_thread_summaries(dir.path()).is_empty(),
+        "compact must not reopen the resolved thread"
+    );
+}
+
+/// `src/a.rs` (a praise and its edit) and `src/b.rs` (an open blocker),
+/// both in the directory-level `src/.qual`.
+fn shared_dir_project(dir: &Path) -> String {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(dir.join("src/b.rs"), "fn b() {}\n").unwrap();
+    let first = write_id(dir, &["record", "praise", "src/a.rs", "tidy"]);
+    write_id(
+        dir,
+        &[
+            "record",
+            "praise",
+            "src/a.rs",
+            "tidy and fast",
+            "--supersedes",
+            &first,
+        ],
+    );
+    write_id(dir, &["record", "blocker", "src/b.rs", "b is broken"])
+}
+
+#[test]
+fn test_compact_artifact_snapshot_leaves_other_subjects() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = shared_dir_project(dir.path());
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "src/a.rs", "--snapshot"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("3 -> 2 records (1 epoch)"), "{stdout}");
+
+    let qual = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+    assert!(
+        qual.contains(&blocker),
+        "b.rs blocker must survive:\n{qual}"
+    );
+    assert_eq!(open_thread_summaries(dir.path()), vec!["b is broken"]);
+    let records = qualifier::qual_file::parse_str(&qual).unwrap();
+    let epoch = records.iter().find_map(|r| r.as_epoch()).unwrap();
+    assert_eq!(epoch.subject, "src/a.rs");
+    assert_eq!(
+        epoch.body.refs.len(),
+        1,
+        "superseded records are pruned first"
+    );
+}
+
+#[test]
+fn test_compact_artifact_prune_leaves_other_subjects() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_dir_project(dir.path());
+    let old = write_id(dir.path(), &["record", "concern", "src/b.rs", "old"]);
+    write_id(
+        dir.path(),
+        &["record", "concern", "src/b.rs", "new", "--supersedes", &old],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "src/a.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("(1 superseded, pruned)"), "{stdout}");
+    let qual = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+    assert!(qual.contains(&format!("\"id\":\"{old}\"")), "{qual}");
+}
+
+#[test]
+fn test_compact_snapshot_refuses_to_fold_open_blocker_without_force() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_dir_project(dir.path());
+    let before = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["compact", "src/b.rs", "--snapshot"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("b is broken"), "{stderr}");
+    assert!(stderr.contains("--force"), "{stderr}");
+    let (_, stderr, code) = run_qualifier(dir.path(), &["compact", "--all", "--snapshot"]);
+    assert_ne!(code, 0, "{stderr}");
+    let after = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+    assert_eq!(before, after, "a refused snapshot writes nothing");
+
+    let (stdout, stderr, code) = run_qualifier(
+        dir.path(),
+        &["compact", "src/b.rs", "--snapshot", "--force"],
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(open_thread_summaries(dir.path()), vec!["tidy and fast"]);
+}
+
+#[test]
+fn test_compact_artifact_covers_every_qual_file_holding_it() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_dir_project(dir.path());
+    let old = write_id(
+        dir.path(),
+        &[
+            "record",
+            "praise",
+            "src/a.rs",
+            "1:1 old",
+            "--file",
+            "src/a.rs.qual",
+        ],
+    );
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "praise",
+            "src/a.rs",
+            "1:1 new",
+            "--supersedes",
+            &old,
+            "--file",
+            "src/a.rs.qual",
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "src/a.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(
+        stdout.matches("(1 superseded, pruned)").count(),
+        2,
+        "both files compacted: {stdout}"
+    );
+}
