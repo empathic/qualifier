@@ -7,6 +7,7 @@ use clap::Args as ClapArgs;
 use globset::{GlobBuilder, GlobMatcher};
 
 use crate::annotation::{IssuerType, Kind, Record, Span};
+use crate::cli::output::Format;
 use crate::cli::targets::{self, short_id};
 use crate::threads::{self, Thread};
 
@@ -38,8 +39,8 @@ pub struct Args {
     pub issuer_type: Option<String>,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Don't respect .gitignore / .qualignore
     #[arg(long)]
@@ -82,7 +83,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         .map(|t| if args.all { t } else { live_replies_only(t) })
         .collect();
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         print_json(&selected)
     } else {
         print_human(&selected, args.all);

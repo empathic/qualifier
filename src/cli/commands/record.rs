@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record, Span};
 use crate::cli::commands::resolve;
+use crate::cli::output::Format;
 use crate::cli::provenance;
 use crate::cli::targets;
 use crate::content_hash;
@@ -124,8 +125,8 @@ pub struct Args {
 
     /// Output format (human, json). In --stdin mode controls per-record output.
     /// Under `--format json`, errors are also emitted as JSON objects on stderr.
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
@@ -136,7 +137,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             ));
         }
         return run_batch(
-            &args.format,
+            args.format,
             args.continue_on_error,
             args.dry_run,
             !args.no_ignore,
@@ -177,7 +178,7 @@ pub fn run(args: Args) -> crate::Result<()> {
     }
     targets::append(&qual_path, &record)?;
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         println!("{}", serde_json::to_string(&record)?);
     } else if let Some(att) = record.as_annotation() {
         println!(
@@ -311,7 +312,7 @@ impl BatchView {
 }
 
 fn run_batch(
-    format: &str,
+    format: Format,
     continue_on_error: bool,
     dry_run: bool,
     respect_ignore: bool,
@@ -387,7 +388,7 @@ fn run_batch(
     } else {
         ""
     };
-    if format == "json" {
+    if format == Format::Json {
         let summary = serde_json::json!({
             "summary": {
                 "recorded": recorded,
@@ -411,7 +412,7 @@ fn run_batch(
 
     if !errors.is_empty() {
         // Keep stderr a clean JSONL stream under --format json.
-        if format == "json" {
+        if format == Format::Json {
             return Err(crate::Error::AlreadyReported(1));
         }
         return Err(crate::Error::Validation(if continue_on_error {
@@ -506,8 +507,8 @@ fn truncate_for_display(s: &str, max: usize) -> String {
 }
 
 /// Always to stderr so stdout (the success stream) stays clean.
-fn emit_batch_error(be: &BatchError, format: &str) {
-    if format == "json" {
+fn emit_batch_error(be: &BatchError, format: Format) {
+    if format == Format::Json {
         let v = serde_json::json!({
             "line": be.line,
             "error": be.error,
@@ -528,7 +529,7 @@ fn emit_batch_error(be: &BatchError, format: &str) {
 /// the output quietly; the records are already written.
 fn print_batch_lines<'a>(
     records: impl Iterator<Item = &'a Record>,
-    format: &str,
+    format: Format,
     dry_run: bool,
 ) -> crate::Result<()> {
     let mut out = io::stdout().lock();
@@ -544,8 +545,8 @@ fn print_batch_lines<'a>(
 
 /// One stdout line for a planned record. Under `--dry-run`, the human verb
 /// is "would-record" so a glance confirms nothing was committed.
-fn batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Result<String> {
-    if format == "json" {
+fn batch_line(record: &Record, format: Format, dry_run: bool) -> crate::Result<String> {
+    if format == Format::Json {
         let mut v = serde_json::to_value(record)?;
         if dry_run && let Some(obj) = v.as_object_mut() {
             obj.insert("dry_run".into(), serde_json::Value::Bool(true));

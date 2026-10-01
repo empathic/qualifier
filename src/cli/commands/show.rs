@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::annotation::IssuerType;
 use crate::annotation::Kind;
 use crate::cli::output;
+use crate::cli::output::Format;
 use crate::cli::span_context;
 use crate::cli::targets;
 use crate::compact::filter_superseded;
@@ -15,8 +16,8 @@ pub struct Args {
     pub artifact: String,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Disable .gitignore and .qualignore filtering
     #[arg(long)]
@@ -70,7 +71,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         display_records.retain(|r| r.record_type() == type_filter);
     }
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         if args.pretty {
             let mut value: serde_json::Value =
                 serde_json::from_str(&output::show_json(&subject, &display_records))?;
