@@ -906,6 +906,56 @@ fn test_show_pretty_json() {
 }
 
 #[test]
+fn test_show_pretty_prints_root_relative_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/a.rs"), "one\ntwo\nthree\n").unwrap();
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "src/a.rs:2",
+            "look here",
+            "--issuer",
+            "mailto:t@x.com",
+        ],
+    );
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "src/gone.rs:2",
+            "missing file",
+            "--issuer",
+            "mailto:t@x.com",
+        ],
+    );
+    let abs = dir.path().display().to_string();
+
+    let (stdout, _, code) = run_qualifier(&dir.path().join("src"), &["show", "a.rs", "--pretty"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(stdout.contains("  src/a.rs:\n"), "{stdout}");
+    assert!(!stdout.contains(&abs), "absolute path leaked: {stdout}");
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["show", "src/gone.rs", "--pretty"]);
+    assert!(
+        stdout.contains("could not read file: src/gone.rs"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains(&abs), "absolute path leaked: {stdout}");
+
+    let (stdout, _, _) = run_qualifier(
+        dir.path(),
+        &["show", "src/a.rs", "--format", "json", "--pretty"],
+    );
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["records"][0]["context"]["path"], "src/a.rs", "{stdout}");
+}
+
+#[test]
 fn test_show_pretty_file_not_found() {
     let dir = tempfile::tempdir().unwrap();
 
