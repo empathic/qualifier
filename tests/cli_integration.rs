@@ -4462,6 +4462,43 @@ fn test_diff_fail_on_trips_when_changed_record_escalates() {
 }
 
 #[test]
+fn test_diff_warns_on_kinds_that_match_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    record_as_ab(dir.path(), &["concern", "a.rs", "base"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    record_as_ab(dir.path(), &["perf-regression", "a.rs", "custom kind"]);
+
+    let (_, stderr, _) = run_qualifier(
+        dir.path(),
+        &["diff", "main", "--fail-on", "blockers", "--kind", "Concern"],
+    );
+    assert!(
+        stderr.contains("qualifier diff: warning: kind 'blockers' matches no known kind"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("qualifier diff: warning: kind 'Concern' matches no known kind"),
+        "{stderr}"
+    );
+
+    // Built-in kinds and custom kinds present on a record are known.
+    let (_, stderr, _) = run_qualifier(
+        dir.path(),
+        &[
+            "diff",
+            "main",
+            "--fail-on",
+            "waiver,perf-regression",
+            "--kind",
+            "concern",
+        ],
+    );
+    assert!(!stderr.contains("warning"), "{stderr}");
+}
+
+#[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
     let (stdout, _stderr, code) = run_qualifier(dir.path(), &["--help"]);
