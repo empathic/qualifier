@@ -938,6 +938,14 @@ project root and normalized (`.` and `..` folded, `/` separators, the root
 itself is `.`). An argument that leaves the project root is an error. Every
 write lands in a `.qual` file under the project root, laid out as in
 §2.10; an explicit `--file` path stays relative to the current directory.
+A write into a `.qual` file that the ignore rules hide is refused unless
+`--no-ignore` is given (§10.1).
+
+**Exit codes.** Commands exit 0 on success and 1 on an error, which is
+printed on stderr as `qualifier: <message>`. Command-line usage errors
+(an unknown flag, an invalid `--format` value) and an unknown
+`qualifier agents` topic exit 2. `qualifier diff --fail-on` and
+`--fail-on-drift` exit 1 after printing the diff (§6.13).
 
 ### 6.1 Core Commands
 
@@ -1008,7 +1016,9 @@ characters) of a record that exists in the project and is live: not
 superseded, and not closed by a `resolve`. A prefix or location is
 rejected. A superseded target fails, printing the full ID of the live
 record at the tip of its chain; a closed target fails, printing the full ID
-of the closing `resolve` record. Full IDs are available from
+of the closing `resolve` record. An ID that matches no record is an
+error. A `--supersedes` target must have the same subject as the new
+record (§2.9). Full IDs are available from
 `qualifier threads --format json` (`root.id`, `closed_by.id`),
 `qualifier show --format json`, or the `id:` line that
 `record`/`reply`/`resolve` print.
@@ -1052,9 +1062,11 @@ new record and is one of:
 - An overrides object: `{"kind":"...","location":"...","message":"...", ...}`
   with optional `detail`, `ref`, `tags`, `issuer`, `issuer_type`,
   `span`, `supersedes`, `references`, `suggested_fix`. `location` is
-  required.
-- A complete record (envelope + body), accepted for forward-compat. Its
-  pointers are stored as given.
+  required. Any other key, or a value of the wrong type, fails the line.
+- A complete record (envelope + body), accepted for forward-compat and
+  recognized by having both `subject` and `body` keys. Its `subject` is
+  relative to the project root and must stay inside it; it is normalized
+  like a location.
 
 There are no reply or resolve line shapes. A reply is an overrides line
 whose `references` is the target's ID; a resolve is an overrides line with
@@ -1065,7 +1077,7 @@ whose `references` is the target's ID; a resolve is an overrides line with
 {"kind":"resolve","location":"src/auth.rs","supersedes":"<id>","message":"Fixed","tags":["reason:fixed"]}
 ```
 
-`supersedes` and `references` on an overrides line follow the same rule as
+`supersedes` and `references` on either line shape follow the same rule as
 the `--supersedes`/`--references` flags: the full ID of a live record,
 which may be on disk or on an earlier line of the same batch. Only
 complete-envelope lines have IDs known in advance (an overrides line is
@@ -1095,9 +1107,11 @@ Sugar over "kind=comment + references=`<target-id>`". The default kind is
 
 `<target>` is either:
 
-- An **id-prefix** (≥ 4 characters). A prefix matching more than one
-  record exits non-zero with the same disambiguation list, one
-  `[id-prefix] kind location "summary"` line per candidate; or
+- An **id-prefix**: 4 or more lowercase hex characters. A prefix
+  matching more than one record exits non-zero with a disambiguation
+  list, one `[id-prefix] kind location "summary"` line per candidate. A
+  hex target that matches no ID is tried as a location, and any other
+  target (such as `Makefile` or `README`) is a location; or
 - A **`<location>`** (e.g., `src/auth.rs:42`). A location resolves to the
   most-recent active record at that subject and span; a `resolve` record is
   never a location target. If multiple active
@@ -1230,9 +1244,16 @@ and exits 0.
 ### 6.7 `qualifier ls`
 
 ```
-qualifier ls --kind blocker
-qualifier ls --unqualified
+qualifier ls                    # every subject with live records
+qualifier ls --kind blocker     # subjects with a live blocker
 ```
+
+Lists each subject that has live records, with a count. Superseded
+records and `resolve` records are not counted. With `--kind`, only
+subjects with a live record of that kind are listed, and the count is the
+number of such records. JSON output is an array of
+`{subject, annotation_count, kinds}`, where `kinds` lists the kind (or,
+for other record types, the envelope type) of each of the subject's live records except `resolve`s.
 
 ### 6.8 `qualifier compact`
 
@@ -1244,13 +1265,23 @@ qualifier compact --all                      # compact every .qual file
 qualifier compact --all --dry-run            # preview repo-wide compaction
 ```
 
+Implements §3.3. `qualifier compact <artifact>` compacts only that
+artifact's records, in every `.qual` file that holds them; other subjects'
+records are written back unchanged. `--all` compacts every discovered
+`.qual` file. `--snapshot` prunes first and refuses to fold an open
+`blocker` or `concern` thread into an epoch unless `--force` is given.
+Each file reports its record count before and after, and with
+`--snapshot` the number of epochs written. `compact` re-reads each file
+strictly before rewriting it and fails on a malformed line rather than
+drop it. It has no `--format` flag.
+
 ### 6.9 `qualifier review`
 
 Check the freshness of span-addressed annotations against current file content.
 
 ```
 qualifier review                          # check all annotations
-qualifier review src/parser.rs            # check annotations for one subject
+qualifier review src/parser.rs            # one file, or everything under a directory
 qualifier review --format json            # machine-readable output
 qualifier review --no-ignore              # bypass ignore rules
 ```
@@ -1265,11 +1296,16 @@ qualifier review --no-ignore              # bypass ignore rules
 3 annotations checked: 1 fresh, 1 drifted, 1 missing
 ```
 
-Only active (non-superseded) annotations with spans that have a `content_hash`
-are checked. Annotations without spans or without `content_hash` are skipped.
+The subject argument is relative to the current directory and matches that
+file or anything under that directory. Only active (non-superseded)
+annotations with spans that have a `content_hash` are checked. Annotations
+without spans or without `content_hash` are skipped; when there is nothing
+to check, `review` says so and exits 0.
 
 **JSON output** includes `status` (`fresh`, `drifted`, `missing`) and `detail`
-with expected/actual hashes for drifted annotations or a reason for missing ones.
+with expected/actual hashes for drifted annotations or a reason for missing ones:
+the file is missing or unreadable, is not UTF-8, the span runs past the end
+of the file, or the span ends before it starts.
 
 ### 6.10 Configuration
 
@@ -1279,7 +1315,7 @@ Qualifier uses layered configuration. Precedence (highest wins):
 |----------|--------|
 | 1 (highest) | CLI flags |
 | 2 | Environment variables |
-| 3 | Project config (`.qualifier.toml`) |
+| 3 | Project config (`.qualifier.toml` at the project root) |
 | 4 | User config (`~/.config/qualifier/config.toml`) |
 | 5 (lowest) | Built-in defaults |
 
@@ -1289,6 +1325,13 @@ Qualifier uses layered configuration. Precedence (highest wins):
 |-------------|----------------|----------------------|---------|
 | `issuer`    | `--issuer`     | `QUALIFIER_ISSUER`   | VCS identity (see 8.4) |
 | `format`    | `--format`     | `QUALIFIER_FORMAT`   | `human` |
+
+`issuer` is the default issuer of every write command (§8.4). `format`
+(`human` or `json`) is the default `--format` of every command that has
+the flag. Environment variables are read as strings, and empty ones count
+as unset. A malformed config file, or a `format` value other than `human`
+or `json`, fails every command with `qualifier: invalid configuration: …`
+(exit 1).
 
 ### 6.11 `qualifier praise`
 
@@ -1301,6 +1344,11 @@ the underlying VCS blame command for the subject's `.qual` file.
 qualifier praise src/parser.rs
 qualifier praise src/parser.rs --vcs
 ```
+
+Without `--vcs`, `praise` lists the artifact's threads with the thread
+renderer of §6.6, under a `<subject> — N threads (M open)` header. An
+artifact with no records prints `No records found for '<artifact>'.` (or
+an empty `records` list in JSON) and exits 0.
 
 ### 6.12 `qualifier threads`
 
@@ -1330,9 +1378,26 @@ thread matching any argument is listed:
 
 `--tag` matches tags on the root, a live reply, or — under `--all` — the
 `closed_by` resolve; `ns:*` matches a namespace; repeated `--tag` flags
-must all match. JSON output is a single
-array of `{origin, open, root, closed_by, history, replies: [{active,
-record}], latest_at}` with full IDs.
+must all match. A `--kind` that is neither built in nor carried by any
+record prints `qualifier threads: warning: kind '<k>' matches no known
+kind` on stderr.
+
+Each thread has a **state**, shared by `threads`, `show`, and `praise`:
+`open`; `needs-decision` (open, latest `status:*` tag is
+`status:needs-decision`, optionally with an addressee); `decided` (open,
+latest `status:*` tag is `status:decided`); or `closed` (with the closing
+resolve's `reason:*` value, and `pending_question` when the thread closed
+while its latest `status:*` tag was still `status:needs-decision`). In
+human output a closed thread is one line carrying its answer, for
+example `[274357ca] concern    src/parser.rs:42  Panics on malformed input
+— closed (fixed): Resolved`, so truncated output keeps each outcome; a
+closed thread selected by ID (under `--all`) also prints its replies and closing resolve.
+
+JSON output is a single array of `{origin, open, state, root, closed_by,
+history, replies: [{active, record}], latest_at}` with full IDs, where
+`state` is `{"name": ...}` plus `addressee` for `needs-decision` and
+`reason`, `closed_by`, and `pending_question` for `closed`. JSON is the
+complete view; a closed thread's answer is its `closed_by` record.
 
 `--status needs-decision|decided|deferred` matches the thread's latest
 `status:*` tag by `created_at` (an addressee suffix such as
