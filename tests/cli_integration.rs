@@ -5516,6 +5516,71 @@ fn test_batch_dry_run_creates_no_directories() {
 // --- write path: envelopes, pointers, containment ---
 
 #[test]
+fn test_emit_subject_is_root_relative_like_record() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let (_, stderr, code) = run_qualifier(
+        &src,
+        &[
+            "emit",
+            "annotation",
+            "a.rs",
+            "--body",
+            r#"{"kind":"comment","summary":"e"}"#,
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let qual = std::fs::read_to_string(src.join(".qual")).unwrap();
+    assert!(qual.contains("\"subject\":\"src/a.rs\""), "{qual}");
+    assert!(!src.join("src").exists(), "no CWD-relative src/src/.qual");
+
+    let (_, stderr, code) = run_qualifier(
+        &src,
+        &[
+            "emit",
+            "annotation",
+            "../../out.rs",
+            "--body",
+            r#"{"kind":"comment","summary":"e"}"#,
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+}
+
+#[test]
+fn test_emit_stdin_is_all_or_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let good = envelope_line("lib/b.rs", r#"{"kind":"concern","summary":"ok"}"#);
+    let dangling = envelope_line(
+        "lib/b.rs",
+        &format!(
+            r#"{{"kind":"comment","summary":"re","references":"{}"}}"#,
+            "0".repeat(64)
+        ),
+    );
+    let input = format!("{good}not json\n{dangling}");
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["emit", "--stdin"], &input);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("stdin line 2:"), "{stderr}");
+    assert!(
+        stderr.contains("stdin line 3:") && stderr.contains("no record with ID"),
+        "every bad line is reported: {stderr}"
+    );
+    assert!(
+        !dir.path().join("lib/.qual").exists(),
+        "nothing written when any line fails"
+    );
+
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["emit", "--stdin"], &good);
+    assert_eq!(code, 0, "{stderr}");
+    let qual = std::fs::read_to_string(dir.path().join("lib/.qual")).unwrap();
+    assert_eq!(qual.lines().count(), 1);
+}
+
+#[test]
 fn test_record_stdin_closed_stdout_still_writes_whole_batch() {
     use std::io::Write;
     let dir = tempfile::tempdir().unwrap();

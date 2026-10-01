@@ -53,9 +53,13 @@ the body is stored as-is. Quote the argument carefully — shell word splitting
 on embedded spaces or braces is a common source of errors.
 
 **`--stdin`** reads complete JSONL records from stdin, one per line. Each
-line must be a full record (envelope + body). The positional `record_type`
-and `subject` arguments, when provided alongside `--stdin`, act as defaults
-applied to lines that are missing those fields.
+line must be a full record (envelope + body) whose `subject` is relative to
+the project root. The positional `record_type` and `subject` arguments, when
+provided alongside `--stdin`, act as defaults applied to lines that are
+missing those fields. The batch is all-or-nothing: every line is parsed and
+validated first (including that `supersedes`/`references` name live
+records), every failing line is reported as `stdin line N: <reason>`, and
+nothing is written if any line fails.
 
 **`--issuer`** and **`--issuer-type`** work the same as in `record`. When
 emitting machine-generated records such as pipeline measurements, set
@@ -70,8 +74,10 @@ emitting machine-generated records such as pipeline measurements, set
   and `summary`; the command will validate and reject non-conforming bodies.
   For non-annotation types, no body validation is run — a malformed body will
   be stored silently.
-- The subject positional is the artifact name (e.g., `src/auth.rs`), not a
-  `.qual` file path. Span notation in the subject is not parsed; `emit` is
+- The subject positional is the artifact path (e.g., `src/auth.rs`), not a
+  `.qual` file path. Like a `record` location, it is relative to the current
+  directory and stored relative to the project root; a subject outside the
+  root is an error. Span notation in the subject is not parsed; `emit` is
   the low-level shape.
 - Lines starting with `//` are treated as comments and skipped in `--stdin`
   mode. Blank lines are also skipped.
