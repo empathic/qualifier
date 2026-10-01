@@ -2482,16 +2482,21 @@ fn test_agents_unknown_topic_returns_error() {
     let dir = tempfile::tempdir().unwrap();
     let (_stdout, stderr, code) = run_qualifier(dir.path(), &["agents", "bogus-topic"]);
     assert_eq!(
-        code, 1,
-        "unknown topic should exit 1 like other validation errors: stderr={stderr}"
+        code, 2,
+        "AGENTS-CLI rule 4: unknown topic exits 2: stderr={stderr}"
     );
     assert!(
-        stderr.starts_with("qualifier:"),
-        "stderr should use the standard top-level error prefix: {stderr}"
+        stderr.starts_with("qualifier agents: no such topic 'bogus-topic'. Available: "),
+        "AGENTS-CLI rule 4 message: {stderr}"
+    );
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "one line, no extra prefix: {stderr}"
     );
     assert!(
-        stderr.contains("no such topic"),
-        "stderr should explain: {stderr}"
+        stderr.contains("concepts") && stderr.contains("record"),
+        "lists available topics: {stderr}"
     );
     assert!(
         stderr.contains("bogus-topic"),
