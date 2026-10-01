@@ -9,7 +9,8 @@
 ## Abstract
 
 Metabox is a minimal envelope format for content-addressed records. It defines
-eight fixed fields that answer "who said what, when" plus a `body` object for
+up to eight fixed top-level fields: seven that answer "who said what, when"
+(one of them, `issuer_type`, optional) plus a `body` object for
 domain-specific payload. Records are JSONL, IDs are BLAKE3 hashes of a
 canonical form.
 
@@ -19,8 +20,8 @@ that benefits from content addressing and a uniform envelope.
 
 ## 1. Envelope Fields
 
-Every Metabox record is a JSON object with exactly eight top-level fields, in
-this canonical order:
+Every Metabox record is a JSON object with up to eight top-level fields (seven
+required, `issuer_type` optional), in this canonical order:
 
 | #   | Field          | Type   | Required | Description                                    |
 | --- | -------------- | ------ | -------- | ---------------------------------------------- |
@@ -33,8 +34,8 @@ this canonical order:
 | 7   | `id`           | string | yes      | Content-addressed BLAKE3 hash (see section 3). |
 | 8   | `body`         | object | yes      | Type-specific payload.                         |
 
-Seven fields are required. `issuer_type` is optional. All eight are present in
-the canonical field order.
+Seven fields are required. `issuer_type` is optional and omitted when not set.
+Fields that are present appear in the canonical order.
 
 ### 1.1 `metabox`
 
@@ -131,8 +132,8 @@ obey the following rules:
 Before serialization:
 
 - `id` MUST be set to `""` (the empty string).
-- All eight envelope fields MUST be present (optional fields use their absent
-  representation: `issuer_type` is omitted when not set).
+- The seven required envelope fields MUST be present; `issuer_type` is
+  omitted when not set.
 - `body` MUST be present (empty `{}` if the type has no fields).
 
 ### 3.2 Field Order
