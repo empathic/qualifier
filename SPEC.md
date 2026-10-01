@@ -141,7 +141,7 @@ Every record uses the [Metabox](METABOX.md) envelope format with these fields:
 | `subject`      | string   | yes      | Qualified name of the target artifact |
 | `issuer`       | string   | yes      | Who or what created this record (URI) |
 | `issuer_type`  | string   | no       | Issuer classification: `human`, `ai`, `tool`, `unknown` |
-| `created_at`   | string   | yes      | RFC 3339 timestamp |
+| `created_at`   | string   | yes      | RFC 3339 timestamp, hashed exactly as written (§2.8.1 rule 9) |
 | `id`           | string   | yes      | Content-addressed BLAKE3 hash (see 2.8) |
 | `body`         | object   | yes      | Type-specific payload — see §3 for body schemas by type |
 
@@ -387,7 +387,9 @@ shape.
 #### 2.7.2 Custom Kinds
 
 Any string is a valid `kind`. Implementations SHOULD detect likely typos
-(edit distance <= 2 from a built-in kind) and warn the user.
+(edit distance <= 2 from a built-in kind, `resolve` included) and warn the
+user. The reference CLI rejects them: `qualifier record resovle …` fails
+with `unknown kind 'resovle', did you mean 'resolve'?`.
 
 ### 2.8 Record IDs & Canonical Form
 
@@ -413,11 +415,19 @@ obey the following rules:
    `metabox`, `type`, `subject`, `issuer`, `issuer_type`, `created_at`, `id`,
    `body`. Optional envelope fields (`issuer_type`) are omitted when absent.
 
-3. **Body field order.** Body fields MUST appear in lexicographic
-   (alphabetical) order. Custom body fields that the record type does not
-   define (see §4) are part of the body: they are sorted together with the
-   defined fields, never appended after them. Nested objects (like `span`)
-   also have their fields in lexicographic order.
+3. **Body field order.** The body's top-level keys MUST appear in
+   lexicographic (alphabetical) order. Custom body fields that the record
+   type does not define (see §4) are part of the body: implementations
+   MUST preserve them when rewriting a record, and they are hashed sorted
+   together with the defined fields, never appended after them.
+
+   This rule does not reorder keys inside nested values. A `span` keeps
+   the order `start`, `end`, `content_hash`, and a position the order
+   `line`, `col`, as in §2.4. Free-form JSON values (the values of custom
+   fields, and the bodies of record types the implementation does not
+   know) are serialized with their keys in lexicographic order at every
+   level. Whether nested keys of defined fields will also be sorted is an
+   open question; it would change the ID of every span-addressed record.
 
 4. **Absent optional fields.** Optional fields whose value is absent (null,
    None, etc.) MUST be omitted entirely. `tags` MUST be omitted when the
@@ -444,6 +454,11 @@ obey the following rules:
    fractional-second digits, the fewest that represent the instant exactly
    (`2026-02-24T10:00:00Z`, `2026-02-24T10:00:00.500Z`,
    `2026-02-24T10:00:00.123456Z`). Qualifier writes only this form.
+
+Records of types the implementation does not know (§2.5) are hashed the
+same way: envelope fields in the order of rule 2 (any other top-level
+fields after them, in lexicographic order), `metabox` materialized, `id`
+set to `""`.
 
 See the [Metabox specification](METABOX.md) for the full MCF definition.
 
