@@ -433,6 +433,17 @@ fn test_kind_typo_detected_in_validation() {
     );
 }
 
+#[test]
+fn test_kind_typo_of_resolve_detected_in_validation() {
+    let mut att = make_att("x.rs", Kind::Custom("resovle".into()), "typo");
+    att = annotation::finalize(att);
+    let errors = annotation::validate(&att);
+    assert!(
+        errors.iter().any(|e| e.contains("did you mean 'resolve'?")),
+        "expected typo warning, got: {errors:?}"
+    );
+}
+
 // --- Qual file with only comments ---
 
 #[test]

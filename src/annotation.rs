@@ -261,6 +261,21 @@ pub enum Kind {
     Custom(String),
 }
 
+impl Kind {
+    /// Every built-in kind (all variants but `Custom`), in declaration order.
+    pub const BUILT_IN: &'static [Kind] = &[
+        Kind::Pass,
+        Kind::Fail,
+        Kind::Blocker,
+        Kind::Concern,
+        Kind::Comment,
+        Kind::Resolve,
+        Kind::Praise,
+        Kind::Suggestion,
+        Kind::Waiver,
+    ];
+}
+
 impl fmt::Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -920,18 +935,8 @@ pub fn validate(annotation: &Annotation) -> Vec<String> {
         }
 
         // Warn about potentially misspelled custom kinds
-        let known = [
-            "pass",
-            "fail",
-            "blocker",
-            "concern",
-            "comment",
-            "praise",
-            "suggestion",
-            "waiver",
-        ];
-        for k in &known {
-            if is_likely_typo(custom, k) {
+        for k in Kind::BUILT_IN.iter().map(Kind::to_string) {
+            if is_likely_typo(custom, &k) {
                 errors.push(format!("unknown kind '{}', did you mean '{}'?", custom, k));
                 break;
             }
@@ -1449,18 +1454,28 @@ mod tests {
     }
 
     #[test]
+    fn test_kind_built_in_lists_every_variant() {
+        // Adding a variant breaks this match; add it to Kind::BUILT_IN too.
+        let count = |k: &Kind| match k {
+            Kind::Pass
+            | Kind::Fail
+            | Kind::Blocker
+            | Kind::Concern
+            | Kind::Comment
+            | Kind::Resolve
+            | Kind::Praise
+            | Kind::Suggestion
+            | Kind::Waiver => 1,
+            Kind::Custom(_) => 0,
+        };
+        assert_eq!(Kind::BUILT_IN.iter().map(count).sum::<usize>(), 9);
+        let names: HashSet<String> = Kind::BUILT_IN.iter().map(Kind::to_string).collect();
+        assert_eq!(names.len(), 9);
+    }
+
+    #[test]
     fn test_kind_roundtrip() {
-        let kinds = vec![
-            Kind::Pass,
-            Kind::Fail,
-            Kind::Blocker,
-            Kind::Concern,
-            Kind::Comment,
-            Kind::Praise,
-            Kind::Suggestion,
-            Kind::Waiver,
-        ];
-        for kind in &kinds {
+        for kind in Kind::BUILT_IN {
             let s = kind.to_string();
             let parsed: Kind = s.parse().unwrap();
             assert_eq!(&parsed, kind);
