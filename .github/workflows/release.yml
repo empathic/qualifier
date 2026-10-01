@@ -23,13 +23,14 @@ jobs:
             os: macos-latest
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
+          # Static, like x86_64, so it also runs on musl systems (Alpine).
+          - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
       - name: Install musl-tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: endsWith(matrix.target, '-linux-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Add Rust target

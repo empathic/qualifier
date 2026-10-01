@@ -881,6 +881,22 @@ case "$err" in *"cargo install qualifier --version 9.9.9"*) ;; *) fail "expected
 [ "$(entries_of "$PH_FAIL")" = "9.9.8" ] || fail "failed download changed the plugin home: $(entries_of "$PH_FAIL")"
 ok "a failed download installs nothing and removes nothing"
 
+# D11. A verified download whose binary cannot run here (a glibc build on a
+#      musl system, say) falls back to cargo, installs nothing, and removes
+#      nothing. The fixture's binary is bytes no system can exec.
+NORUN="$SANDBOX/payload-norun"
+mkdir -p "$NORUN" "$FIXTURE_DIR/v9.9.6"
+printf '\177ELF not a real binary\n' >"$NORUN/qualifier"
+chmod +x "$NORUN/qualifier"
+tar -C "$NORUN" -czf "$FIXTURE_DIR/v9.9.6/qualifier-$TARGET.tar.gz" qualifier
+pinned_copy "$SANDBOX/ensure-norun.sh" 9.9.6 "$(sha256_file "$FIXTURE_DIR/v9.9.6/qualifier-$TARGET.tar.gz")"
+err="$(QUALIFIER_PLUGIN_HOME="$PH_FAIL" PATH="$SAFE_PATH" "$SANDBOX/ensure-norun.sh" 2>&1 >/dev/null)" \
+    && fail "a binary that cannot run must not install"
+case "$err" in *"does not run on this system"*) ;; *) fail "expected 'does not run on this system', got: $err" ;; esac
+case "$err" in *"cargo install qualifier --version 9.9.6"*) ;; *) fail "expected the cargo fallback, got: $err" ;; esac
+[ "$(entries_of "$PH_FAIL")" = "9.9.8" ] || fail "a binary that cannot run changed the plugin home: $(entries_of "$PH_FAIL")"
+ok "a downloaded binary that cannot run here falls back to cargo and installs nothing"
+
 fi # host download tests
 
 # --- SessionStart hook -----------------------------------------------------
