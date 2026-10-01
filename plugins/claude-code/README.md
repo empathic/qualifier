@@ -69,7 +69,11 @@ repository (`scripts/check-skill-examples.py`): `$QUALIFIER_BIN`, else
 `target/debug/qualifier` or `target/release/qualifier`. Placeholders such as
 `<root.id>` are filled from the table in that script; an example that can't
 run is marked on the line before it with `<!-- example: skip — <reason> -->`
-(or `<!-- example: expect-fail -->` for an intended failure).
+(or `<!-- example: expect-fail -->` for an intended failure). That binary
+must report the version the plugin pins (`PINNED_VERSION`), since that is
+the release users run; between a crate version bump and the plugin
+release that pins it, set `ALLOW_UNPINNED_SKILLS=1` to check the skills
+anyway (the mismatch is then a warning).
 
 ## Evals
 
