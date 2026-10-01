@@ -45,12 +45,44 @@ profile, or under `env` in Claude Code's `settings.json`. `<pinned>` is
 `PINNED_VERSION` in `scripts/ensure-qualifier.sh`; in a repository with
 `.qual` files, the SessionStart hook gives the exact command.
 
+## Getting started
+
+The plugin keeps what a session finds and decides (review findings,
+design decisions, options you rejected and why) in `.qual` files next to
+the code, instead of leaving it in the chat. The next session, or the
+next person, reads those threads before touching the code.
+
+You don't call the skills by name; they fire when the moment comes. Some
+prompts to try in a repository:
+
+- "Review the changes on this branch and record the findings in qualifier"
+- "We're choosing between two designs: record the one we reject and why"
+- "Triage the open qualifier threads"
+- "I'm about to change `src/foo.rs`; anything I should know?"
+
+Once a repository has `.qual` files, each session starts with a short
+summary of its open threads.
+
+The first time the plugin runs qualifier, it downloads the release it pins
+for your platform, checks it against the checksum shipped with the plugin,
+and installs it in its own directory (see [Install](#install)). A
+`qualifier` on your `PATH` is not used. On a platform without a prebuilt
+release, install from source and set `QUALIFIER_BIN`, as described above.
+
+After you install or upgrade the plugin, the first session (in any
+directory) shows a short Getting started message, once per plugin
+version. The plugin records the version it last showed in
+`getting-started-shown` in its data directory (`~/.claude/plugins/data/`,
+kept across plugin updates). If that directory can't be written, the
+message isn't shown, rather than shown in every session.
+
 ## What it does
 
 In a repository that contains `.qual` files, a SessionStart hook loads the
 `using-qualifier` skill and a two-line summary of open threads. The other
 skills trigger at their moment in the lifecycle, or on demand as
-`/qual:<skill>`. Elsewhere the plugin is silent.
+`/qual:<skill>`. Elsewhere the plugin is silent, apart from the Getting
+started message once per plugin version.
 
 Records written from Claude Code are marked `issuer_type: ai` and tagged
 `session:claude-code:<session id>` by the qualifier CLI itself.
