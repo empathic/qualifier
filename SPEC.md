@@ -257,9 +257,9 @@ since the annotation was written.
 5. Encode as lowercase hex.
 
 **When computed:** The CLI auto-computes `content_hash` when creating span-
-addressed annotations (via `flag`, `suggest`, `comment`, `approve`, `reject`,
-`attest --span`, etc.) if the subject file exists and the span is within
-bounds. If the file does not exist or the span extends beyond EOF, `content_hash`
+addressed annotations (`record` with a span, and `record --stdin`
+overrides lines; `reply` and `resolve` write no span) if the subject file
+exists and the span is within bounds. If the file does not exist or the span extends beyond EOF, `content_hash`
 is omitted.
 
 **Relationship to `ref`:** The `ref` field pins an annotation to a VCS
@@ -381,7 +381,7 @@ top SHOULD respect these signs:
 
 The format itself does not carry a numeric score. Tools MAY add custom
 body fields (e.g., a `score` integer) and define their own evaluation
-semantics on top of the kind polarity — see Appendix A for one possible
+semantics on top of the kind polarity — see §4 for one possible
 shape.
 
 #### 2.7.2 Custom Kinds
@@ -574,8 +574,8 @@ to a reply is a valid thread.
 {"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-03-01T11:00:00Z","id":"c3d4e5f6...","body":{"kind":"resolve","summary":"Resolved","supersedes":"a1b2c3d4..."}}
 ```
 
-After the resolve, the original concern's `-10` is withdrawn from scoring.
-The reply remains visible in the thread for context.
+After the resolve, the original concern leaves the active set; the reply
+remains visible in the thread for context.
 
 ### 2.12 Reserved Tag Namespaces
 
