@@ -57,6 +57,18 @@ impl Locator {
     /// `/`, and the project root itself is `.`. A path that leaves the
     /// project root is an error. An empty argument is returned unchanged.
     pub(crate) fn subject(&self, arg: &str) -> crate::Result<String> {
+        self.normalize(arg, &self.cwd_rel)
+    }
+
+    /// Normalize a subject taken from a record envelope. Envelope subjects
+    /// are already root-relative, so they are folded against the root,
+    /// not the current directory; a subject that leaves the project root
+    /// is an error.
+    pub(crate) fn stored_subject(&self, subject: &str) -> crate::Result<String> {
+        self.normalize(subject, Path::new(""))
+    }
+
+    fn normalize(&self, arg: &str, base: &Path) -> crate::Result<String> {
         if arg.is_empty() {
             return Ok(String::new());
         }
@@ -72,7 +84,7 @@ impl Locator {
                 .map_err(|_| outside())?
                 .to_path_buf()
         } else {
-            self.cwd_rel.join(path)
+            base.join(path)
         };
         let mut parts: Vec<String> = Vec::new();
         for component in joined.components() {
@@ -107,26 +119,47 @@ impl Locator {
     /// The `.qual` file that receives a new record about `subject`: the
     /// existing 1:1 `<subject>.qual`, else the directory-level `.qual`
     /// next to the subject, both under the project root. An explicit
-    /// `--file` keeps its CWD-relative meaning. Creates nothing; see
-    /// [`append`].
-    pub(crate) fn write_path(&self, subject: &str, explicit: Option<&Path>) -> PathBuf {
+    /// `--file` keeps its CWD-relative meaning. Either way, a path outside
+    /// the project root is an error. Creates nothing; see [`append`].
+    pub(crate) fn write_path(
+        &self,
+        subject: &str,
+        explicit: Option<&Path>,
+    ) -> crate::Result<PathBuf> {
         if let Some(p) = explicit {
-            return p.to_path_buf();
+            self.normalize(&p.to_string_lossy(), &self.cwd_rel)
+                .map_err(|_| {
+                    crate::Error::Validation(format!(
+                        "--file '{}' is outside the project root ({})",
+                        p.display(),
+                        self.root.display()
+                    ))
+                })?;
+            return Ok(p.to_path_buf());
+        }
+        let contained = Path::new(subject)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir));
+        if !contained {
+            return Err(crate::Error::Validation(format!(
+                "subject '{subject}' is outside the project root ({})",
+                self.root.display()
+            )));
         }
         let one_to_one = self.root.join(format!("{subject}.qual"));
         if one_to_one.exists() {
-            return one_to_one;
+            return Ok(one_to_one);
         }
-        match Path::new(subject).parent() {
+        Ok(match Path::new(subject).parent() {
             Some(parent) if !parent.as_os_str().is_empty() => self.root.join(parent).join(".qual"),
             _ => self.root.join(".qual"),
-        }
+        })
     }
 
     /// The existing `.qual` file holding `subject`'s records, if any: the
     /// 1:1 file, else the directory-level file, under the project root.
     pub(crate) fn existing_qual_file(&self, subject: &str) -> Option<PathBuf> {
-        let path = self.write_path(subject, None);
+        let path = self.write_path(subject, None).ok()?;
         path.exists().then_some(path)
     }
 }
@@ -394,6 +427,19 @@ pub(crate) fn require_live_id(
         })?;
     ensure_live(record, qual_files).map_err(|e| err(e.to_string()))?;
     Ok(id.to_string())
+}
+
+/// Check the pointer fields of a new record: `supersedes` and
+/// `references` must each be the full ID of a live record in
+/// `qual_files` (see [`require_live_id`]).
+pub(crate) fn check_pointers(record: &Record, qual_files: &[QualFile]) -> crate::Result<()> {
+    if let Some(id) = record.supersedes() {
+        require_live_id("supersedes", id, qual_files)?;
+    }
+    if let Some(id) = record.references() {
+        require_live_id("references", id, qual_files)?;
+    }
+    Ok(())
 }
 
 /// Check that adding `record` to `existing` keeps supersession acyclic and

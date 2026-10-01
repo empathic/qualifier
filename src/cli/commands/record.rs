@@ -80,11 +80,12 @@ pub struct Args {
     ///      "ref":"git:abc123","supersedes":"<id>","references":"<id>",
     ///      "span":"42:58"}`
     ///   2. A complete record envelope (forward-compat) — recognized when the
-    ///      object has both `subject` and `body` keys.
+    ///      object has both `subject` and `body` keys. Its `subject` is
+    ///      relative to the project root and must stay inside it.
     ///
-    /// `supersedes` and `references` on an overrides line take the full ID
-    /// of a live record in the project or on an earlier line of the same
-    /// batch, as `--supersedes`/`--references` do. A reply is a line whose
+    /// `supersedes` and `references` on either form take the full ID of a
+    /// live record in the project or on an earlier line of the same batch,
+    /// as `--supersedes`/`--references` do. A reply is a line whose
     /// `references` is the target's ID; a resolve is a `kind: "resolve"`
     /// line whose `supersedes` is the target's ID, with at most one
     /// `reason:*` tag.
@@ -178,7 +179,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         (None, None)
     };
 
-    let qual_path = locator.write_path(&subject, args.file.as_deref().map(Path::new));
+    let qual_path = locator.write_path(&subject, args.file.as_deref().map(Path::new))?;
 
     let att = annotation::finalize(Annotation {
         metabox: "1".into(),
@@ -392,9 +393,15 @@ fn plan_one(
     let value: Value = serde_json::from_str(trimmed).map_err(|e| format!("invalid JSON: {e}"))?;
 
     let record = if value.get("body").is_some() && value.get("subject").is_some() {
-        let r: Record =
+        let mut r: Record =
             serde_json::from_value(value).map_err(|e| format!("invalid record: {e}"))?;
-        annotation::finalize_record(r)
+        let subject = locator
+            .stored_subject(r.subject())
+            .map_err(|e| e.to_string())?;
+        set_subject(&mut r, subject);
+        let r = annotation::finalize_record(r);
+        targets::check_pointers(&r, view.files()).map_err(|e| e.to_string())?;
+        r
     } else {
         let obj = value
             .as_object()
@@ -409,12 +416,28 @@ fn plan_one(
         }
     }
 
-    let qual_path = locator.write_path(record.subject(), None);
+    let qual_path = locator
+        .write_path(record.subject(), None)
+        .map_err(|e| e.to_string())?;
 
     if record.supersedes().is_some() {
         targets::check_supersession(view.all_records(), &record).map_err(|e| e.to_string())?;
     }
     Ok((record, qual_path))
+}
+
+/// Replace the envelope subject of `record` (before its ID is computed).
+pub(crate) fn set_subject(record: &mut Record, subject: String) {
+    match record {
+        Record::Annotation(a) => a.subject = subject,
+        Record::Epoch(e) => e.subject = subject,
+        Record::Dependency(d) => d.subject = subject,
+        Record::Unknown(v) => {
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("subject".into(), Value::String(subject));
+            }
+        }
+    }
 }
 
 fn str_field(obj: &Map<String, Value>, key: &str) -> Option<String> {

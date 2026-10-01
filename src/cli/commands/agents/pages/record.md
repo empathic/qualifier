@@ -108,8 +108,12 @@ Recognized keys on the **overrides** form:
 `--file` is rejected with `--stdin`.
 
 The **complete record** form is recognized when an object carries both
-`subject` and `body` keys; it is taken as a fully-formed envelope and only
-the `id` is recomputed; its `supersedes`/`references` are stored as given.
+`subject` and `body` keys; it is taken as a fully-formed envelope and the
+`id` is recomputed. Its `subject` is relative to the project root (not the
+current directory) and is normalized like a location: `./` and `..` are
+folded, and a subject that leaves the project root is an error. Its
+`supersedes`/`references` must name live records, exactly as on the
+overrides form.
 Use this when round-tripping records produced by another tool. The overrides form is the right shape for most agent use.
 
 Behaviour:
