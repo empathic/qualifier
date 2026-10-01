@@ -128,6 +128,15 @@ the pre-1.0 caveat that any breaking change bumps the minor version).
 
 ### Added
 
+- **`qualifier diff [ref]`** — records added, resolved, or drifted since a
+  git ref, compared against the merge base of `HEAD` and the ref by default
+  (`--from-tip` for the ref's tip). `--fail-on KIND` and `--fail-on-drift`
+  exit non-zero for CI gating; `--kind`, `--issuer-type`, and
+  `--subjects-only` filter the output; `--format json` gives a
+  machine-readable summary.
+- **`qualifier record --stdin`** as the first-class batch path: JSONL
+  overrides lines (`{"kind", "location", "message", ...}`) or complete
+  records, one record per line.
 - **AGENTS-CLI 0.1 protocol document** (`AGENTS-CLI.md`) — a draft
   cross-tool convention for CLI tools that self-describe to AI coding
   agents. qualifier is named as the reference implementation. The
