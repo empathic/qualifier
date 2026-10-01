@@ -905,7 +905,7 @@ fn print_drifted(entry: &DriftEntry, project_root: &Path) {
 /// otherwise the summary and any extra continuations move to indented
 /// follow-up lines so the header (KIND + LOC + ID) stays on one line.
 ///
-/// Width is read from `$COLUMNS`, defaulting to 80 when unset.
+/// Width comes from [`term_width`].
 fn print_record_row(
     marker: char,
     kind: &str,
@@ -955,13 +955,19 @@ fn id_prefix(id: &str) -> &str {
     if id.len() >= 8 { &id[..8] } else { id }
 }
 
-/// Effective terminal width. Reads `$COLUMNS` (set by most shells when stdout
-/// is a TTY); falls back to 80 columns when unset, malformed, or zero.
+/// Effective output width: `$COLUMNS` when it is exported as a positive
+/// number (an explicit override; shells set it but do not export it), else
+/// the width of the terminal on stdout, else 80 columns.
 fn term_width() -> usize {
     std::env::var("COLUMNS")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|&n: &usize| n > 0)
+        .or_else(|| {
+            terminal_size::terminal_size_of(std::io::stdout())
+                .map(|(terminal_size::Width(w), _)| usize::from(w))
+                .filter(|&n| n > 0)
+        })
         .unwrap_or(80)
 }
 
