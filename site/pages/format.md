@@ -81,14 +81,15 @@ schema can still read the envelope and route the record sensibly.
 
 ## The envelope
 
-Every record carries the same eight fields. One sentence each:
+Every record carries the same envelope: seven required fields and one
+optional one (`issuer_type`). One sentence each:
 
 - `metabox` — envelope version, always `"1"` for now.
 - `type` — what kind of record this is (`annotation`, `epoch`, `dependency`, ...). Defaults to `"annotation"` when absent.
 - `subject` — the artifact this record is about, usually a path like `src/parser.rs`.
 - `issuer` — who or what wrote it, as a URI (`mailto:`, `https:`, or `urn:`).
 - `issuer_type` — optional; `human`, `ai`, `tool`, or `unknown`.
-- `created_at` — RFC 3339 timestamp.
+- `created_at` — RFC 3339 timestamp, hashed exactly as written. Qualifier writes UTC with a `Z` suffix.
 - `id` — a BLAKE3 hash of the record itself, so identical records always get identical IDs.
 - `body` — the type-specific payload.
 
@@ -150,8 +151,9 @@ close something out, retiring whatever it supersedes.
 }
 ```
 
-Tools render threads with tree-drawing characters so the conversation reads
-naturally in a terminal.
+Tools render each reply under the record it answers, so the conversation
+reads naturally in a terminal. A thread closed by a `resolve` shows as one
+line that carries the answer.
 
 ## Custom body fields
 
@@ -159,8 +161,9 @@ The annotation body has a small set of well-known fields (`kind`, `summary`,
 `detail`, `references`, `supersedes`, `span`, `tags`, `suggested_fix`), but
 the format doesn't constrain what else you put there. A team that wants
 numeric scoring can attach a `score` field to each annotation; a tool that
-imports SARIF can stash the original `ruleId`. Records that round-trip
-through tooling preserve unknown body fields verbatim.
+imports SARIF can stash the original `ruleId`. Tools that rewrite a
+`.qual` file (such as `qualifier compact`) keep custom body fields, and
+custom fields are part of the hashed content, so the record keeps its ID.
 
 This is one example of how an ecosystem can layer quality signals on top
 of the substrate. The spec sketches a numeric `score` field as an
