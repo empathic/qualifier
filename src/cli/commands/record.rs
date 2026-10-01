@@ -153,7 +153,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     // Auto-compute content hash for spans
     if let Some(ref mut s) = span
-        && let Some(hash) = content_hash::compute_span_hash(&locator.file(&subject), s)
+        && let Ok(hash) = content_hash::compute_span_hash(&locator.file(&subject), s)
     {
         s.content_hash = Some(hash);
     }
@@ -541,7 +541,7 @@ fn build_record_from_overrides(
     };
 
     if let Some(ref mut s) = span
-        && let Some(hash) = content_hash::compute_span_hash(&locator.file(&subject), s)
+        && let Ok(hash) = content_hash::compute_span_hash(&locator.file(&subject), s)
     {
         s.content_hash = Some(hash);
     }
