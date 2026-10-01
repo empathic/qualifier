@@ -4,13 +4,18 @@
 # qualifier threads including a blocker on src/net.rs.
 set -euo pipefail
 
-# `claude plugin eval --scaffold` always runs this in a fresh, empty
-# workspace, never inside an existing repository. Refuse before touching
-# git or the filesystem if that ever isn't true (e.g. run by hand from a
-# checkout), since the commands below would otherwise commit the enclosing
-# repository's files and rewrite its shared .git/config.
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo "scaffold.sh: refusing to run inside an existing git work tree ($PWD)" >&2
+# `claude plugin eval --scaffold` always runs this in an empty workspace
+# (https://code.claude.com/docs/en/plugin-evals.md: "A scaffold script
+# starts in the empty workspace..."). That's the only guarantee the docs
+# make, so it's the only thing to check: an empty directory is safe to run
+# this in even when it's nested inside another repository, because `git
+# init` below creates this directory's own .git before any `git config`
+# runs, so config always lands in that new repo, never an enclosing one. A
+# non-empty directory isn't safe (a repository root always has a .git and
+# files), so refuse before touching git or the filesystem, in case this is
+# ever run by hand from one.
+if [ -n "$(ls -A . 2>/dev/null)" ]; then
+    echo "scaffold.sh: refusing to run in a non-empty directory ($PWD)" >&2
     exit 1
 fi
 

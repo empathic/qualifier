@@ -4,6 +4,7 @@
 # a stubbed GitHub release, the SessionStart hook, and skill structure.
 
 set -euo pipefail
+CALLER_PWD="$PWD"
 cd "$(dirname "$0")/.."
 
 PLUGIN="plugins/claude-code"
@@ -25,12 +26,14 @@ ok() {
 # Resolve $QUALIFIER_BIN to an absolute path once, up front, so every check
 # below sees the same path regardless of the directory it runs from (e.g.
 # the eval-grader checks, which run scaffold.sh in a sandbox directory, not
-# this script's directory). bash-3.2-safe: no readlink -f / realpath.
+# this script's directory). A relative path is resolved against the cwd the
+# script was invoked from ($CALLER_PWD, captured above before the `cd`), not
+# this script's own directory. bash-3.2-safe: no readlink -f / realpath.
 if [ -n "${QUALIFIER_BIN:-}" ]; then
     case "$QUALIFIER_BIN" in
         /*) ;;
         *)
-            qb_dir="$(cd "$(dirname "$QUALIFIER_BIN")" 2>/dev/null && pwd)" \
+            qb_dir="$(cd "$CALLER_PWD/$(dirname "$QUALIFIER_BIN")" 2>/dev/null && pwd)" \
                 || fail "QUALIFIER_BIN=$QUALIFIER_BIN: no such directory"
             QUALIFIER_BIN="$qb_dir/$(basename "$QUALIFIER_BIN")"
             unset qb_dir
@@ -38,6 +41,13 @@ if [ -n "${QUALIFIER_BIN:-}" ]; then
     esac
     [ -x "$QUALIFIER_BIN" ] || fail "QUALIFIER_BIN=$QUALIFIER_BIN is not an executable file"
     export QUALIFIER_BIN
+fi
+
+# A lightweight self-invocation used by the check below to exercise just the
+# resolution above from another cwd, without running the rest of the suite.
+if [ "${1:-}" = "--print-resolved-bin" ]; then
+    printf '%s\n' "${QUALIFIER_BIN:-}"
+    exit 0
 fi
 
 # --- manifests -------------------------------------------------------------
@@ -91,6 +101,25 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX/home"
 mkdir -p "$HOME"
 unset QUALIFIER_BIN QUALIFIER_PLUGIN_HOME XDG_DATA_HOME
+
+# --- QUALIFIER_BIN resolution: against the caller's cwd, not this script's -
+# A relative $QUALIFIER_BIN must resolve against the directory the script
+# was invoked from, not the directory this script's own `cd` switches to.
+# Exercise just the resolution logic via --print-resolved-bin, a lightweight
+# self-invocation from another directory, instead of the whole suite.
+RESOLVE_DIR="$SANDBOX/resolve-bin-elsewhere"
+mkdir -p "$RESOLVE_DIR/bin"
+cat >"$RESOLVE_DIR/bin/qualifier" <<'EOF'
+#!/usr/bin/env bash
+echo fake-qualifier
+EOF
+chmod +x "$RESOLVE_DIR/bin/qualifier"
+SELF="$PWD/scripts/test-plugin.sh"
+got="$(cd "$RESOLVE_DIR" && QUALIFIER_BIN=bin/qualifier "$BASH" "$SELF" --print-resolved-bin)" \
+    || fail "a relative QUALIFIER_BIN from another cwd: resolution failed"
+[ "$got" = "$RESOLVE_DIR/bin/qualifier" ] \
+    || fail "a relative QUALIFIER_BIN must resolve against the invoking shell's cwd, not this script's; got $got"
+ok "a relative \$QUALIFIER_BIN resolves against the invoking shell's cwd, not this script's directory"
 
 # The wrapper, the hook, and every stub start with `#!/usr/bin/env bash`.
 # A `bash` first on each PATH the tests use makes all of them run under the
@@ -1198,14 +1227,30 @@ for needle in ("`drifted`", "`missing`", "--supersedes", "--reason obsolete",
 PY
 ok "closing-the-loop step 3 covers drifted and missing review results"
 
-# --- _fixture/scaffold.sh: refuses to run inside an existing git work tree --
-# `claude plugin eval --scaffold` always runs this script in a fresh, empty
-# workspace (see https://code.claude.com/docs/en/plugin-evals.md: "Each run
-# gets a temporary home directory, working directory..."), so the guard
-# below can never fire there. It exists for the case of someone running the
-# script by hand inside a real checkout, where it would otherwise commit
-# that repository's files and rewrite its shared .git/config.
+# --- _fixture/scaffold.sh: refuses to run in a non-empty directory ---------
+# `claude plugin eval --scaffold` guarantees only that this script starts in
+# an empty workspace (https://code.claude.com/docs/en/plugin-evals.md: "A
+# scaffold script starts in the empty workspace..."), not that it is outside
+# a git work tree (the scaffold inherits the invoker's TMPDIR, and some CI
+# setups put that inside a repository). The guard below checks exactly that
+# guarantee, so it can never fire on a real run, but does fire for the case
+# this exists to catch: someone running the script by hand inside a real
+# checkout, where a non-empty directory's existing files would otherwise be
+# committed and its .git/config rewritten.
 
+# G1. A non-empty, non-git directory is refused; nothing is written.
+GUARD_PLAIN="$SANDBOX/scaffold-guard-plain"
+mkdir -p "$GUARD_PLAIN"
+echo stuff >"$GUARD_PLAIN/file.txt"
+GUARD_STATUS=0
+GUARD_STDERR="$(cd "$GUARD_PLAIN" && bash "$SCAFFOLD" 2>&1 >/dev/null)" || GUARD_STATUS=$?
+[ "$GUARD_STATUS" -ne 0 ] || fail "scaffold.sh must refuse in a non-empty directory"
+[ -n "$GUARD_STDERR" ] || fail "scaffold.sh must print a message on stderr when refusing"
+[ "$(ls -A "$GUARD_PLAIN")" = "file.txt" ] \
+    || fail "scaffold.sh wrote something in a non-empty directory it refused: $(ls -A "$GUARD_PLAIN")"
+
+# G2. A throwaway repo (non-empty: it has a .git and a committed file) is
+#     refused the same way: no commit, no files added, .git/config untouched.
 GUARD_REPO="$SANDBOX/scaffold-guard-repo"
 mkdir -p "$GUARD_REPO"
 git -C "$GUARD_REPO" init -q
@@ -1218,7 +1263,7 @@ cp "$GUARD_REPO/.git/config" "$SANDBOX/scaffold-guard-config-before"
 
 GUARD_STATUS=0
 GUARD_STDERR="$(cd "$GUARD_REPO" && bash "$SCAFFOLD" 2>&1 >/dev/null)" || GUARD_STATUS=$?
-[ "$GUARD_STATUS" -ne 0 ] || fail "scaffold.sh must refuse inside an existing git work tree"
+[ "$GUARD_STATUS" -ne 0 ] || fail "scaffold.sh must refuse in a non-empty (repo) directory"
 [ -n "$GUARD_STDERR" ] || fail "scaffold.sh must print a message on stderr when refusing"
 [ "$(git -C "$GUARD_REPO" rev-parse HEAD)" = "$GUARD_HEAD" ] \
     || fail "scaffold.sh created a commit inside an existing git work tree"
@@ -1226,7 +1271,28 @@ GUARD_STDERR="$(cd "$GUARD_REPO" && bash "$SCAFFOLD" 2>&1 >/dev/null)" || GUARD_
     || fail "scaffold.sh added or changed files inside an existing git work tree"
 cmp -s "$GUARD_REPO/.git/config" "$SANDBOX/scaffold-guard-config-before" \
     || fail "scaffold.sh rewrote .git/config inside an existing git work tree"
-ok "scaffold.sh refuses to run inside an existing git work tree, creating no commit and leaving .git/config untouched"
+ok "scaffold.sh refuses in a non-empty directory, plain or a repo, writing nothing and leaving .git/config untouched"
+
+# G3. An empty directory nested inside that same throwaway repo succeeds:
+#     `git init` there creates its own .git before any `git config` runs, so
+#     config lands only in the new nested repo. The outer repo's .git/config,
+#     HEAD, and status must be unchanged. Needs a real binary (scaffold.sh
+#     records against it); skip if none was found.
+if [ -z "$GRADER_BIN" ]; then
+    echo "skip: no qualifier binary; nested-empty-directory scaffold check skipped"
+else
+    mkdir -p "$GUARD_REPO/empty-sub"
+    (cd "$GUARD_REPO/empty-sub" && QUALIFIER_BIN="$GRADER_BIN" bash "$SCAFFOLD" >/dev/null 2>&1) \
+        || fail "scaffold.sh must succeed in an empty directory nested inside a repository"
+    [ -d "$GUARD_REPO/empty-sub/.git" ] || fail "scaffold.sh did not create its own nested .git"
+    [ "$(git -C "$GUARD_REPO" rev-parse HEAD)" = "$GUARD_HEAD" ] \
+        || fail "a nested scaffold run changed the outer repo's HEAD"
+    cmp -s "$GUARD_REPO/.git/config" "$SANDBOX/scaffold-guard-config-before" \
+        || fail "a nested scaffold run rewrote the outer repo's .git/config"
+    [ "$(git -C "$GUARD_REPO" status --porcelain)" = "?? empty-sub/" ] \
+        || fail "a nested scaffold run disturbed the outer repo's status: $(git -C "$GUARD_REPO" status --porcelain)"
+    ok "scaffold.sh succeeds in an empty directory nested inside a repository, leaving the outer repo untouched"
+fi
 
 # --- eval cases: structure and graders ----------------------------------------
 # Every case under evals/ (except the shared _fixture) must load in
