@@ -55,9 +55,11 @@ pub(crate) fn build_reply(target: &Record, input: ReplyInput) -> crate::Result<A
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Target — either an id-prefix (≥4 chars) or a `<location>`
-    /// (e.g., `src/auth.rs:42`). A location resolves to the most-recent
-    /// active record there; ambiguity is reported with a candidate list.
+    /// Target — either an id-prefix (≥4 lowercase hex chars) or a
+    /// `<location>` (e.g., `src/auth.rs:42`, `Makefile`). A location
+    /// resolves to the most-recent active record there; ambiguity is
+    /// reported with a candidate list. A hex target that matches no ID is
+    /// tried as a location.
     pub target: String,
 
     /// One-line reply message

@@ -5539,6 +5539,27 @@ fn test_batch_dry_run_creates_no_directories() {
 
 // --- write path: envelopes, pointers, containment ---
 
+#[test]
+fn test_extensionless_root_files_are_location_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(dir.path(), &["record", "concern", "Makefile", "mk"]);
+    let (_, stderr, code) = run_qualifier(dir.path(), &["reply", "Makefile", "hi"]);
+    assert_eq!(code, 0, "{stderr}");
+
+    // An all-hex name matching no record ID falls back to the location.
+    write_id(dir.path(), &["record", "concern", "cafe", "hex-named file"]);
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["resolve", "cafe", "done"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("cafe"), "{stdout}");
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["reply", "deadbeef", "hi"]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("./deadbeef"),
+        "hint names ./<name>: {stderr}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn test_absolute_location_through_symlink_resolves() {
