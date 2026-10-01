@@ -3,6 +3,17 @@
 # source files across a few subsystems (networking, auth, caching), and
 # qualifier threads including a blocker on src/net.rs.
 set -euo pipefail
+
+# `claude plugin eval --scaffold` always runs this in a fresh, empty
+# workspace, never inside an existing repository. Refuse before touching
+# git or the filesystem if that ever isn't true (e.g. run by hand from a
+# checkout), since the commands below would otherwise commit the enclosing
+# repository's files and rewrite its shared .git/config.
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "scaffold.sh: refusing to run inside an existing git work tree ($PWD)" >&2
+    exit 1
+fi
+
 git init -q --initial-branch=main
 git config user.email eval@example.com
 git config user.name eval

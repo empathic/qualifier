@@ -9,6 +9,7 @@ cd "$(dirname "$0")/.."
 PLUGIN="plugins/claude-code"
 ENSURE="$PWD/$PLUGIN/scripts/ensure-qualifier.sh"
 HOOK="$PWD/$PLUGIN/hooks/session-start"
+SCAFFOLD="$PWD/$PLUGIN/evals/_fixture/scaffold.sh"
 PASS=0
 
 fail() {
@@ -20,6 +21,24 @@ ok() {
     PASS=$((PASS + 1))
     echo "ok: $*"
 }
+
+# Resolve $QUALIFIER_BIN to an absolute path once, up front, so every check
+# below sees the same path regardless of the directory it runs from (e.g.
+# the eval-grader checks, which run scaffold.sh in a sandbox directory, not
+# this script's directory). bash-3.2-safe: no readlink -f / realpath.
+if [ -n "${QUALIFIER_BIN:-}" ]; then
+    case "$QUALIFIER_BIN" in
+        /*) ;;
+        *)
+            qb_dir="$(cd "$(dirname "$QUALIFIER_BIN")" 2>/dev/null && pwd)" \
+                || fail "QUALIFIER_BIN=$QUALIFIER_BIN: no such directory"
+            QUALIFIER_BIN="$qb_dir/$(basename "$QUALIFIER_BIN")"
+            unset qb_dir
+            ;;
+    esac
+    [ -x "$QUALIFIER_BIN" ] || fail "QUALIFIER_BIN=$QUALIFIER_BIN is not an executable file"
+    export QUALIFIER_BIN
+fi
 
 # --- manifests -------------------------------------------------------------
 
@@ -46,7 +65,7 @@ ok "manifests parse and agree (plugin 'qual', versions match)"
 "$BASH" -n "$HOOK" || fail "session-start does not parse"
 python3 -c "import json; json.load(open('$PLUGIN/hooks/hooks.json'))" || fail "hooks.json is not valid JSON"
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck "$ENSURE" "$HOOK" "$0" || fail "shellcheck"
+    shellcheck "$ENSURE" "$HOOK" "$SCAFFOLD" "$0" || fail "shellcheck"
     ok "shellcheck clean"
 else
     echo "skip: shellcheck not installed"
@@ -1179,6 +1198,36 @@ for needle in ("`drifted`", "`missing`", "--supersedes", "--reason obsolete",
 PY
 ok "closing-the-loop step 3 covers drifted and missing review results"
 
+# --- _fixture/scaffold.sh: refuses to run inside an existing git work tree --
+# `claude plugin eval --scaffold` always runs this script in a fresh, empty
+# workspace (see https://code.claude.com/docs/en/plugin-evals.md: "Each run
+# gets a temporary home directory, working directory..."), so the guard
+# below can never fire there. It exists for the case of someone running the
+# script by hand inside a real checkout, where it would otherwise commit
+# that repository's files and rewrite its shared .git/config.
+
+GUARD_REPO="$SANDBOX/scaffold-guard-repo"
+mkdir -p "$GUARD_REPO"
+git -C "$GUARD_REPO" init -q
+echo keep >"$GUARD_REPO/keep.txt"
+git -C "$GUARD_REPO" add keep.txt
+git -C "$GUARD_REPO" -c user.email=guard@example.com -c user.name=guard \
+    -c commit.gpgsign=false commit -q -m "guard commit"
+GUARD_HEAD="$(git -C "$GUARD_REPO" rev-parse HEAD)"
+cp "$GUARD_REPO/.git/config" "$SANDBOX/scaffold-guard-config-before"
+
+GUARD_STATUS=0
+GUARD_STDERR="$(cd "$GUARD_REPO" && bash "$SCAFFOLD" 2>&1 >/dev/null)" || GUARD_STATUS=$?
+[ "$GUARD_STATUS" -ne 0 ] || fail "scaffold.sh must refuse inside an existing git work tree"
+[ -n "$GUARD_STDERR" ] || fail "scaffold.sh must print a message on stderr when refusing"
+[ "$(git -C "$GUARD_REPO" rev-parse HEAD)" = "$GUARD_HEAD" ] \
+    || fail "scaffold.sh created a commit inside an existing git work tree"
+[ -z "$(git -C "$GUARD_REPO" status --porcelain)" ] \
+    || fail "scaffold.sh added or changed files inside an existing git work tree"
+cmp -s "$GUARD_REPO/.git/config" "$SANDBOX/scaffold-guard-config-before" \
+    || fail "scaffold.sh rewrote .git/config inside an existing git work tree"
+ok "scaffold.sh refuses to run inside an existing git work tree, creating no commit and leaving .git/config untouched"
+
 # --- eval cases: structure and graders ----------------------------------------
 # Every case under evals/ (except the shared _fixture) must load in
 # `claude plugin eval`, which rejects unknown keys. Key sets are the ones
@@ -1557,7 +1606,10 @@ if qbin:
     os.makedirs(work)
     env = {**os.environ, "QUALIFIER_BIN": qbin, "GIT_CONFIG_GLOBAL": os.devnull}
     scaffold = os.path.abspath(f"{evals}/_fixture/scaffold.sh")
-    subprocess.run(["bash", scaffold], cwd=work, env=env, check=True, capture_output=True)
+    scaffold_run = subprocess.run(["bash", scaffold], cwd=work, env=env, capture_output=True, text=True)
+    if scaffold_run.returncode != 0:
+        sys.exit(f"FAIL: scaffold.sh failed (exit {scaffold_run.returncode}): "
+                  f"{scaffold_run.stderr.strip()}")
     def q(*args, stdin=None):
         return subprocess.run([qbin, *args], cwd=work, env=env, input=stdin, check=True,
                               capture_output=True, text=True).stdout
