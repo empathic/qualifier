@@ -39,5 +39,13 @@ jobs:
       QUALIFIER_BIN: ${{ github.workspace }}/target/debug/qualifier
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The version-bump check below needs the merge base with the
+          # pull request's base branch.
+          fetch-depth: 0
       - run: cargo build --locked --bin qualifier
       - run: ${{ matrix.bash }} scripts/test-plugin.sh
+      # A plugin change must bump plugins/claude-code/.claude-plugin/plugin.json
+      # (AGENTS.md), or installed plugins never receive it.
+      - if: github.event_name == 'pull_request'
+        run: ${{ matrix.bash }} scripts/test-plugin.sh --check-version-bump "origin/${{ github.base_ref }}"
