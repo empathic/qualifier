@@ -4305,6 +4305,37 @@ fn test_diff_reports_comparison_kind() {
 }
 
 #[test]
+fn test_diff_ref_side_honors_qualignore() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("vendor/lib")).unwrap();
+    record_as_ab(
+        dir.path(),
+        &["concern", "vendor/lib/x.rs", "vendored finding"],
+    );
+    record_as_ab(dir.path(), &["concern", "src.rs", "kept finding"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    std::fs::write(dir.path().join(".qualignore"), "vendor/\n").unwrap();
+    git_commit_all(dir.path(), "ignore vendor");
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("no annotation changes"),
+        "an ignored path must be ignored on both sides, not reported as removed: {stdout}"
+    );
+
+    // --no-ignore reads ignored files on both sides, so still no change.
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--no-ignore"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("no annotation changes"),
+        "--no-ignore applies to both sides: {stdout}"
+    );
+}
+
+#[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
     let (stdout, _stderr, code) = run_qualifier(dir.path(), &["--help"]);
