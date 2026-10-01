@@ -12,8 +12,10 @@ Run this checklist before you say the work is done.
    one it fixed, citing evidence — a test that now passes, or a command and
    its output:
    `qualifier resolve <id> "<evidence>" --reason fixed --ref git:<sha>`.
-   Then commit the `.qual` change on its own; a resolve cannot live in the
-   commit it references. Only threads within close authority
+   `--ref` takes one value; when more than one commit fixed a finding, pass
+   the commit that completed the fix as `--ref` and name the others in the
+   message. Then commit the `.qual` change on its own; a resolve cannot live
+   in the commit it references. Only threads within close authority
    (`qualifier agents conventions`); without evidence, or for others' threads,
    reply with the commit and let a human close.
 2. **Shortcuts you took.** Record each as a `concern` on its lines, with

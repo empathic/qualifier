@@ -1294,6 +1294,33 @@ else
     ok "scaffold.sh succeeds in an empty directory nested inside a repository, leaving the outer repo untouched"
 fi
 
+# G4. An unreadable directory must fail closed too: chdir into it while it is
+#     still readable (so this shell's cwd is already set), then revoke all
+#     permissions on it from outside — exactly how a directory can go from
+#     accessible to "`ls -A .` fails and prints nothing" without ever holding
+#     a file (a bare `cd` into an already-000 directory is refused by the
+#     kernel before the script would even run, so that case can't arise in
+#     practice). Running as root bypasses permission checks entirely, so
+#     chmod 000 would not actually restrict anything there; skip instead of
+#     asserting a refusal that can't happen.
+if [ "$(id -u)" -eq 0 ]; then
+    echo "skip: running as root; chmod 000 does not restrict root, so the unreadable-directory scaffold check is skipped"
+else
+    GUARD_UNREADABLE="$SANDBOX/scaffold-guard-unreadable"
+    mkdir -p "$GUARD_UNREADABLE"
+    if GUARD_STDERR="$(cd "$GUARD_UNREADABLE" && chmod 000 . && bash "$SCAFFOLD" 2>&1 >/dev/null)"; then
+        GUARD_STATUS=0
+    else
+        GUARD_STATUS=$?
+    fi
+    chmod 755 "$GUARD_UNREADABLE"
+    [ "$GUARD_STATUS" -ne 0 ] || fail "scaffold.sh must refuse in an unreadable directory"
+    [ -n "$GUARD_STDERR" ] || fail "scaffold.sh must print a message on stderr when refusing an unreadable directory"
+    [ -z "$(ls -A "$GUARD_UNREADABLE")" ] \
+        || fail "scaffold.sh wrote something in an unreadable directory it refused: $(ls -A "$GUARD_UNREADABLE")"
+    ok "scaffold.sh refuses in an unreadable directory, writing nothing"
+fi
+
 # --- eval cases: structure and graders ----------------------------------------
 # Every case under evals/ (except the shared _fixture) must load in
 # `claude plugin eval`, which rejects unknown keys. Key sets are the ones

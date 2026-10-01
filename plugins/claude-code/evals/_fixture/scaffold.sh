@@ -11,11 +11,16 @@ set -euo pipefail
 # this in even when it's nested inside another repository, because `git
 # init` below creates this directory's own .git before any `git config`
 # runs, so config always lands in that new repo, never an enclosing one. A
-# non-empty directory isn't safe (a repository root always has a .git and
-# files), so refuse before touching git or the filesystem, in case this is
-# ever run by hand from one.
-if [ -n "$(ls -A . 2>/dev/null)" ]; then
-    echo "scaffold.sh: refusing to run in a non-empty directory ($PWD)" >&2
+# non-empty directory isn't safe (a repository root always has a `.git`, so
+# it is never empty), so refuse before touching git or the filesystem, in
+# case this is ever run by hand from one.
+#
+# Fail closed: an unreadable directory makes `ls -A .` itself fail (and
+# print nothing), which must not be mistaken for "empty". Capture the
+# listing inside the `if` condition so `set -e` doesn't exit before this
+# refusal can print its own message.
+if ! listing="$(ls -A . 2>/dev/null)" || [ -n "$listing" ]; then
+    echo "scaffold.sh: refusing to run in a non-empty or unreadable directory ($PWD)" >&2
     exit 1
 fi
 
