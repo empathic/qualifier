@@ -2,7 +2,7 @@ use chrono::Utc;
 use clap::Args as ClapArgs;
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record, Span};
@@ -340,15 +340,22 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
     let proceed = errors.is_empty() || continue_on_error;
     let mut recorded = 0usize;
     if proceed {
+        // Write every planned record before printing anything, so a failed
+        // or closed stdout cannot leave a partial batch on disk.
+        let mut write_error = None;
         for (i, (record, path, line_no)) in planned.iter().enumerate() {
             if !dry_run && let Err(e) = targets::append(path, record) {
-                return Err(crate::Error::Validation(format!(
+                write_error = Some(format!(
                     "wrote {i} of {} records before an I/O error appending stdin line {line_no}: {e}",
                     planned.len()
-                )));
+                ));
+                break;
             }
-            emit_batch_line(record, format, dry_run)?;
             recorded += 1;
+        }
+        print_batch_lines(planned[..recorded].iter().map(|(r, ..)| r), format, dry_run)?;
+        if let Some(e) = write_error {
+            return Err(crate::Error::Validation(e));
         }
     }
 
@@ -492,16 +499,33 @@ fn emit_batch_error(be: &BatchError, format: &str) {
     }
 }
 
-/// Under `--dry-run`, the human verb is "would-record" so a glance
-/// confirms nothing was committed.
-fn emit_batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Result<()> {
+/// Print one stdout line per record. A closed stdout (`| head -1`) ends
+/// the output quietly; the records are already written.
+fn print_batch_lines<'a>(
+    records: impl Iterator<Item = &'a Record>,
+    format: &str,
+    dry_run: bool,
+) -> crate::Result<()> {
+    let mut out = io::stdout().lock();
+    let result = records
+        .map(|record| batch_line(record, format, dry_run))
+        .try_for_each(|line| writeln!(out, "{}", line?).map_err(crate::Error::from))
+        .and_then(|()| out.flush().map_err(crate::Error::from));
+    match result {
+        Err(crate::Error::Io(e)) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
+}
+
+/// One stdout line for a planned record. Under `--dry-run`, the human verb
+/// is "would-record" so a glance confirms nothing was committed.
+fn batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Result<String> {
     if format == "json" {
         let mut v = serde_json::to_value(record)?;
         if dry_run && let Some(obj) = v.as_object_mut() {
             obj.insert("dry_run".into(), serde_json::Value::Bool(true));
         }
-        println!("{}", serde_json::to_string(&v)?);
-        return Ok(());
+        return Ok(serde_json::to_string(&v)?);
     }
 
     let verb = if dry_run {
@@ -509,26 +533,21 @@ fn emit_batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Resul
     } else {
         "recorded   "
     };
-    let id = record.id();
-    let id_short = if id.len() >= 8 { &id[..8] } else { id };
-    if let Some(att) = record.as_annotation() {
-        println!(
-            "{verb}  {:<10} {}{}  {}  id: {}",
+    let id = targets::short_id(record.id());
+    Ok(match record.as_annotation() {
+        Some(att) => format!(
+            "{verb}  {:<10} {}{}  {}  id: {id}",
             att.body.kind.to_string(),
             att.subject,
             span_suffix(att.body.span.as_ref()),
             att.body.summary,
-            id_short,
-        );
-    } else {
-        println!(
-            "{verb}  {:<10} {}  id: {}",
+        ),
+        None => format!(
+            "{verb}  {:<10} {}  id: {id}",
             record.record_type(),
             record.subject(),
-            id_short,
-        );
-    }
-    Ok(())
+        ),
+    })
 }
 
 /// An overrides line on `record --stdin`. Every key is optional to serde

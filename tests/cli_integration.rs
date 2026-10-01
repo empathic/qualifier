@@ -5516,6 +5516,39 @@ fn test_batch_dry_run_creates_no_directories() {
 // --- write path: envelopes, pointers, containment ---
 
 #[test]
+fn test_record_stdin_closed_stdout_still_writes_whole_batch() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let input: String = (1..=20)
+        .map(|i| {
+            format!("{{\"kind\":\"concern\",\"location\":\"a.rs:{i}\",\"message\":\"m{i}\"}}\n")
+        })
+        .collect();
+    let mut child = qualifier_cmd()
+        .args(["record", "--stdin"])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn qualifier");
+    // Close the reading end before any output is produced.
+    drop(child.stdout.take());
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 20, "every planned record is written");
+}
+
+#[test]
 fn test_record_stdin_overrides_reject_unknown_keys_and_bad_types() {
     let dir = tempfile::tempdir().unwrap();
     let cases = [
