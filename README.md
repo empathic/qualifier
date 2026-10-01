@@ -72,7 +72,8 @@ qualifier review src/parser.rs
 `<kind>` is one of `concern`, `comment`, `suggestion`, `pass`, `fail`,
 `blocker`, `praise`, `waiver`, `resolve`, or any custom string. `<location>`
 is a path with an optional span (`src/foo.rs:42`, `src/foo.rs:42:58`).
-`<target>` is an id-prefix (≥4 chars) or a `<location>`.
+`<target>` is an ID prefix (4 or more lowercase hex characters) or a
+`<location>`.
 
 ### Inspect annotations
 
@@ -83,6 +84,7 @@ is a path with an optional span (`src/foo.rs:42`, `src/foo.rs:42:58`).
 | `qualifier ls [--kind K]` | List artifacts (optionally by kind) |
 | `qualifier praise <artifact>` | Show who annotated and why (alias: `blame`) |
 | `qualifier review [subject]` | Check freshness of span-bound annotations |
+| `qualifier diff [ref]` | Show records added, changed, resolved, or drifted since a git ref (merge-base with `main` by default) |
 
 ### Maintain
 
@@ -90,7 +92,10 @@ is a path with an optional span (`src/foo.rs:42`, `src/foo.rs:42:58`).
 |---------|-------------|
 | `qualifier compact <artifact>` | Prune superseded records or snapshot to an epoch |
 
-All read commands accept `--format json` for machine-readable output.
+All read commands, and `record`, `reply`, and `resolve`, accept
+`--format json` for machine-readable output. `format` and `issuer`
+defaults can be set in `.qualifier.toml`, `~/.config/qualifier/config.toml`,
+or `QUALIFIER_FORMAT` / `QUALIFIER_ISSUER`; flags win.
 
 ## Using with Claude Code
 
@@ -121,8 +126,12 @@ A two-record `.qual` file:
 ```
 
 Records are immutable and content-addressed (BLAKE3). Updates use
-supersession chains rather than mutation. Compaction prunes superseded
-records or collapses history into epoch records.
+supersession chains rather than mutation. Replies (`references`) and
+supersession group records into threads, which are open, waiting on a
+decision, decided, or closed by a `resolve`. Compaction prunes superseded
+records (keeping each thread's structure) or collapses history into epoch
+records. Custom body fields are preserved and hashed, and `created_at` is
+hashed exactly as written.
 
 ## File layout
 
@@ -138,7 +147,7 @@ appends don't collide.
 
 ## Agent integration
 
-- `--format json` on `show` and `ls` for structured output
+- `--format json` on every read command; `qualifier threads --format json` gives each thread's state (`open`, `needs-decision`, `decided`, `closed`) and its closing resolve
 - `qualifier record --stdin` and `qualifier emit --stdin` accept JSONL on stdin
 - `body.suggested_fix` carries actionable remediation
 - `body.span` targets specific line ranges
