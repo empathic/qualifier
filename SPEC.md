@@ -1156,24 +1156,52 @@ qualifier show src/parser.rs
 ### 6.6 `qualifier show`
 
 ```
+qualifier show <artifact> [--all] [--pretty] [--type <TYPE>]
+               [--format human|json] [--no-ignore]
+```
+
+Shows the records on one artifact, grouped into threads (§7,
+`qualifier::threads`) and rendered by the same thread renderer as
+`threads` and `praise`:
+
+```
 qualifier show src/parser.rs
 
   src/parser.rs
 
-  Records (4):
-    concern  "Panics on malformed input"    alice  2026-02-24  a1b2c3d4
-    ├── comment  "Good catch, fixed"        bob    2026-02-25  b2c3d4e5
-    └── resolve  "Resolved"                 alice  2026-02-25  c3d4e5f6
-    praise   "Excellent property test coverage"  bob  2026-02-24  e5f6a7b8
+  Open threads (2):
+    [c1acc3f5] praise     src/parser.rs  Excellent property test coverage  (bob, 2026-10-01)
+
+    [e5daa3cd] suggestion src/parser.rs:10:12  Consider fuzzing  (alice, ai, 2026-10-01) — needs decision
+        [f9156cb5] comment    Worth it for parse()  (carol, 2026-10-01)
+
+  Closed threads (1):
+    [274357ca] concern    src/parser.rs:42  Panics on malformed input  (alice, 2026-10-01) — closed (fixed) by alice: Resolved
 ```
 
-When annotations have spans, the line range is displayed. Use
-`--line <n>` to filter to annotations overlapping a specific line.
+An open thread prints its root, with its state when it is waiting on or
+has reached a decision, then one indented line per live reply. A closed
+thread prints one line that carries its closing `resolve` (reason, closer,
+and summary). Records that are not annotations are listed under "Other
+records". Each line ends with the issuer, the issuer type when it is set
+and not `human`, and the date.
 
-Human output shows the issuer type after the issuer name when it is set and not `human` (e.g. `alex (ai)`).
+- `--all` also shows edit history, superseded replies, and superseded
+  records.
+- `--pretty` prints the source lines around each span
+  (compiler-diagnostic style); with `--format json` it adds a `context`
+  field to each record.
+- `--type <TYPE>` keeps only records whose envelope `type` matches
+  (`annotation`, `epoch`, `dependency`, or a custom type URI).
+- `--format json` prints `{subject, records, threads}`: the records, and
+  one `{origin, root, state, closed_by}` entry per thread, where `state` is
+  the thread state of §6.12.
 
-`--all` shows all records including resolved/superseded ones (default hides
-them). `--pretty` forces colored output when piped.
+To see the threads on one line range, use `qualifier threads <path>:<line>`.
+
+An artifact with no records is not an error: `show` prints
+`No records found for '<artifact>'.` (or an empty `records` list in JSON)
+and exits 0.
 
 ### 6.7 `qualifier ls`
 
