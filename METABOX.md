@@ -85,7 +85,8 @@ uniform across all record types.
 
 ### 1.6 `created_at`
 
-An RFC 3339 timestamp indicating when the record was created.
+An RFC 3339 timestamp indicating when the record was created. It is hashed
+exactly as written (section 3.7).
 
 ### 1.7 `id`
 
@@ -141,8 +142,15 @@ Before serialization:
 1. **Envelope fields** appear in the fixed order defined in section 1:
    `metabox`, `type`, `subject`, `issuer`, `issuer_type`, `created_at`, `id`,
    `body`. Optional envelope fields (`issuer_type`) are omitted when absent.
-2. **Body fields** are sorted lexicographically by key. Sorting is recursive:
-   nested objects also have their keys sorted lexicographically.
+2. **Body fields** are sorted lexicographically by key. Fields the body type
+   defines and any other (custom) fields are sorted together.
+
+This ordering rule covers the body's top-level keys. The key order inside a
+nested object is set by the body type's specification; Metabox does not yet
+define a general rule for it. Qualifier serializes its `span` object as
+`start`, `end`, `content_hash` and each position as `line`, `col`, and
+serializes free-form JSON values (custom field values, and the bodies of
+types it does not know) with keys in lexicographic order at every level.
 
 ### 3.3 Absent Optional Body Fields
 
@@ -164,6 +172,17 @@ escapes beyond what JSON requires.
 
 Integers serialize as bare decimal with no leading zeros, no decimal point, no
 exponent. Negative values use a leading `-`.
+
+### 3.7 Timestamps
+
+`created_at` is hashed exactly as it is written in the record.
+Implementations MUST NOT re-encode it (normalize the offset, add or drop
+fractional digits) when hashing or rewriting a record, so a record keeps
+its ID wherever it is copied. Any valid RFC 3339 timestamp is accepted.
+Records an implementation creates SHOULD use the canonical form: UTC with
+a `Z` suffix and 0, 3, 6, or 9 fractional-second digits, the fewest that
+represent the instant exactly (`2026-02-24T10:00:00Z`,
+`2026-02-24T10:00:00.500Z`).
 
 ## 4. Content Addressing
 
