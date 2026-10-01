@@ -74,15 +74,21 @@ run is marked on the line before it with `<!-- example: skip — <reason> -->`
 ## Evals
 
 `plugins/claude-code/evals/` is a trigger-eval suite for `claude plugin eval`:
-one case per skill, seeded by `evals/_fixture/scaffold.sh` (a git repo with a
-spec, three source files under `src/`, and open qualifier threads including
-a blocker on `src/net.rs`); `review-subsystems`, a large-scope review that
+one case per skill, seeded by a fixture script (a git repo with a spec,
+three source files under `src/`, and open qualifier threads including a
+blocker on `src/net.rs`); `review-subsystems`, a large-scope review that
 should dispatch reviewer and verifier subagents (see
 [its README](evals/review-subsystems/README.md)); and four negative
 cases: three quiet cases (`quiet-typo`, `quiet-question`, `quiet-explore`)
 that must *not* write a record, and `no-qual-files`, which must not fire
 any `qual:` skill at all. Running evals calls the model and costs money —
 confirm before running.
+
+A case's `scaffold_script` must name a file inside its own case directory,
+so each case that uses the shared fixture has its own `scaffold.sh`, a
+copy of `evals/_fixture/scaffold.sh`. Edit `_fixture/scaffold.sh`, then
+copy it over each case's `scaffold.sh` (every case except `no-qual-files`,
+which has its own).
 
 Bash graders match only inside the call's `command`, not its
 description. The quiet cases' `no-record` grader counts any `record`,
@@ -96,18 +102,20 @@ qualifier release itself inside the session; no `PATH` setup is needed,
 but the eval sandbox must allow that download (from GitHub releases), or
 runs will report that the plugin could not install qualifier. The
 `scaffold_script` runs on the host, outside that sandbox, and needs a
-qualifier there to seed the fixture threads: it uses `QUALIFIER_BIN` if
-set, else `qualifier` on `PATH`. `Bash`, `Write`, and `Edit` are gated
-tools: listing them in a case's `allowed_tools` is not enough, they also
-need an operator grant on the command line. Smoke-test one case first,
-then run the full suite:
+qualifier there to seed the fixture threads. It receives only `PATH`,
+`TMPDIR`, a temporary `HOME`, and a few constants, so `QUALIFIER_BIN`
+does not reach it either: put the built binary first on `PATH`. `Bash`,
+`Write`, and `Edit` are gated tools: listing them in a case's
+`allowed_tools` is not enough, they also need an operator grant on the
+command line. From the repository root, smoke-test one case first, then
+run the full suite:
 
 ```bash
 cargo build --bin qualifier
-QUALIFIER_BIN="$PWD/target/debug/qualifier" claude plugin eval plugins/claude-code \
+PATH="$PWD/target/debug:$PATH" claude plugin eval plugins/claude-code \
   --case design-rejects-option --runs 1 --scaffold --allow-tools Write Edit Bash
 
-QUALIFIER_BIN="$PWD/target/debug/qualifier" claude plugin eval plugins/claude-code \
+PATH="$PWD/target/debug:$PATH" claude plugin eval plugins/claude-code \
   --runs 3 --scaffold --allow-tools Write Edit Bash
 ```
 
@@ -167,7 +175,7 @@ Before a plugin release:
    both configurations (plugin alone, then again with `superpowers`
    loaded), at least 3 runs per case:
    ```
-   QUALIFIER_BIN="$PWD/target/debug/qualifier" claude plugin eval plugins/claude-code \
+   PATH="$PWD/target/debug:$PATH" claude plugin eval plugins/claude-code \
      --runs 3 --scaffold --allow-tools Write Edit Bash
    ```
 2. Every negative case (`quiet-typo`, `quiet-question`, `quiet-explore`,

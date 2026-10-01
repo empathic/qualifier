@@ -1438,7 +1438,9 @@ def check_regex(where, pattern):
     except re.error as e:
         raise AssertionError(f"{where}: regex does not compile: {e}: {pattern!r}")
 
-cases = sorted(d for d in os.listdir(evals) if os.path.isdir(f"{evals}/{d}") and d != "_fixture")
+# results/ is where `claude plugin eval` writes its reports (git-ignored).
+cases = sorted(d for d in os.listdir(evals)
+               if os.path.isdir(f"{evals}/{d}") and d not in ("_fixture", "results"))
 assert cases, "no eval cases found"
 for case in cases:
     d = f"{evals}/{case}"
@@ -1455,6 +1457,9 @@ for case in cases:
                 f"{d}/case.yaml: unknown {key} keys {sorted(set(y[key]) - allowed)}")
     scaffold = y.get("context", {}).get("scaffold_script")
     if scaffold:
+        # The runner rejects a scaffold_script that is absolute or contains `..`.
+        assert not os.path.isabs(scaffold[0]) and ".." not in scaffold[0].split("/"), (
+            f"{d}/case.yaml: scaffold_script {scaffold[0]!r} must name a file inside the case directory")
         assert os.path.isfile(os.path.join(d, scaffold[0])), f"{d}/case.yaml: no scaffold {scaffold[0]}"
 
     if os.path.exists(f"{d}/prompt.md"):
