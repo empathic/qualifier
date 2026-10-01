@@ -90,8 +90,9 @@ struct Diff {
 struct ResolvedEntry {
     /// Record from <ref> that is no longer active.
     old: Record,
-    /// Record on this branch that supersedes it, if any.
-    closer: Option<Record>,
+    /// Records on this branch that supersede it, oldest first. Usually one;
+    /// more after merging branches that each closed it.
+    closers: Vec<Record>,
 }
 
 struct DriftEntry {
@@ -532,19 +533,27 @@ fn compute_diff(old: &[Record], new: &[Record], project_root: &Path) -> Diff {
         .collect();
     added.sort_by_key(sort_key);
 
-    // Resolved: active at <ref>, not active at HEAD. Find the closer
-    // (any new record whose `supersedes` points at the resolved id).
-    let supersedes_index: HashMap<&str, &Record> = new
-        .iter()
-        .filter_map(|r| r.supersedes().map(|s| (s, r)))
-        .collect();
+    // Resolved: active at <ref>, not active at HEAD. Find the closers
+    // (every new record whose `supersedes` points at the resolved id).
+    let mut supersedes_index: HashMap<&str, Vec<&Record>> = HashMap::new();
+    for r in new {
+        if let Some(target) = r.supersedes() {
+            supersedes_index.entry(target).or_default().push(r);
+        }
+    }
+    for closers in supersedes_index.values_mut() {
+        closers.sort_by(|a, b| created_at(a).cmp(&created_at(b)).then(a.id().cmp(b.id())));
+    }
 
     let mut resolved: Vec<ResolvedEntry> = old_active
         .iter()
         .filter(|r| !new_active_ids.contains(r.id()))
         .map(|r| ResolvedEntry {
             old: (*r).clone(),
-            closer: supersedes_index.get(r.id()).map(|c| (*c).clone()),
+            closers: supersedes_index
+                .get(r.id())
+                .map(|cs| cs.iter().map(|c| (*c).clone()).collect())
+                .unwrap_or_default(),
         })
         .collect();
     resolved.sort_by_key(|e| sort_key(&e.old));
@@ -587,6 +596,10 @@ fn compute_diff(old: &[Record], new: &[Record], project_root: &Path) -> Diff {
         resolved,
         drifted,
     }
+}
+
+fn created_at(r: &Record) -> Option<chrono::DateTime<chrono::Utc>> {
+    r.as_annotation().map(|a| a.created_at)
 }
 
 fn sort_key(r: &Record) -> (String, u32) {
@@ -662,8 +675,10 @@ fn print_resolved(entry: &ResolvedEntry) {
         .map(|a| a.body.summary.as_str())
         .unwrap_or("");
 
-    let closer_line = match &entry.closer {
-        Some(c) => {
+    let mut closer_lines: Vec<String> = entry
+        .closers
+        .iter()
+        .map(|c| {
             let verb = if c.kind() == Some(&Kind::Resolve) {
                 "resolved by"
             } else {
@@ -674,9 +689,11 @@ fn print_resolved(entry: &ResolvedEntry) {
                 Some(s) if !s.is_empty() => format!("{verb} {closer_id}: {s:?}"),
                 _ => format!("{verb} {closer_id}"),
             }
-        }
-        None => "removed (no successor)".into(),
-    };
+        })
+        .collect();
+    if closer_lines.is_empty() {
+        closer_lines.push("removed (no successor)".into());
+    }
 
     print_record_row(
         '-',
@@ -684,7 +701,7 @@ fn print_resolved(entry: &ResolvedEntry) {
         &loc,
         summary,
         id_prefix(entry.old.id()),
-        &[closer_line],
+        &closer_lines,
     );
 }
 
@@ -824,7 +841,8 @@ fn print_json(header: &DiffHeader, diff: &Diff) {
         .map(|e| {
             serde_json::json!({
                 "record": e.old,
-                "closer": e.closer,
+                "closer": e.closers.last(),
+                "closers": e.closers,
             })
         })
         .collect();

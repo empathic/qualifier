@@ -4138,6 +4138,48 @@ fn test_diff_ref_side_honors_qualignore() {
 }
 
 #[test]
+fn test_diff_lists_every_closer_of_a_resolved_record() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let old = record_as_ab(dir.path(), &["concern", "a.rs", "needs work"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    // Two resolves of the same record, as a merge of two branches leaves.
+    for summary in ["fixed on branch one", "fixed on branch two"] {
+        let body = serde_json::json!({"kind": "resolve", "summary": summary, "supersedes": old});
+        let (_, stderr, code) = run_qualifier(
+            dir.path(),
+            &[
+                "emit",
+                "annotation",
+                "a.rs",
+                "--body",
+                &body.to_string(),
+                "--issuer",
+                "mailto:a@b.com",
+            ],
+        );
+        assert_eq!(code, 0, "{stderr}");
+    }
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("fixed on branch one") && stdout.contains("fixed on branch two"),
+        "both closers should be listed: {stdout}"
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let closers = v["resolved"][0]["closers"]
+        .as_array()
+        .expect("closers array");
+    assert_eq!(closers.len(), 2, "{stdout}");
+    assert!(v["resolved"][0]["closer"].is_object(), "{stdout}");
+}
+
+#[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
     let (stdout, _stderr, code) = run_qualifier(dir.path(), &["--help"]);

@@ -33,9 +33,10 @@ Three sections, all reckoned by record `id`:
    at all. Annotation records only; epoch and dependency records are not
    review signals.
 2. **Resolved** — records active at `<ref>` that are no longer active on
-   `HEAD`. Each row names the closer record (the new annotation whose
-   `supersedes` points at it) when one exists, or marks the record as
-   *removed* if no successor was authored.
+   `HEAD`. Each row names every closer record (each new annotation whose
+   `supersedes` points at it; more than one after merging branches that
+   each closed it), or marks the record as *removed* if no successor was
+   authored.
 3. **Drifted** — records present at *both* refs whose `body.span.content_hash`
    no longer matches the file's current content. Drift on records that are
    freshly added on this branch is suppressed (you just authored them; their
@@ -124,7 +125,7 @@ Drifted (1)
   "from_tip": false,
   "comparison": "merge-base",
   "added":    [<full record envelopes>],
-  "resolved": [{"record": <ref-side record>, "closer": <head-side closer or null>}],
+  "resolved": [{"record": <ref-side record>, "closer": <newest head-side closer or null>, "closers": [<every head-side closer, oldest first>]}],
   "drifted":  [{"record": <head-side record>, "expected": "<hash>", "actual": "<hash>"}]
 }
 ```
