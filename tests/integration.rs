@@ -999,3 +999,29 @@ fn test_golden_custom_type_id_and_envelope_order() {
     );
     assert_eq!(annotation::generate_record_id(&record), record.id());
 }
+
+// --- Lenient parsing ---
+
+#[test]
+fn test_parse_lenient_skips_bad_lines_and_discover_keeps_going() {
+    let dir = tempfile::tempdir().unwrap();
+    let good = serde_json::to_string(&make_record("a.rs", Kind::Praise, "fine")).unwrap();
+    let content = format!("{good}\n{{not json\n\n{good}\n");
+    std::fs::write(dir.path().join(".qual"), &content).unwrap();
+    std::fs::create_dir_all(dir.path().join("b")).unwrap();
+    std::fs::write(dir.path().join("b/.qual"), format!("{good}\n")).unwrap();
+
+    let path = dir.path().join(".qual");
+    let (qf, issues) = qual_file::parse_lenient(&path).unwrap();
+    assert_eq!(qf.records.len(), 2);
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].line, 2);
+    assert!(issues[0].to_string().contains(".qual:2:"));
+
+    let err = qual_file::parse(&path).unwrap_err().to_string();
+    assert!(err.contains(".qual:2:"), "{err}");
+
+    let found = qual_file::discover(dir.path(), true).unwrap();
+    assert_eq!(found.len(), 2);
+    assert_eq!(found.iter().map(|qf| qf.records.len()).sum::<usize>(), 3);
+}

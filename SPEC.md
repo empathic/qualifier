@@ -1421,9 +1421,11 @@ pub fn finalize_record(record: Record) -> Record;
 
 // qualifier::qual_file
 pub struct QualFile { pub path: PathBuf, pub subject: String, pub records: Vec<Record> }
-pub fn parse(path: &Path) -> Result<QualFile>;
+pub fn parse(path: &Path) -> Result<QualFile>;                     // strict: first bad line is an error
+pub fn parse_lenient(path: &Path) -> Result<(QualFile, Vec<ParseIssue>)>; // skips bad lines
+pub struct ParseIssue { pub path: PathBuf, pub line: usize, pub message: String }
 pub fn append(path: &Path, record: &Record) -> Result<()>;
-pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>;
+pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>; // lenient; warns on stderr
 
 // qualifier::content_hash — span freshness checking
 pub fn compute_span_hash(file_path: &Path, span: &Span) -> Result<String, SpanHashError>;

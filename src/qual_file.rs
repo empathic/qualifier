@@ -15,31 +15,67 @@ pub struct QualFile {
     pub records: Vec<Record>,
 }
 
+/// A `.qual` line that could not be parsed as a record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseIssue {
+    /// The `.qual` file.
+    pub path: PathBuf,
+    /// 1-indexed line number.
+    pub line: usize,
+    /// Why the line was rejected.
+    pub message: String,
+}
+
+impl std::fmt::Display for ParseIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}: {}", self.path.display(), self.line, self.message)
+    }
+}
+
 /// Parse a `.qual` file from disk.
 ///
 /// Skips empty lines and lines starting with `//` (comments).
-/// Each non-comment line must be a valid JSON record.
+/// Each non-comment line must be a valid JSON record; the first one that
+/// is not fails the parse. Use this before rewriting a file, so no line is
+/// ever dropped.
 pub fn parse(path: &Path) -> crate::Result<QualFile> {
+    let (qual_file, issues) = parse_lenient(path)?;
+    match issues.into_iter().next() {
+        Some(issue) => Err(crate::Error::Validation(issue.to_string())),
+        None => Ok(qual_file),
+    }
+}
+
+/// Parse a `.qual` file from disk, skipping lines that are not valid
+/// records and returning them as issues. Fails only when the file cannot
+/// be read.
+pub fn parse_lenient(path: &Path) -> crate::Result<(QualFile, Vec<ParseIssue>)> {
     let content = fs::read_to_string(path)?;
     let subject = subject_name(path);
     let mut records = Vec::new();
+    let mut issues = Vec::new();
 
     for (line_no, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
-        let record: Record = serde_json::from_str(trimmed).map_err(|e| {
-            crate::Error::Validation(format!("{}:{}: {}", path.display(), line_no + 1, e))
-        })?;
-        records.push(record);
+        match serde_json::from_str::<Record>(trimmed) {
+            Ok(record) => records.push(record),
+            Err(e) => issues.push(ParseIssue {
+                path: path.to_path_buf(),
+                line: line_no + 1,
+                message: e.to_string(),
+            }),
+        }
     }
 
-    Ok(QualFile {
+    let qual_file = QualFile {
         path: path.to_path_buf(),
         subject,
         records,
-    })
+    };
+    Ok((qual_file, issues))
 }
 
 /// Parse records from a string (for testing or in-memory use).
@@ -178,6 +214,10 @@ pub fn find_qual_file_for(subject: &str) -> Option<PathBuf> {
 /// directories (`.git`, `.hg`, `.jj`, `.pijul`, `_FOSSIL_`, `.svn`) are
 /// always skipped; other hidden directories are walked.
 ///
+/// Lines that are not valid records are skipped with a warning on stderr
+/// naming `file:line`, so one bad line does not hide every other record.
+/// Re-read a file with [`parse`] before rewriting it.
+///
 /// Returns them sorted by path for determinism.
 pub fn discover(root: &Path, respect_ignore: bool) -> crate::Result<Vec<QualFile>> {
     use ignore::WalkBuilder;
@@ -215,7 +255,11 @@ pub fn discover(root: &Path, respect_ignore: bool) -> crate::Result<Vec<QualFile
             && (path.extension().and_then(|e| e.to_str()) == Some("qual")
                 || path.file_name().and_then(|f| f.to_str()) == Some(".qual"))
         {
-            qual_files.push(parse(path)?);
+            let (qual_file, issues) = parse_lenient(path)?;
+            for issue in issues {
+                eprintln!("warning: skipping {issue}");
+            }
+            qual_files.push(qual_file);
         }
     }
     qual_files.sort_by(|a, b| a.path.cmp(&b.path));
