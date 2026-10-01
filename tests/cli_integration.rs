@@ -6201,3 +6201,20 @@ fn test_compact_artifact_covers_every_qual_file_holding_it() {
         "both files compacted: {stdout}"
     );
 }
+
+#[test]
+fn test_record_reversed_span_is_an_error_not_a_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "1\n2\n3\n4\n5\n6\n").unwrap();
+    for location in ["x.rs:5:2", "x.rs"] {
+        let mut args = vec!["record", "concern", location, "reversed"];
+        if location == "x.rs" {
+            args.extend(["--span", "3.9:3.4"]);
+        }
+        let (_, stderr, code) = run_qualifier(dir.path(), &args);
+        assert_eq!(code, 1, "{location}: {stderr}");
+        assert!(stderr.contains("must not precede"), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    }
+    assert!(!dir.path().join(".qual").exists());
+}
