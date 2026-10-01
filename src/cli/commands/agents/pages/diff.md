@@ -95,6 +95,11 @@ qualifier diff origin/main --format json
 | `--from-tip` | Compare against `<ref>`'s tip rather than the merge-base of HEAD with `<ref>`. |
 | `--no-ignore` | Read `.qual` files that `.gitignore` or `.qualignore` would skip. Without it, the working tree's ignore rules apply to both sides, so a newly ignored path is not reported as removed. |
 
+Kinds are matched exactly. A kind in `--kind` or `--fail-on` that is
+neither built in nor carried by any record on either side (a typo such as
+`blockers`) prints `qualifier diff: warning: kind 'blockers' matches no
+known kind` on stderr; the command still runs, since custom kinds are legal.
+
 `--fail-on` and `--fail-on-drift` compose: pass both for a stricter CI
 gate. The diff body is always printed before the failure exit, so the
 build log shows exactly which record triggered the failure.
