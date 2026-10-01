@@ -50,6 +50,49 @@ if [ "${1:-}" = "--print-resolved-bin" ]; then
     exit 0
 fi
 
+# --check-version-bump <base-ref> [<repo>]: fails when the commits since the
+# merge base of <base-ref> and HEAD change a file under the plugin outside
+# evals/ (other than a .qual file) without changing plugin.json's version.
+# AGENTS.md requires that bump: an installed plugin stays on its version
+# until the version changes, so a change without one never reaches users.
+# CI runs this mode on pull requests; the suite below checks it against a
+# scratch repository.
+if [ "${1:-}" = "--check-version-bump" ]; then
+    [ -n "${2:-}" ] || fail "--check-version-bump needs a base ref"
+    python3 - "$2" "${3:-.}" "$PLUGIN" <<'PY' || exit 1
+import json, os, subprocess, sys
+
+base_ref, repo, plugin = sys.argv[1:4]
+manifest = f"{plugin}/.claude-plugin/plugin.json"
+
+def git(*args, check=True):
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=check)
+
+base = git("merge-base", base_ref, "HEAD").stdout.strip()
+changed = [
+    path for path in git("diff", "--name-only", base, "HEAD", "--", plugin).stdout.splitlines()
+    if not path.startswith(f"{plugin}/evals/") and not os.path.basename(path).endswith(".qual")
+]
+if not changed:
+    print(f"ok: no plugin change since {base_ref}; no version bump needed")
+    sys.exit(0)
+
+def version_at(rev):
+    shown = git("show", f"{rev}:{manifest}", check=False)
+    return json.loads(shown.stdout)["version"] if shown.returncode == 0 else None
+
+before, after = version_at(base), version_at("HEAD")
+if before is not None and before == after:
+    print(f"FAIL: {len(changed)} plugin file(s) changed since {base_ref}, but {manifest} is still "
+          f"version {after}. AGENTS.md (Keeping Things in Sync) requires a plugin version bump for "
+          f"any skill, hook, or wrapper change: installed plugins stay on their version until it "
+          f"changes. Changed: {', '.join(changed)}", file=sys.stderr)
+    sys.exit(1)
+print(f"ok: the plugin changed since {base_ref} and its version moved from {before} to {after}")
+PY
+    exit 0
+fi
+
 # --- manifests -------------------------------------------------------------
 
 python3 - "$PLUGIN" <<'PY' || fail "manifest checks"
@@ -70,6 +113,38 @@ assert entry["version"] == plugin["version"], (
 assert plugin["name"] == "qual", "plugin must be named 'qual' (skills are /qual:*)"
 PY
 ok "manifests parse and agree (plugin 'qual', versions match)"
+
+# --check-version-bump against a scratch repository: changes to evals/ and
+# .qual files alone pass, an unbumped skill change fails, a bump passes.
+BUMP_REPO="$(mktemp -d)"
+SELF_BUMP="$PWD/scripts/test-plugin.sh"
+bump_git() { git -C "$BUMP_REPO" -c user.email=test@example.com -c user.name=test -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
+mkdir -p "$BUMP_REPO/$PLUGIN/.claude-plugin" "$BUMP_REPO/$PLUGIN/skills/x" "$BUMP_REPO/$PLUGIN/evals/c"
+echo '{"name": "qual", "version": "0.1.0"}' >"$BUMP_REPO/$PLUGIN/.claude-plugin/plugin.json"
+echo a >"$BUMP_REPO/$PLUGIN/skills/x/SKILL.md"
+echo a >"$BUMP_REPO/$PLUGIN/evals/c/case.yaml"
+bump_git init -q
+bump_git checkout -q -b base
+bump_git add -A
+bump_git commit -qm base
+bump_git checkout -q -b change
+echo b >"$BUMP_REPO/$PLUGIN/evals/c/case.yaml"
+echo '{}' >"$BUMP_REPO/$PLUGIN/skills/x/.qual"
+bump_git add -A
+bump_git commit -qm evals-and-qual
+"$BASH" "$SELF_BUMP" --check-version-bump base "$BUMP_REPO" >/dev/null \
+    || fail "--check-version-bump must pass when only evals/ and .qual files changed"
+echo b >"$BUMP_REPO/$PLUGIN/skills/x/SKILL.md"
+bump_git commit -qam skill
+if "$BASH" "$SELF_BUMP" --check-version-bump base "$BUMP_REPO" >/dev/null 2>&1; then
+    fail "--check-version-bump must fail on a skill change without a plugin version bump"
+fi
+echo '{"name": "qual", "version": "0.1.1"}' >"$BUMP_REPO/$PLUGIN/.claude-plugin/plugin.json"
+bump_git commit -qam bump
+"$BASH" "$SELF_BUMP" --check-version-bump base "$BUMP_REPO" >/dev/null \
+    || fail "--check-version-bump must pass once plugin.json's version changed"
+rm -rf "$BUMP_REPO"
+ok "--check-version-bump fails a plugin change without a version bump, ignoring evals/ and .qual files"
 
 "$BASH" -n "$ENSURE" || fail "ensure-qualifier.sh does not parse"
 "$BASH" -n "$HOOK" || fail "session-start does not parse"

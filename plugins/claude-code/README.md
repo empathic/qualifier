@@ -75,6 +75,13 @@ the release users run; between a crate version bump and the plugin
 release that pins it, set `ALLOW_UNPINNED_SKILLS=1` to check the skills
 anyway (the mismatch is then a warning).
 
+Any change under `plugins/claude-code/` outside `evals/` and `.qual`
+files needs a version bump in `.claude-plugin/plugin.json` (and the
+marketplace entry): an installed plugin stays on its version until that
+changes. On pull requests CI runs
+`scripts/test-plugin.sh --check-version-bump origin/<base branch>`, which
+fails when such a change leaves the version as it was at the merge base.
+
 ## Evals
 
 `plugins/claude-code/evals/` is a trigger-eval suite for `claude plugin eval`:
