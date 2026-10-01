@@ -506,8 +506,8 @@ record's `id`.
 
 **Resolve pattern:** A `resolve`-kind annotation supersedes its target,
 withdrawing the target from the active set. This is the canonical way to
-close an issue — the superseded record is no longer surfaced and the
-resolve record stands as the visible tombstone.
+close an issue: the target's thread is closed, and the resolve record is
+its answer (`closed_by`, §7).
 
 ### 2.10 The `.qual` File Format
 
@@ -571,9 +571,9 @@ the original and the referencing record remain active.
 - Cross-file commentary: "see also the related concern on lexer.rs".
 
 **Threading semantics:** Records referencing the same parent form a thread.
-Implementations SHOULD display these as threaded conversations with
-tree-drawing characters (`├──`, `└──`). Reply depth is unbounded — a reply
-to a reply is a valid thread.
+Implementations SHOULD display these as threaded conversations, with each
+reply under the record it answers (the reference CLI indents replies; see
+§6.6). Reply depth is unbounded — a reply to a reply is a valid thread.
 
 **Example:**
 
@@ -1187,7 +1187,7 @@ qualifier reply src/parser.rs:42 "Good catch, fixed in latest commit"
 # Close it
 qualifier resolve a1b2
 
-# The original concern is no longer surfaced
+# The concern now shows as a closed thread, with the resolve as its answer
 qualifier show src/parser.rs
 ```
 
