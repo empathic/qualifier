@@ -394,7 +394,7 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
     if !errors.is_empty() {
         // Keep stderr a clean JSONL stream under --format json.
         if format == "json" {
-            std::process::exit(1);
+            return Err(crate::Error::AlreadyReported(1));
         }
         return Err(crate::Error::Validation(if continue_on_error {
             format!(
