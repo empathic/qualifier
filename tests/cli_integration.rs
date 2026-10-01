@@ -6379,3 +6379,30 @@ fn test_show_json_keeps_closed_threads_answer_and_state() {
         .collect();
     assert!(kinds.contains(&"resolve"), "{stdout}");
 }
+
+#[test]
+fn test_threads_kind_warns_on_kind_matching_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(dir.path(), &["record", "blocker", "a.rs", "broken"]);
+    write_id(dir.path(), &["record", "nit", "a.rs", "custom kind"]);
+
+    let (stdout, stderr, code) =
+        run_qualifier(dir.path(), &["threads", "--kind", "blockers,nit,concern"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stderr.contains("qualifier threads: warning: kind 'blockers' matches no known kind"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("'nit'"),
+        "a custom kind in use is fine: {stderr}"
+    );
+    assert!(
+        !stderr.contains("'concern'"),
+        "built-in kinds never warn: {stderr}"
+    );
+    assert!(stdout.contains("custom kind"), "{stdout}");
+
+    let (_, stderr, _) = run_qualifier(dir.path(), &["threads", "--kind", "blocker"]);
+    assert!(!stderr.contains("warning"), "{stderr}");
+}

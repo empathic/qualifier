@@ -38,6 +38,10 @@ as root, origin, history, reply, or `closed_by` — so
 `qualifier threads <id> --format json` fetches one thread without pulling
 the whole project. Write `./cafe` for a directory whose name is all hex.
 
+`--kind` accepts custom kinds, so a typo would match nothing; a listed kind
+that is neither built-in nor used by any record prints
+`qualifier threads: warning: kind 'X' matches no known kind` on stderr.
+
 Locations are relative to the current directory; subjects are stored
 relative to the project root. From `src/`, `qualifier threads net/tcp.rs`
 and `qualifier threads ../src/net/tcp.rs` both select `src/net/tcp.rs`.
