@@ -22,6 +22,7 @@ const PROVENANCE_ENV: &[&str] = &[
     "QUALIFIER_ISSUER",
     "QUALIFIER_ISSUER_TYPE",
     "QUALIFIER_SESSION",
+    "QUALIFIER_FORMAT",
     "CLAUDECODE",
     "CLAUDE_CODE_SESSION_ID",
 ];
@@ -2625,16 +2626,21 @@ fn test_agents_unknown_topic_returns_error() {
     let dir = tempfile::tempdir().unwrap();
     let (_stdout, stderr, code) = run_qualifier(dir.path(), &["agents", "bogus-topic"]);
     assert_eq!(
-        code, 1,
-        "unknown topic should exit 1 like other validation errors: stderr={stderr}"
+        code, 2,
+        "AGENTS-CLI rule 4: unknown topic exits 2: stderr={stderr}"
     );
     assert!(
-        stderr.starts_with("qualifier:"),
-        "stderr should use the standard top-level error prefix: {stderr}"
+        stderr.starts_with("qualifier agents: no such topic 'bogus-topic'. Available: "),
+        "AGENTS-CLI rule 4 message: {stderr}"
+    );
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "one line, no extra prefix: {stderr}"
     );
     assert!(
-        stderr.contains("no such topic"),
-        "stderr should explain: {stderr}"
+        stderr.contains("concepts") && stderr.contains("record"),
+        "lists available topics: {stderr}"
     );
     assert!(
         stderr.contains("bogus-topic"),
@@ -3237,7 +3243,7 @@ fn test_record_stdin_json_errors_are_structured() {
         ],
         input,
     );
-    assert_ne!(code, 0);
+    assert_eq!(code, 1);
 
     // stdout: each line a valid JSONL record.
     for line in stdout.lines() {
@@ -3344,8 +3350,8 @@ fn test_record_stdin_reply_and_resolve_keys_are_not_line_shapes() {
     let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
     assert_ne!(code, 0);
     assert!(
-        stderr.contains("stdin line 1: stdin object missing 'kind'")
-            && stderr.contains("stdin line 2: stdin object missing 'kind'"),
+        stderr.contains("stdin line 1: key 'reply': unknown field")
+            && stderr.contains("stdin line 2: key 'reason': unknown field"),
         "{stderr}"
     );
     let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
@@ -4310,25 +4316,36 @@ fn test_diff_lists_every_closer_of_a_resolved_record() {
     let dir = tempfile::tempdir().unwrap();
     git_init(dir.path());
     let old = record_as_ab(dir.path(), &["concern", "a.rs", "needs work"]);
+    std::fs::write(dir.path().join(".gitattributes"), "*.qual merge=union\n").unwrap();
     git_commit_all(dir.path(), "baseline");
-    git_checkout_new(dir.path(), "feat");
-    // Two resolves of the same record, as a merge of two branches leaves.
-    for summary in ["fixed on branch one", "fixed on branch two"] {
-        let body = serde_json::json!({"kind": "resolve", "summary": summary, "supersedes": old});
+    // Two branches each resolve the record; merging them leaves two closers.
+    for (branch, summary) in [
+        ("feat", "fixed on branch one"),
+        ("other", "fixed on branch two"),
+    ] {
+        let status = Command::new("git")
+            .args(["checkout", "-q", "-b", branch, "main"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
         let (_, stderr, code) = run_qualifier(
             dir.path(),
-            &[
-                "emit",
-                "annotation",
-                "a.rs",
-                "--body",
-                &body.to_string(),
-                "--issuer",
-                "mailto:a@b.com",
-            ],
+            &["resolve", &old, summary, "--issuer", "mailto:a@b.com"],
         );
         assert_eq!(code, 0, "{stderr}");
+        git_commit_all(dir.path(), summary);
     }
+    let run_git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    };
+    run_git(&["checkout", "-q", "feat"]);
+    run_git(&["merge", "-q", "--no-edit", "other"]);
 
     let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main"]);
     assert_eq!(code, 0);
@@ -6014,6 +6031,455 @@ fn test_batch_dry_run_creates_no_directories() {
         !dir.path().join("new").exists(),
         "--dry-run must not create directories"
     );
+}
+
+// --- write path: envelopes, pointers, containment ---
+
+#[test]
+fn test_config_supplies_issuer_and_format_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_init(&repo);
+    let home = dir.path().join("home");
+    let user_cfg = home.join(".config/qualifier");
+    std::fs::create_dir_all(&user_cfg).unwrap();
+    std::fs::write(
+        user_cfg.join("config.toml"),
+        "issuer = \"mailto:user@x\"\nformat = \"json\"\n",
+    )
+    .unwrap();
+    let home_env = ("HOME", home.to_str().unwrap());
+    let record = |extra: &[&str], env: &[(&str, &str)]| {
+        let mut args = vec!["record", "comment", "a.rs", "cfg"];
+        args.extend_from_slice(extra);
+        let mut env = env.to_vec();
+        env.push(home_env);
+        run_qualifier_env(&repo, &args, &env)
+    };
+    let json_issuer = |stdout: &str| -> String {
+        let v: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("expected JSON output ({e}): {stdout}"));
+        v["issuer"].as_str().unwrap().to_string()
+    };
+
+    // User config alone.
+    let (stdout, stderr, code) = record(&[], &[]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(json_issuer(&stdout), "mailto:user@x");
+
+    // Project config overrides user config.
+    std::fs::write(repo.join(".qualifier.toml"), "issuer = \"mailto:proj@x\"\n").unwrap();
+    let (stdout, _, _) = record(&[], &[]);
+    assert_eq!(json_issuer(&stdout), "mailto:proj@x");
+
+    // Environment overrides config files; values are strings.
+    let (stdout, stderr, code) = record(&[], &[("QUALIFIER_ISSUER", "12345")]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(json_issuer(&stdout), "mailto:12345");
+    let (stdout, _, _) = record(&[], &[("QUALIFIER_FORMAT", "human")]);
+    assert!(stdout.starts_with("comment a.rs cfg"), "{stdout}");
+
+    // Flags override everything.
+    let (stdout, _, _) = record(
+        &["--issuer", "mailto:flag@x", "--format", "json"],
+        &[
+            ("QUALIFIER_ISSUER", "mailto:env@x"),
+            ("QUALIFIER_FORMAT", "human"),
+        ],
+    );
+    assert_eq!(json_issuer(&stdout), "mailto:flag@x");
+    let (stdout, _, _) = record(&["--format", "human"], &[]);
+    assert!(stdout.starts_with("comment a.rs cfg"), "{stdout}");
+
+    // A config format default applies to read commands too.
+    let (stdout, stderr, code) = run_qualifier_env(&repo, &["threads"], &[home_env]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.trim_start().starts_with('['), "{stdout}");
+}
+
+#[test]
+fn test_numeric_env_values_do_not_break_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier_env(
+        dir.path(),
+        &["haiku"],
+        &[("QUALIFIER_ISSUER", "12345"), ("QUALIFIER_SESSION", "7")],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let (_, stderr, code) =
+        run_qualifier_env(dir.path(), &["haiku"], &[("QUALIFIER_FORMAT", "jsn")]);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("invalid configuration"), "{stderr}");
+}
+
+#[test]
+fn test_format_typo_is_rejected_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &["record", "comment", "a.rs", "x", "--format", "jsn"],
+    );
+    assert_eq!(code, 2, "clap usage error: {stderr}");
+    assert!(stderr.contains("jsn"), "{stderr}");
+    assert!(!dir.path().join(".qual").exists(), "nothing written");
+    for cmd in ["show", "threads", "ls", "praise", "review"] {
+        let mut args = vec![cmd];
+        if matches!(cmd, "show" | "praise") {
+            args.push("a.rs");
+        }
+        args.extend(["--format", "jsn"]);
+        let (_, stderr, code) = run_qualifier(dir.path(), &args);
+        assert_eq!(code, 2, "{cmd}: {stderr}");
+    }
+}
+
+#[test]
+fn test_extensionless_root_files_are_location_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(dir.path(), &["record", "concern", "Makefile", "mk"]);
+    let (_, stderr, code) = run_qualifier(dir.path(), &["reply", "Makefile", "hi"]);
+    assert_eq!(code, 0, "{stderr}");
+
+    // An all-hex name matching no record ID falls back to the location.
+    write_id(dir.path(), &["record", "concern", "cafe", "hex-named file"]);
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["resolve", "cafe", "done"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("cafe"), "{stdout}");
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["reply", "deadbeef", "hi"]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("./deadbeef"),
+        "hint names ./<name>: {stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_absolute_location_through_symlink_resolves() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    git_init(&repo);
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&repo, &link).unwrap();
+    // src/new.rs does not exist yet: only its parent can be canonicalized.
+    for file in ["src/a.rs", "src/new.rs"] {
+        std::fs::write(repo.join("src/a.rs"), "fn a() {}\n").unwrap();
+        let arg = link.join(file);
+        let (stdout, stderr, code) = run_qualifier(
+            &repo,
+            &[
+                "record",
+                "comment",
+                arg.to_str().unwrap(),
+                "abs",
+                "--format",
+                "json",
+            ],
+        );
+        assert_eq!(code, 0, "{}: {stderr}", arg.display());
+        let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert_eq!(v["subject"], file);
+    }
+    let outside = dir.path().join("elsewhere.rs");
+    let (_, stderr, code) = run_qualifier(
+        &repo,
+        &["record", "comment", outside.to_str().unwrap(), "x"],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+}
+
+#[test]
+fn test_writes_into_qualignored_directory_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".qualignore"), "examples/\n").unwrap();
+    let examples = dir.path().join("examples");
+    let line = "{\"kind\":\"concern\",\"location\":\"examples/a.rs\",\"message\":\"m\"}\n";
+    let body = r#"{"kind":"concern","summary":"m"}"#;
+    let attempts: [(&[&str], Option<&str>); 3] = [
+        (&["record", "concern", "examples/a.rs", "m"], None),
+        (&["record", "--stdin"], Some(line)),
+        (
+            &["emit", "annotation", "examples/a.rs", "--body", body],
+            None,
+        ),
+    ];
+    for (args, input) in attempts {
+        let (_, stderr, code) = match input {
+            Some(input) => run_qualifier_stdin(dir.path(), args, input),
+            None => run_qualifier(dir.path(), args),
+        };
+        assert_ne!(code, 0, "{args:?} must be refused");
+        assert!(
+            stderr.contains(".qualignore") && stderr.contains("--no-ignore"),
+            "{args:?}: {stderr}"
+        );
+        assert!(!examples.join(".qual").exists(), "{args:?} wrote anyway");
+    }
+    for (args, input) in attempts {
+        let mut args = args.to_vec();
+        args.push("--no-ignore");
+        let (_, stderr, code) = match input {
+            Some(input) => run_qualifier_stdin(dir.path(), &args, input),
+            None => run_qualifier(dir.path(), &args),
+        };
+        assert_eq!(code, 0, "{args:?} with --no-ignore: {stderr}");
+    }
+    let qual = std::fs::read_to_string(examples.join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 3);
+}
+
+#[test]
+fn test_emit_subject_is_root_relative_like_record() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let (_, stderr, code) = run_qualifier(
+        &src,
+        &[
+            "emit",
+            "annotation",
+            "a.rs",
+            "--body",
+            r#"{"kind":"comment","summary":"e"}"#,
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let qual = std::fs::read_to_string(src.join(".qual")).unwrap();
+    assert!(qual.contains("\"subject\":\"src/a.rs\""), "{qual}");
+    assert!(!src.join("src").exists(), "no CWD-relative src/src/.qual");
+
+    let (_, stderr, code) = run_qualifier(
+        &src,
+        &[
+            "emit",
+            "annotation",
+            "../../out.rs",
+            "--body",
+            r#"{"kind":"comment","summary":"e"}"#,
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+}
+
+#[test]
+fn test_emit_stdin_is_all_or_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let good = envelope_line("lib/b.rs", r#"{"kind":"concern","summary":"ok"}"#);
+    let dangling = envelope_line(
+        "lib/b.rs",
+        &format!(
+            r#"{{"kind":"comment","summary":"re","references":"{}"}}"#,
+            "0".repeat(64)
+        ),
+    );
+    let input = format!("{good}not json\n{dangling}");
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["emit", "--stdin"], &input);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("stdin line 2:"), "{stderr}");
+    assert!(
+        stderr.contains("stdin line 3:") && stderr.contains("no record with ID"),
+        "every bad line is reported: {stderr}"
+    );
+    assert!(
+        !dir.path().join("lib/.qual").exists(),
+        "nothing written when any line fails"
+    );
+
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["emit", "--stdin"], &good);
+    assert_eq!(code, 0, "{stderr}");
+    let qual = std::fs::read_to_string(dir.path().join("lib/.qual")).unwrap();
+    assert_eq!(qual.lines().count(), 1);
+}
+
+#[test]
+fn test_record_stdin_closed_stdout_still_writes_whole_batch() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let input: String = (1..=20)
+        .map(|i| {
+            format!("{{\"kind\":\"concern\",\"location\":\"a.rs:{i}\",\"message\":\"m{i}\"}}\n")
+        })
+        .collect();
+    let mut child = qualifier_cmd()
+        .args(["record", "--stdin"])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn qualifier");
+    // Close the reading end before any output is produced.
+    drop(child.stdout.take());
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 20, "every planned record is written");
+}
+
+#[test]
+fn test_record_stdin_overrides_reject_unknown_keys_and_bad_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","suggestedfix":"lost"}"#,
+            "suggestedfix",
+        ),
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","supersede":"x"}"#,
+            "supersede",
+        ),
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","tags":["ok",3]}"#,
+            "tags",
+        ),
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","span":42}"#,
+            "span",
+        ),
+    ];
+    for (line, key) in cases {
+        let (_, stderr, code) = run_qualifier_stdin(
+            dir.path(),
+            &["record", "--stdin", "--dry-run"],
+            &format!("{line}\n"),
+        );
+        assert_ne!(code, 0, "{line} must be rejected");
+        assert!(stderr.contains(key), "error must name '{key}': {stderr}");
+    }
+}
+
+#[test]
+fn test_supersedes_across_subjects_is_rejected_on_single_record_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let orig = write_id(dir.path(), &["record", "concern", "src/a.rs:1", "orig"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib/b.rs:1",
+            "replaces",
+            "--supersedes",
+            &orig,
+        ],
+    );
+    assert_ne!(code, 0, "record --supersedes across subjects must fail");
+    assert!(stderr.contains("cross-subject"), "{stderr}");
+
+    let a_reply = write_id(dir.path(), &["reply", &orig[..8], "on a"]);
+    let b = write_id(dir.path(), &["record", "concern", "lib/b.rs", "b"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &["reply", &b[..8], "moved", "--supersedes", &a_reply],
+    );
+    assert_ne!(code, 0, "reply --supersedes across subjects must fail");
+    assert!(stderr.contains("cross-subject"), "{stderr}");
+    let lib = std::fs::read_to_string(dir.path().join("lib/.qual")).unwrap();
+    assert!(!lib.contains("replaces") && !lib.contains("moved"), "{lib}");
+}
+
+#[test]
+fn test_existing_cross_subject_record_does_not_block_unrelated_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "src/a.rs:1", "a"]);
+    // A cross-subject supersession already on disk (written by another tool).
+    let bad = envelope_line(
+        "lib/b.rs",
+        &format!(r#"{{"kind":"concern","summary":"bad","supersedes":"{a}"}}"#),
+    )
+    .replace("\"id\":\"\"", &format!("\"id\":\"{}\"", "b".repeat(64)));
+    std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+    std::fs::write(dir.path().join("lib/.qual"), bad).unwrap();
+    let a2 = write_id(dir.path(), &["record", "concern", "src/a.rs:2", "a2"]);
+    let line = format!(
+        "{{\"kind\":\"concern\",\"location\":\"src/a.rs:2\",\"message\":\"a2 again\",\"supersedes\":\"{a2}\"}}\n"
+    );
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &line);
+    assert_eq!(code, 0, "{stderr}");
+}
+
+/// A record envelope line for `record --stdin` / `emit --stdin`.
+fn envelope_line(subject: &str, body: &str) -> String {
+    format!(
+        "{{\"metabox\":\"1\",\"subject\":\"{subject}\",\"issuer\":\"mailto:t@x\",\
+         \"created_at\":\"2026-01-01T00:00:00Z\",\"id\":\"\",\"body\":{body}}}\n"
+    )
+}
+
+#[test]
+fn test_record_stdin_envelope_subject_outside_root_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_init(&repo);
+    for subject in ["../escaped.rs", "/tmp/escaped.rs"] {
+        let input = envelope_line(subject, r#"{"kind":"concern","summary":"x"}"#);
+        let (_, stderr, code) = run_qualifier_stdin(&repo, &["record", "--stdin"], &input);
+        assert_ne!(code, 0, "{subject} must be rejected");
+        assert!(stderr.contains("outside the project root"), "{stderr}");
+    }
+    let (_, stderr, code) = run_qualifier(
+        &repo,
+        &["record", "concern", "a.rs", "x", "--file", "../out.qual"],
+    );
+    assert_ne!(code, 0, "--file above the root must be rejected");
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+    assert!(
+        !dir.path().join(".qual").exists(),
+        "nothing written above root"
+    );
+    assert!(
+        !dir.path().join("out.qual").exists(),
+        "nothing written above root"
+    );
+}
+
+#[test]
+fn test_record_stdin_envelope_subject_is_normalized() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    let input = envelope_line("./src/../src/a.rs", r#"{"kind":"concern","summary":"x"}"#);
+    let (stdout, stderr, code) = run_qualifier_stdin(
+        &dir.path().join("src"),
+        &["record", "--stdin", "--format", "json"],
+        &input,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let v: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(
+        v["subject"], "src/a.rs",
+        "envelope subjects are root-relative"
+    );
+    assert!(dir.path().join("src/.qual").exists());
+}
+
+#[test]
+fn test_record_stdin_envelope_pointers_must_be_live() {
+    let dir = tempfile::tempdir().unwrap();
+    let zeros = "0".repeat(64);
+    for key in ["references", "supersedes"] {
+        let body = format!(r#"{{"kind":"concern","summary":"x","{key}":"{zeros}"}}"#);
+        let input = envelope_line("a.rs", &body);
+        let (_, stderr, code) =
+            run_qualifier_stdin(dir.path(), &["record", "--stdin", "--dry-run"], &input);
+        assert_ne!(code, 0, "dangling {key} must be rejected");
+        assert!(stderr.contains("no record with ID"), "{stderr}");
+    }
 }
 
 #[test]

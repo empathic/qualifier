@@ -2,6 +2,8 @@ use std::collections::HashSet;
 
 use clap::Args as ClapArgs;
 
+use crate::cli::output::Format;
+
 use crate::annotation::Record;
 use crate::cli::span_context;
 use crate::cli::targets;
@@ -14,8 +16,8 @@ pub struct Args {
     pub artifact: String,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Disable .gitignore and .qualignore filtering
     #[arg(long)]
@@ -45,7 +47,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     // No records is an answer, not an error: JSON output carries empty
     // arrays, human output says so.
-    if args.format != "json" && !records.iter().any(|r| r.subject() == subject) {
+    if args.format != Format::Json && !records.iter().any(|r| r.subject() == subject) {
         println!("No records found for '{subject}'.");
         return Ok(());
     }
@@ -70,7 +72,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         .filter(|r| type_matches(r.record_type()))
         .collect();
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         return print_json(&args, &locator, &subject, &records, &thread_list, &others);
     }
 

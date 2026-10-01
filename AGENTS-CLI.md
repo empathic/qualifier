@@ -122,8 +122,9 @@ part of 0.1 conformance:
 
 `qualifier agents`, `qualifier agents concepts`, `qualifier agents
 <subcommand>`, and `qualifier agents <unknown>` exercise every MUST in
-this document. The "For AI agents:" group at the top of `qualifier
---help` is the discoverability mechanism for rule 5. Pages live at
+this document. The "For AI agents:" group in `qualifier --help`, listed
+before the record, inspect, and maintain groups, is the discoverability
+mechanism for rule 5. Pages live at
 `src/cli/commands/agents/pages/*.md`, embedded into the binary at
 compile time.
 

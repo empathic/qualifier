@@ -2,6 +2,8 @@ use std::collections::HashSet;
 
 use clap::Args as ClapArgs;
 
+use crate::cli::output::Format;
+
 use crate::annotation::Record;
 use crate::cli::targets;
 use crate::compact::filter_superseded;
@@ -14,8 +16,8 @@ pub struct Args {
     pub artifact: String,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Use VCS blame/annotate on the .qual file instead of record-based output
     #[cfg(not(target_os = "emscripten"))]
@@ -46,7 +48,7 @@ fn run_records(args: Args) -> crate::Result<()> {
 
     // No records is an answer, not an error: JSON output carries empty
     // arrays, human output says so.
-    if args.format != "json" && !records.iter().any(|r| r.subject() == subject) {
+    if args.format != Format::Json && !records.iter().any(|r| r.subject() == subject) {
         println!("No records found for '{subject}'.");
         return Ok(());
     }
@@ -63,7 +65,7 @@ fn run_records(args: Args) -> crate::Result<()> {
         .filter(|r| r.subject() == subject && r.as_epoch().is_some() && live.contains(r.id()))
         .collect();
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         let mut ids: HashSet<&str> = epochs.iter().map(|r| r.id()).collect();
         for t in &thread_list {
             ids.extend(t.live_records().map(|r| r.id()));

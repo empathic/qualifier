@@ -104,12 +104,20 @@ Recognized keys on the **overrides** form:
 - `issuer`, `issuer_type` — optional, with the same defaults as non-batch
   mode. As an agent, leave them unset; see `qualifier agents concepts` for
   defaults (`QUALIFIER_*` variables, agent-harness detection).
+- Any other key, or a value of the wrong type (`tags` must be an array of
+  strings; every other key takes a string), fails the line with an error
+  naming the key, so a misspelled `supersedes` cannot silently become an
+  unlinked new record.
 
 `--file` is rejected with `--stdin`.
 
 The **complete record** form is recognized when an object carries both
-`subject` and `body` keys; it is taken as a fully-formed envelope and only
-the `id` is recomputed; its `supersedes`/`references` are stored as given.
+`subject` and `body` keys; it is taken as a fully-formed envelope and the
+`id` is recomputed. Its `subject` is relative to the project root (not the
+current directory) and is normalized like a location: `./` and `..` are
+folded, and a subject that leaves the project root is an error. Its
+`supersedes`/`references` must name live records, exactly as on the
+overrides form.
 Use this when round-tripping records produced by another tool. The overrides form is the right shape for most agent use.
 
 Behaviour:
@@ -132,6 +140,9 @@ Behaviour:
   full, permissions revoked mid-run, etc.), the lines already written stay
   written. The error message names how many: `wrote N of M records before
   an I/O error appending stdin line L: <cause>`.
+- Result lines are printed only after every planned record is written, so
+  a reader that stops early (`| head -1`) cannot interrupt the batch; a
+  closed stdout ends the output quietly.
 
 **`--continue-on-error`** collects every failed line, writes the records
 that did pass, and exits non-zero with a final count. Use this when an
@@ -165,13 +176,20 @@ cat candidates.jsonl | qualifier record --stdin --dry-run --continue-on-error
 The same flag set is mirrored on `qualifier emit --stdin` for non-annotation
 record types (epoch, dependency, custom URIs).
 
+**`--no-ignore`** writes even when the target `.qual` file is hidden from
+discovery by `.gitignore`, `.ignore` or `.qualignore`. Without it, such a
+write is refused with an error naming the rule, because no read command
+would ever see the record.
+
 ## Gotchas
 
 - All three positional arguments (`<kind>`, `<location>`, `<message>`) are
   required in non-batch mode. Missing any one of them produces a validation
   error rather than a prompt.
-- Issuer defaults come from `QUALIFIER_*` variables, agent-harness
-  detection, then your VCS identity (`qualifier agents concepts`). In CI,
+- The issuer defaults to `QUALIFIER_ISSUER`, then `issuer` in
+  `.qualifier.toml` or the user config, then your VCS identity; agent-harness
+  detection sets only the issuer type and session tag
+  (`qualifier agents concepts`). In CI,
   set `QUALIFIER_ISSUER` in the environment rather than passing `--issuer`
   on each call.
 - Cross-subject supersession is rejected: a new record can only supersede a

@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use clap::Args as ClapArgs;
+
+use crate::cli::output::Format;
 use globset::{GlobBuilder, GlobMatcher};
 
 use crate::annotation::{IssuerType, Kind, Record, Span};
@@ -38,8 +40,8 @@ pub struct Args {
     pub issuer_type: Option<String>,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Don't respect .gitignore / .qualignore
     #[arg(long)]
@@ -93,7 +95,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         })
         .collect();
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         print_json(&selected)
     } else {
         print_human(&selected, args.all, &filter);
