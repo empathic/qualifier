@@ -125,6 +125,12 @@ pub struct Args {
     #[arg(long)]
     pub file: Option<String>,
 
+    /// Write even when the target `.qual` file is hidden by `.gitignore`,
+    /// `.ignore` or `.qualignore` (read commands will skip it), and see
+    /// ignored files when resolving the target.
+    #[arg(long)]
+    pub no_ignore: bool,
+
     /// Output format (human, json)
     #[arg(long, default_value = "human")]
     pub format: String,
@@ -141,7 +147,7 @@ pub struct Args {
 
 pub fn run(args: Args) -> crate::Result<()> {
     let locator = targets::Locator::from_cwd()?;
-    let all_qual_files = targets::discover_project(true)?;
+    let all_qual_files = targets::discover_project(!args.no_ignore)?;
     let target = targets::resolve_target(&args.target, &all_qual_files, &locator)?;
 
     let att = build_resolve(
@@ -157,6 +163,9 @@ pub fn run(args: Args) -> crate::Result<()> {
     )?;
 
     let qual_path = locator.write_path(&att.subject, args.file.as_deref().map(Path::new))?;
+    if !args.no_ignore {
+        locator.check_not_ignored(&qual_path)?;
+    }
     let record = Record::Annotation(Box::new(att.clone()));
     targets::check_pointers(&record, &all_qual_files, "--")?;
     targets::append(&qual_path, &record)?;

@@ -116,6 +116,12 @@ pub struct Args {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Write even when the target `.qual` file is hidden by `.gitignore`,
+    /// `.ignore` or `.qualignore` (read commands will skip it), and see
+    /// ignored files when checking `--supersedes`/`--references`.
+    #[arg(long)]
+    pub no_ignore: bool,
+
     /// Output format (human, json). In --stdin mode controls per-record output.
     /// Under `--format json`, errors are also emitted as JSON objects on stderr.
     #[arg(long, default_value = "human")]
@@ -129,7 +135,12 @@ pub fn run(args: Args) -> crate::Result<()> {
                 "--file is not supported with --stdin".into(),
             ));
         }
-        return run_batch(&args.format, args.continue_on_error, args.dry_run);
+        return run_batch(
+            &args.format,
+            args.continue_on_error,
+            args.dry_run,
+            !args.no_ignore,
+        );
     }
 
     let required = |name: &str| {
@@ -155,12 +166,15 @@ pub fn run(args: Args) -> crate::Result<()> {
     let locator = targets::Locator::from_cwd()?;
     // Pointer checks need the project's records; skip the walk otherwise.
     let files = if input.supersedes.is_some() || input.references.is_some() {
-        targets::discover_project(true)?
+        targets::discover_project(!args.no_ignore)?
     } else {
         Vec::new()
     };
     let record = build_annotation(input, &files, &locator, "--")?;
     let qual_path = locator.write_path(record.subject(), args.file.as_deref().map(Path::new))?;
+    if !args.no_ignore {
+        locator.check_not_ignored(&qual_path)?;
+    }
     targets::append(&qual_path, &record)?;
 
     if args.format == "json" {
@@ -296,9 +310,14 @@ impl BatchView {
     }
 }
 
-fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Result<()> {
+fn run_batch(
+    format: &str,
+    continue_on_error: bool,
+    dry_run: bool,
+    respect_ignore: bool,
+) -> crate::Result<()> {
     let locator = targets::Locator::from_cwd()?;
-    let mut view = BatchView::new(targets::discover_project(true)?);
+    let mut view = BatchView::new(targets::discover_project(respect_ignore)?);
     let mut planned: Vec<(Record, PathBuf, usize)> = Vec::new();
     let mut errors: Vec<BatchError> = Vec::new();
 
@@ -319,7 +338,7 @@ fn run_batch(format: &str, continue_on_error: bool, dry_run: bool) -> crate::Res
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
-        match plan_one(trimmed, &view, &locator) {
+        match plan_one(trimmed, &view, &locator, respect_ignore) {
             Ok((record, path)) => {
                 view.push(record.clone());
                 planned.push((record, path, line_no));
@@ -418,6 +437,7 @@ fn plan_one(
     trimmed: &str,
     view: &BatchView,
     locator: &targets::Locator,
+    respect_ignore: bool,
 ) -> std::result::Result<(Record, PathBuf), String> {
     let value: Value = serde_json::from_str(trimmed).map_err(|e| format!("invalid JSON: {e}"))?;
 
@@ -448,6 +468,11 @@ fn plan_one(
     let qual_path = locator
         .write_path(record.subject(), None)
         .map_err(|e| e.to_string())?;
+    if respect_ignore {
+        locator
+            .check_not_ignored(&qual_path)
+            .map_err(|e| e.to_string())?;
+    }
     Ok((record, qual_path))
 }
 

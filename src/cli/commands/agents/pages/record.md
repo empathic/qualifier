@@ -176,6 +176,11 @@ cat candidates.jsonl | qualifier record --stdin --dry-run --continue-on-error
 The same flag set is mirrored on `qualifier emit --stdin` for non-annotation
 record types (epoch, dependency, custom URIs).
 
+**`--no-ignore`** writes even when the target `.qual` file is hidden from
+discovery by `.gitignore`, `.ignore` or `.qualignore`. Without it, such a
+write is refused with an error naming the rule, because no read command
+would ever see the record.
+
 ## Gotchas
 
 - All three positional arguments (`<kind>`, `<location>`, `<message>`) are

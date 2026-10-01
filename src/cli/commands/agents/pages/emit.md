@@ -65,6 +65,11 @@ nothing is written if any line fails.
 emitting machine-generated records such as pipeline measurements, set
 `--issuer-type tool` to distinguish them from human annotations.
 
+**`--no-ignore`** writes even when the target `.qual` file is hidden from
+discovery by `.gitignore`, `.ignore` or `.qualignore`. Without it, such a
+write is refused with an error naming the rule, because no read command
+would ever see the record.
+
 ## Gotchas
 
 - `emit` is intentionally low-level. Prefer `record` / `reply` / `resolve`

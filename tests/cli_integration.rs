@@ -5516,6 +5516,46 @@ fn test_batch_dry_run_creates_no_directories() {
 // --- write path: envelopes, pointers, containment ---
 
 #[test]
+fn test_writes_into_qualignored_directory_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".qualignore"), "examples/\n").unwrap();
+    let examples = dir.path().join("examples");
+    let line = "{\"kind\":\"concern\",\"location\":\"examples/a.rs\",\"message\":\"m\"}\n";
+    let body = r#"{"kind":"concern","summary":"m"}"#;
+    let attempts: [(&[&str], Option<&str>); 3] = [
+        (&["record", "concern", "examples/a.rs", "m"], None),
+        (&["record", "--stdin"], Some(line)),
+        (
+            &["emit", "annotation", "examples/a.rs", "--body", body],
+            None,
+        ),
+    ];
+    for (args, input) in attempts {
+        let (_, stderr, code) = match input {
+            Some(input) => run_qualifier_stdin(dir.path(), args, input),
+            None => run_qualifier(dir.path(), args),
+        };
+        assert_ne!(code, 0, "{args:?} must be refused");
+        assert!(
+            stderr.contains(".qualignore") && stderr.contains("--no-ignore"),
+            "{args:?}: {stderr}"
+        );
+        assert!(!examples.join(".qual").exists(), "{args:?} wrote anyway");
+    }
+    for (args, input) in attempts {
+        let mut args = args.to_vec();
+        args.push("--no-ignore");
+        let (_, stderr, code) = match input {
+            Some(input) => run_qualifier_stdin(dir.path(), &args, input),
+            None => run_qualifier(dir.path(), &args),
+        };
+        assert_eq!(code, 0, "{args:?} with --no-ignore: {stderr}");
+    }
+    let qual = std::fs::read_to_string(examples.join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 3);
+}
+
+#[test]
 fn test_emit_subject_is_root_relative_like_record() {
     let dir = tempfile::tempdir().unwrap();
     git_init(dir.path());

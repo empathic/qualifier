@@ -46,11 +46,21 @@ pub struct Args {
     /// nothing is written if any line fails.
     #[arg(long)]
     pub stdin: bool,
+
+    /// Write even when the target `.qual` file is hidden by `.gitignore`,
+    /// `.ignore` or `.qualignore` (read commands will skip it), and see
+    /// ignored files when checking `supersedes`/`references`.
+    #[arg(long)]
+    pub no_ignore: bool,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
     if args.stdin {
-        return run_batch(args.record_type.as_deref(), args.subject.as_deref());
+        return run_batch(
+            args.record_type.as_deref(),
+            args.subject.as_deref(),
+            !args.no_ignore,
+        );
     }
 
     let record_type = args.record_type.as_deref().ok_or_else(|| {
@@ -77,10 +87,13 @@ pub fn run(args: Args) -> crate::Result<()> {
     let record = build_record(record_type, &subject, issuer, issuer_type, body_value)?;
     validate(&record)?;
     if record.supersedes().is_some() || record.references().is_some() {
-        targets::check_pointers(&record, &targets::discover_project(true)?, "")?;
+        targets::check_pointers(&record, &targets::discover_project(!args.no_ignore)?, "")?;
     }
 
     let qual_path = locator.write_path(record.subject(), args.file.as_deref().map(Path::new))?;
+    if !args.no_ignore {
+        locator.check_not_ignored(&qual_path)?;
+    }
     targets::append(&qual_path, &record)?;
 
     println!(
@@ -167,11 +180,15 @@ fn build_record(
 
 /// Plan every line, report every error, and append only when the whole
 /// batch is clean.
-fn run_batch(default_type: Option<&str>, default_subject: Option<&str>) -> crate::Result<()> {
+fn run_batch(
+    default_type: Option<&str>,
+    default_subject: Option<&str>,
+    respect_ignore: bool,
+) -> crate::Result<()> {
     let locator = targets::Locator::from_cwd()?;
     // The positional subject is a CWD-relative path like everywhere else.
     let default_subject = default_subject.map(|s| locator.subject(s)).transpose()?;
-    let mut view = BatchView::new(targets::discover_project(true)?);
+    let mut view = BatchView::new(targets::discover_project(respect_ignore)?);
     let mut planned: Vec<(Record, PathBuf)> = Vec::new();
     let mut failed = 0usize;
 
@@ -188,6 +205,7 @@ fn run_batch(default_type: Option<&str>, default_subject: Option<&str>) -> crate
                 default_subject.as_deref(),
                 &view,
                 &locator,
+                respect_ignore,
             )
             .map(Some)
         });
@@ -247,6 +265,7 @@ fn plan_line(
     default_subject: Option<&str>,
     view: &BatchView,
     locator: &targets::Locator,
+    respect_ignore: bool,
 ) -> Result<(Record, PathBuf), String> {
     let mut value: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| e.to_string())?;
     if let Some(obj) = value.as_object_mut() {
@@ -273,5 +292,10 @@ fn plan_line(
     let path = locator
         .write_path(record.subject(), None)
         .map_err(|e| e.to_string())?;
+    if respect_ignore {
+        locator
+            .check_not_ignored(&path)
+            .map_err(|e| e.to_string())?;
+    }
     Ok((record, path))
 }

@@ -68,6 +68,11 @@ Get full IDs from `qualifier threads --format json` (`root.id`,
 useful when you need to capture the new record's ID for a subsequent
 `resolve` or `reply`.
 
+**`--no-ignore`** writes even when the target `.qual` file is hidden from
+discovery by `.gitignore`, `.ignore` or `.qualignore`. Without it, such a
+write is refused with an error naming the rule, because no read command
+would ever see the record.
+
 ## Gotchas
 
 - A reply does **not** close the parent record. To close, use `resolve`.
