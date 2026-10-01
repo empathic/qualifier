@@ -1025,3 +1025,19 @@ fn test_parse_lenient_skips_bad_lines_and_discover_keeps_going() {
     assert_eq!(found.len(), 2);
     assert_eq!(found.iter().map(|qf| qf.records.len()).sum::<usize>(), 3);
 }
+
+#[test]
+fn test_discover_honors_gitignore_outside_git() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".hg")).unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "vendor/\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("vendor")).unwrap();
+    let line = serde_json::to_string(&make_record("vendor/v.rs", Kind::Praise, "x")).unwrap();
+    std::fs::write(dir.path().join("vendor/.qual"), format!("{line}\n")).unwrap();
+    std::fs::write(dir.path().join(".qual"), format!("{line}\n")).unwrap();
+
+    let found = qual_file::discover(dir.path(), true).unwrap();
+    let paths: Vec<_> = found.iter().map(|qf| qf.path.clone()).collect();
+    assert_eq!(paths, vec![dir.path().join(".qual")]);
+    assert_eq!(qual_file::discover(dir.path(), false).unwrap().len(), 2);
+}
