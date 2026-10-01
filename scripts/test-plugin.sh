@@ -175,7 +175,7 @@ SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX/home"
 mkdir -p "$HOME"
-unset QUALIFIER_BIN QUALIFIER_PLUGIN_HOME XDG_DATA_HOME
+unset QUALIFIER_BIN QUALIFIER_PLUGIN_HOME XDG_DATA_HOME CLAUDE_PLUGIN_DATA
 
 # --- QUALIFIER_BIN resolution: against the caller's cwd, not this script's -
 # A relative $QUALIFIER_BIN must resolve against the directory the script
@@ -1188,6 +1188,101 @@ out="$(run_hook "$WITHQUAL" QUALIFIER_BIN="$CTRLCHARS/qualifier" PATH="$HOOK_PAT
 ctx="$(printf '%s' "$out" | context_of)" || fail "control characters in the summary broke the JSON: $out"
 case "$ctx" in *"1 blocker"*) ;; *) fail "context lost the summary text: $ctx" ;; esac
 ok "hook strips control characters that would break the JSON"
+
+# --- SessionStart hook: Getting started --------------------------------------
+# Shown to the user (systemMessage) in the first session of each plugin
+# version, in any directory; the version shown is recorded in
+# $CLAUDE_PLUGIN_DATA. Every run exits 0.
+
+system_message_of() {
+    python3 -c 'import json,sys; print(json.load(sys.stdin).get("systemMessage", ""))'
+}
+PLUGIN_VERSION="$(python3 -c "import json; print(json.load(open('$PLUGIN/.claude-plugin/plugin.json'))['version'])")"
+GS_DATA="$SANDBOX/gs-data/plugin-data"
+
+# GS1. First session after install, in a repository without .qual files:
+#      the message, and nothing for the model; the version is recorded.
+out="$(run_hook "$NOQUAL" CLAUDE_PLUGIN_DATA="$GS_DATA" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")" \
+    || fail "hook must exit 0 when showing Getting started"
+msg="$(printf '%s' "$out" | system_message_of)" || fail "Getting started output is not valid JSON: $out"
+case "$out" in *hookSpecificOutput*) fail "a repository without .qual files must get no model context: $out" ;; esac
+for want in "qual $PLUGIN_VERSION: getting started" ".qual files next to the code, not in chat" \
+    "Things to try:" "Triage the open qualifier threads" \
+    "downloads qualifier $PINNED, checks it against the checksum" \
+    "A qualifier on your PATH is not used." \
+    "Getting started section of the plugin README" "plugins/claude-code#getting-started"; do
+    case "$msg" in *"$want"*) ;; *) fail "Getting started lacks '$want': $msg" ;; esac
+done
+[ "$(cat "$GS_DATA/getting-started-shown")" = "$PLUGIN_VERSION" ] \
+    || fail "Getting started must record the plugin version shown in \$CLAUDE_PLUGIN_DATA"
+grep -q '^## Getting started$' "$PLUGIN/README.md" || fail "the README must have the Getting started section the message points to"
+ok "the first session of a plugin version shows Getting started, even without .qual files"
+
+# GS2. A second session of the same version is silent again.
+out="$(run_hook "$NOQUAL" CLAUDE_PLUGIN_DATA="$GS_DATA" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")" \
+    || fail "hook must exit 0 after Getting started was shown"
+[ -z "$out" ] || fail "a repository without .qual files must be silent once Getting started was shown: $out"
+ok "Getting started is shown once per plugin version"
+
+# GS3. In a repository with .qual files the context is unchanged and carries
+#      no Getting started once it was shown; with a fresh data directory it
+#      carries both.
+out="$(run_hook "$WITHQUAL" CLAUDE_PLUGIN_DATA="$GS_DATA" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
+[ -z "$(printf '%s' "$out" | system_message_of)" ] || fail "Getting started must not repeat in a .qual repository: $out"
+case "$(printf '%s' "$out" | context_of)" in *"$CALL_FORM"*) ;; *) fail "the .qual context must stay: $out" ;; esac
+out="$(run_hook "$WITHQUAL" CLAUDE_PLUGIN_DATA="$SANDBOX/gs-data-qual" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
+case "$(printf '%s' "$out" | system_message_of)" in *"getting started"*) ;; *) fail "first session in a .qual repository must show Getting started: $out" ;; esac
+case "$(printf '%s' "$out" | context_of)" in *"$CALL_FORM"*) ;; *) fail "the .qual context must stay alongside Getting started: $out" ;; esac
+ok "in a .qual repository Getting started rides alongside the usual context"
+
+# GS4. A plugin upgrade (another version in plugin.json, the same data
+#      directory) shows it again, once.
+GS_ROOT="$SANDBOX/gs-upgrade/claude-code"
+mkdir -p "$GS_ROOT"
+cp -R "$PLUGIN/hooks" "$PLUGIN/scripts" "$PLUGIN/skills" "$PLUGIN/.claude-plugin" "$GS_ROOT/"
+sed -e "s/\"version\": \"$PLUGIN_VERSION\"/\"version\": \"99.0.0\"/" "$PLUGIN/.claude-plugin/plugin.json" \
+    >"$GS_ROOT/.claude-plugin/plugin.json"
+grep -q '"version": "99.0.0"' "$GS_ROOT/.claude-plugin/plugin.json" || fail "could not set the upgraded plugin version"
+run_upgraded() {
+    (cd "$NOQUAL" && env CLAUDE_PROJECT_DIR="$NOQUAL" CLAUDE_PLUGIN_ROOT="$GS_ROOT" CLAUDE_PLUGIN_DATA="$GS_DATA" \
+        QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH" "$GS_ROOT/hooks/session-start" </dev/null)
+}
+out="$(run_upgraded)" || fail "hook must exit 0 after an upgrade"
+case "$(printf '%s' "$out" | system_message_of)" in *"qual 99.0.0: getting started"*) ;; *) fail "an upgrade must show Getting started again: $out" ;; esac
+[ "$(cat "$GS_DATA/getting-started-shown")" = "99.0.0" ] || fail "the upgrade must record the new version"
+out="$(run_upgraded)"
+[ -z "$out" ] || fail "the upgraded version must show Getting started only once: $out"
+ok "a plugin version change shows Getting started again"
+
+# GS5. With no usable data directory (unwritable, under a file, relative, or
+#      unset) the hook exits 0, shows nothing it cannot record, and the
+#      .qual context is unaffected.
+mkdir -p "$SANDBOX/gs-readonly"
+chmod 555 "$SANDBOX/gs-readonly"
+touch "$SANDBOX/gs-file"
+for data in "$SANDBOX/gs-readonly/data" "$SANDBOX/gs-file/data" "relative/data" ""; do
+    out="$(run_hook "$NOQUAL" CLAUDE_PLUGIN_DATA="$data" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")" \
+        || fail "hook must exit 0 with data directory '$data'"
+    if [ -w "$SANDBOX/gs-readonly" ] && [ "$data" = "$SANDBOX/gs-readonly/data" ]; then
+        continue # running as root: the directory is writable after all
+    fi
+    [ -z "$out" ] || fail "with data directory '$data' nothing can be recorded, so nothing is shown: $out"
+    out="$(run_hook "$WITHQUAL" CLAUDE_PLUGIN_DATA="$data" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")" \
+        || fail "hook must exit 0 in a .qual repository with data directory '$data'"
+    case "$(printf '%s' "$out" | context_of)" in *"$CALL_FORM"*) ;; *) fail "the .qual context must survive data directory '$data': $out" ;; esac
+done
+chmod 755 "$SANDBOX/gs-readonly"
+ok "an unusable plugin data directory never fails the hook or the .qual context"
+
+# GS6. On a platform with no prebuilt release, the message gives the source
+#      route instead of the download.
+out="$(run_hook "$NOQUAL" CLAUDE_PLUGIN_DATA="$SANDBOX/gs-data-unsupported" \
+    FAKE_UNAME_S=Darwin FAKE_UNAME_M=x86_64 PATH="$UNAME_SHIM:$HOOK_PATH")" \
+    || fail "hook must exit 0 on an unsupported platform"
+msg="$(printf '%s' "$out" | system_message_of)"
+case "$msg" in *"no prebuilt qualifier for this platform"*"QUALIFIER_BIN"*) ;; *) fail "unsupported platform: expected the source route: $msg" ;; esac
+case "$msg" in *"downloads qualifier"*) fail "unsupported platform: must not promise a download: $msg" ;; esac
+ok "Getting started on a platform without a prebuilt release gives the source route"
 
 # --- hooks.json: SessionStart matcher sources -------------------------------
 
