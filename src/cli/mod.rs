@@ -11,7 +11,8 @@ pub mod targets;
 // parent --help, so we render the Commands block ourselves via a custom
 // help_template. If you add, rename, or remove a subcommand, update
 // HELP_TEMPLATE to match — the Commands enum below is still the source
-// of truth for parsing.
+// of truth for parsing, and `help_template_lists_every_subcommand` fails
+// when the two disagree.
 const HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
@@ -180,4 +181,36 @@ fn parse_with_format_default(format: output::Format) -> Cli {
     }
     let matches = cmd.get_matches();
     Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// Command names listed in HELP_TEMPLATE: the first word of every line
+    /// indented by exactly two spaces.
+    fn template_commands() -> BTreeSet<String> {
+        HELP_TEMPLATE
+            .lines()
+            .filter_map(|line| line.strip_prefix("  "))
+            .filter(|rest| !rest.starts_with(' '))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .map(String::from)
+            .collect()
+    }
+
+    #[test]
+    fn help_template_lists_every_subcommand() {
+        let mut defined: BTreeSet<String> = Cli::command()
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .collect();
+        defined.insert("help".into());
+        assert_eq!(
+            template_commands(),
+            defined,
+            "HELP_TEMPLATE and the Commands enum list different subcommands"
+        );
+    }
 }
