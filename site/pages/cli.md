@@ -83,29 +83,24 @@ qualifier show src/parser.rs
 
   src/parser.rs
 
-  Records (4):
-    concern  L42 "Panics on malformed input"          alice  2026-03-01  a1b2c3d4
-    ├── comment  "Good catch, fixed in latest commit" bob    2026-03-01  b2c3d4e5
-    └── resolve  "Resolved"                           alice  2026-03-01  c3d4e5f6
-    praise       "Excellent property-based test coverage"  bob  2026-02-24  e5f6a7b8
+  Open threads (2):
+    [c1acc3f5] praise     src/parser.rs  Excellent property test coverage  (bob, 2026-10-01)
+
+    [e5daa3cd] suggestion src/parser.rs:10:12  Consider fuzzing  (alice, ai, 2026-10-01) — needs decision
+        [f9156cb5] comment    Worth it for parse()  (carol, 2026-10-01)
+
+  Closed threads (1):
+    [274357ca] concern    src/parser.rs:42  Panics on malformed input  (alice, 2026-10-01) — closed (fixed) by alice: Resolved
 ```
 
-Replies and resolves are threaded under their parent with tree-drawing characters.
+Replies are indented under the record they answer. A closed thread is one
+line that carries its closing `resolve`: the reason, who closed it, and
+the resolve's summary.
 
-### Show details for one artifact
-
-```bash
-qualifier show src/parser.rs
-
-  src/parser.rs
-
-  Records (3):
-    concern     L42–58 "Panics on malformed UTF-8 input"  alice  2026-02-24  a1b2c3d4
-    praise      "Excellent property-based test coverage"   bob    2026-02-24  e5f6a7b8
-    suggestion  "Consider adding fuzzing targets"          carol  2026-02-24  f1f2f3f4
-```
-
-Use `--all` to include resolved/superseded records. Use `--pretty` to force colored output.
+Use `--all` to include edit history and superseded records. Use `--pretty`
+to print the source lines around each span (with `--format json`, it adds a
+`context` field). `--type <TYPE>` keeps only records of one envelope type.
+An artifact with no records prints `No records found` and exits 0.
 
 ### Record a quality concern with full options
 
