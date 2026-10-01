@@ -618,10 +618,22 @@ reclaiming space.
 
 A compaction rewrites a `.qual` file by:
 
-1. **Pruning** all superseded records. If record B supersedes A, only B is
-   retained. The entire chain collapses to its tip.
-2. **Optionally snapshotting.** When `--snapshot` is passed, all surviving
-   records for each subject are replaced by a single epoch record.
+1. **Pruning** superseded records. If record B supersedes A, only B is
+   retained, and the entire chain collapses to its tip. A superseded record
+   is kept when a retained record names it in `references`; every record
+   that supersedes a kept record is then kept too. Pruning therefore never
+   changes how the remaining records group into threads (§2.11): a
+   resolved thread with replies keeps its root, and its replies do not
+   become threads of their own.
+2. **Optionally snapshotting.** When `--snapshot` is passed, superseded
+   records are pruned and the surviving annotation and epoch records for
+   each subject are replaced by a single epoch record whose `refs` lists
+   those surviving records. A subject whose only record is already an
+   epoch is left unchanged.
+
+Compacting one subject (`qualifier compact <artifact>`) rewrites only that
+subject's records, in every `.qual` file that holds them; records of other
+subjects in the same file are written back unchanged.
 
 #### 3.3.1 Compaction Rules
 
@@ -631,6 +643,8 @@ A compaction rewrites a `.qual` file by:
 - After compaction, the file is a valid `.qual` file. No special reader
   support is needed.
 - `qualifier compact --dry-run` MUST be supported.
+- A snapshot that would fold an open `blocker` or `concern` thread into an
+  epoch MUST be refused unless the user forces it (`--force`).
 
 ### 3.4 Dependency (`type: "dependency"`)
 
@@ -1393,10 +1407,12 @@ pub enum FreshnessStatus { Fresh, Drifted { expected, actual }, Missing { reason
 pub fn check_freshness(file_path: &Path, span: &Span) -> FreshnessStatus;
 
 // qualifier::compact
-pub struct CompactResult { pub before: usize, pub after: usize, pub pruned: usize }
+pub struct CompactResult { pub before: usize, pub after: usize, pub pruned: usize, pub epochs: usize }
 pub fn filter_superseded(records: &[Record]) -> Vec<&Record>;
 pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult);
+pub fn prune_subject(qual_file: &QualFile, subject: &str) -> (QualFile, CompactResult);
 pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult);
+pub fn snapshot_subject(qual_file: &QualFile, subject: &str) -> (QualFile, CompactResult);
 
 // qualifier::threads — group annotations into conversations
 pub struct Thread<'a> {
