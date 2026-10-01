@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 
-use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record};
+use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record, Span};
 use crate::cli::commands::resolve;
 use crate::cli::provenance;
 use crate::cli::targets;
@@ -130,40 +130,99 @@ pub fn run(args: Args) -> crate::Result<()> {
         return run_batch(&args.format, args.continue_on_error, args.dry_run);
     }
 
-    let kind_str = args.kind.as_deref().ok_or_else(|| {
-        crate::Error::Validation("<kind> is required (or use --stdin for batch mode)".into())
-    })?;
-    let kind: Kind = kind_str.parse().unwrap();
-
-    let location = args.location.as_deref().ok_or_else(|| {
-        crate::Error::Validation("<location> is required (or use --stdin for batch mode)".into())
-    })?;
-
-    let message = args.message.ok_or_else(|| {
-        crate::Error::Validation("<message> is required (or use --stdin for batch mode)".into())
-    })?;
+    let required = |name: &str| {
+        crate::Error::Validation(format!(
+            "<{name}> is required (or use --stdin for batch mode)"
+        ))
+    };
+    let input = AnnotationInput {
+        kind: args.kind.ok_or_else(|| required("kind"))?,
+        location: args.location.ok_or_else(|| required("location"))?,
+        message: args.message.ok_or_else(|| required("message"))?,
+        detail: args.detail,
+        suggested_fix: args.suggested_fix,
+        tags: args.tags,
+        issuer: args.issuer,
+        issuer_type: args.issuer_type,
+        r#ref: args.r#ref,
+        span: args.span,
+        supersedes: args.supersedes,
+        references: args.references,
+    };
 
     let locator = targets::Locator::from_cwd()?;
-    let (subject, location_span) = locator.location(location)?;
+    // Pointer checks need the project's records; skip the walk otherwise.
+    let files = if input.supersedes.is_some() || input.references.is_some() {
+        targets::discover_project(true)?
+    } else {
+        Vec::new()
+    };
+    let record = build_annotation(input, &files, &locator, "--")?;
+    let qual_path = locator.write_path(record.subject(), args.file.as_deref().map(Path::new))?;
+    targets::append(&qual_path, &record)?;
 
-    // --span overrides the location's span.
-    let mut span = match &args.span {
+    if args.format == "json" {
+        println!("{}", serde_json::to_string(&record)?);
+    } else if let Some(att) = record.as_annotation() {
+        println!(
+            "{} {}{} {}",
+            att.body.kind,
+            att.subject,
+            span_suffix(att.body.span.as_ref()),
+            att.body.summary,
+        );
+        println!("  id: {}", att.id);
+    }
+
+    Ok(())
+}
+
+/// Inputs for one new annotation, from the command line or from an
+/// overrides line on `--stdin`. Pointer fields hold full record IDs.
+pub(crate) struct AnnotationInput {
+    pub kind: String,
+    /// `path[:start[:end]]`, relative to the current directory.
+    pub location: String,
+    pub message: String,
+    pub detail: Option<String>,
+    pub suggested_fix: Option<String>,
+    pub tags: Vec<String>,
+    pub issuer: Option<String>,
+    pub issuer_type: Option<String>,
+    pub r#ref: Option<String>,
+    /// Span override; replaces any span parsed from `location`.
+    pub span: Option<String>,
+    pub supersedes: Option<String>,
+    pub references: Option<String>,
+}
+
+/// Build a validated annotation from `input`: resolve the location to a
+/// root-relative subject, apply the span override and content hash, fill
+/// issuer defaults and the session tag, and check `supersedes` and
+/// `references` against `files` (see [`targets::check_pointers`];
+/// `flag_prefix` prefixes their names in errors).
+pub(crate) fn build_annotation(
+    input: AnnotationInput,
+    files: &[QualFile],
+    locator: &targets::Locator,
+    flag_prefix: &str,
+) -> crate::Result<Record> {
+    let kind: Kind = input.kind.parse().unwrap();
+    let (subject, location_span) = locator.location(&input.location)?;
+
+    let mut span = match &input.span {
         Some(s) => Some(annotation::parse_span(s).map_err(crate::Error::Validation)?),
         None => location_span,
     };
-
-    // Auto-compute content hash for spans
     if let Some(ref mut s) = span
         && let Ok(hash) = content_hash::compute_span_hash(&locator.file(&subject), s)
     {
         s.content_hash = Some(hash);
     }
 
-    let issuer = provenance::issuer(args.issuer.as_deref());
-    let issuer_type = provenance::issuer_type(args.issuer_type.as_deref())?;
-    let tags = resolve::checked_reason_tags(&kind, args.tags)?;
-
-    let qual_path = locator.write_path(&subject, args.file.as_deref().map(Path::new))?;
+    let issuer = provenance::issuer(input.issuer.as_deref());
+    let issuer_type = provenance::issuer_type(input.issuer_type.as_deref())?;
+    let tags = resolve::checked_reason_tags(&kind, input.tags)?;
 
     let att = annotation::finalize(Annotation {
         metabox: "1".into(),
@@ -174,52 +233,37 @@ pub fn run(args: Args) -> crate::Result<()> {
         created_at: Utc::now().into(),
         id: String::new(),
         body: AnnotationBody {
-            detail: args.detail,
+            detail: input.detail,
             kind,
-            r#ref: args.r#ref,
-            references: args.references,
+            r#ref: input.r#ref,
+            references: input.references,
             span,
-            suggested_fix: args.suggested_fix,
-            summary: message,
-            supersedes: args.supersedes,
+            suggested_fix: input.suggested_fix,
+            summary: input.message,
+            supersedes: input.supersedes,
             tags: provenance::with_session_tag(tags),
             extra: Default::default(),
         },
     });
-
     let errors = annotation::validate(&att);
     if !errors.is_empty() {
         return Err(crate::Error::Validation(errors.join("; ")));
     }
+    let record = Record::Annotation(Box::new(att));
+    targets::check_pointers(&record, files, flag_prefix)?;
+    Ok(record)
+}
 
-    let record = Record::Annotation(Box::new(att.clone()));
-    if record.supersedes().is_some() || record.references().is_some() {
-        targets::check_pointers(&record, &targets::discover_project(true)?, "--")?;
+/// `:start` or `:start:end` (lines only) for human output; empty without
+/// a span.
+fn span_suffix(span: Option<&Span>) -> String {
+    match span {
+        Some(span) => match &span.end {
+            Some(e) if e.line != span.start.line => format!(":{}:{}", span.start.line, e.line),
+            _ => format!(":{}", span.start.line),
+        },
+        None => String::new(),
     }
-
-    targets::append(&qual_path, &record)?;
-
-    if args.format == "json" {
-        println!("{}", serde_json::to_string(&record)?);
-    } else {
-        let span_str = match &att.body.span {
-            Some(span) => {
-                let end = match &span.end {
-                    Some(e) if e.line != span.start.line => format!(":{}", e.line),
-                    _ => String::new(),
-                };
-                format!(":{}{}", span.start.line, end)
-            }
-            None => String::new(),
-        };
-        println!(
-            "{} {}{} {}",
-            att.body.kind, att.subject, span_str, att.body.summary,
-        );
-        println!("  id: {}", att.id);
-    }
-
-    Ok(())
 }
 
 /// The records a batch line can see: everything discovered on disk plus the
@@ -376,26 +420,26 @@ fn plan_one(
             .stored_subject(r.subject())
             .map_err(|e| e.to_string())?;
         set_subject(&mut r, subject);
-        annotation::finalize_record(r)
+        let r = annotation::finalize_record(r);
+        if let Some(att) = r.as_annotation() {
+            let errors = annotation::validate(att);
+            if !errors.is_empty() {
+                return Err(errors.join("; "));
+            }
+        }
+        targets::check_pointers(&r, view.files(), "").map_err(|e| e.to_string())?;
+        r
     } else {
         let obj = value
             .as_object()
             .ok_or_else(|| "stdin line must be a JSON object".to_string())?;
-        build_record_from_overrides(obj, locator).map_err(|e| e.to_string())?
+        let input = overrides_input(obj).map_err(|e| e.to_string())?;
+        build_annotation(input, view.files(), locator, "").map_err(|e| e.to_string())?
     };
-
-    if let Some(att) = record.as_annotation() {
-        let errors = annotation::validate(att);
-        if !errors.is_empty() {
-            return Err(errors.join("; "));
-        }
-    }
 
     let qual_path = locator
         .write_path(record.subject(), None)
         .map_err(|e| e.to_string())?;
-
-    targets::check_pointers(&record, view.files(), "").map_err(|e| e.to_string())?;
     Ok((record, qual_path))
 }
 
@@ -482,21 +526,11 @@ fn emit_batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Resul
     let id = record.id();
     let id_short = if id.len() >= 8 { &id[..8] } else { id };
     if let Some(att) = record.as_annotation() {
-        let span_str = match &att.body.span {
-            Some(span) => {
-                let end = match &span.end {
-                    Some(e) if e.line != span.start.line => format!(":{}", e.line),
-                    _ => String::new(),
-                };
-                format!(":{}{}", span.start.line, end)
-            }
-            None => String::new(),
-        };
         println!(
             "{verb}  {:<10} {}{}  {}  id: {}",
             att.body.kind.to_string(),
             att.subject,
-            span_str,
+            span_suffix(att.body.span.as_ref()),
             att.body.summary,
             id_short,
         );
@@ -511,67 +545,24 @@ fn emit_batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Resul
     Ok(())
 }
 
-fn build_record_from_overrides(
-    obj: &Map<String, Value>,
-    locator: &targets::Locator,
-) -> crate::Result<Record> {
-    let kind_str = obj
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| crate::Error::Validation("stdin object missing 'kind'".into()))?;
-    let kind: Kind = kind_str.parse().unwrap();
-
-    let location = obj
-        .get("location")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| crate::Error::Validation("stdin object missing 'location'".into()))?;
-    let message = str_field(obj, "message")
-        .ok_or_else(|| crate::Error::Validation("stdin object missing 'message'".into()))?;
-
-    let (subject, location_span) = locator.location(location)?;
-
-    let mut span = match obj.get("span").and_then(|v| v.as_str()) {
-        Some(s) => Some(annotation::parse_span(s).map_err(crate::Error::Validation)?),
-        None => location_span,
+/// The [`AnnotationInput`] an overrides line describes.
+fn overrides_input(obj: &Map<String, Value>) -> crate::Result<AnnotationInput> {
+    let required = |key: &str| {
+        str_field(obj, key)
+            .ok_or_else(|| crate::Error::Validation(format!("stdin object missing '{key}'")))
     };
-
-    if let Some(ref mut s) = span
-        && let Ok(hash) = content_hash::compute_span_hash(&locator.file(&subject), s)
-    {
-        s.content_hash = Some(hash);
-    }
-
-    let issuer = provenance::issuer(obj.get("issuer").and_then(|v| v.as_str()));
-    let issuer_type = provenance::issuer_type(obj.get("issuer_type").and_then(|v| v.as_str()))?;
-
-    let detail = str_field(obj, "detail");
-    let suggested_fix = str_field(obj, "suggested_fix");
-    let r#ref = str_field(obj, "ref");
-    let supersedes = str_field(obj, "supersedes");
-    let references = str_field(obj, "references");
-    let tags = resolve::checked_reason_tags(&kind, tags_field(obj))?;
-
-    let att = annotation::finalize(Annotation {
-        metabox: "1".into(),
-        record_type: "annotation".into(),
-        subject,
-        issuer,
-        issuer_type,
-        created_at: Utc::now().into(),
-        id: String::new(),
-        body: AnnotationBody {
-            detail,
-            kind,
-            r#ref,
-            references,
-            span,
-            suggested_fix,
-            summary: message,
-            supersedes,
-            tags: provenance::with_session_tag(tags),
-            extra: Default::default(),
-        },
-    });
-
-    Ok(Record::Annotation(Box::new(att)))
+    Ok(AnnotationInput {
+        kind: required("kind")?,
+        location: required("location")?,
+        message: required("message")?,
+        detail: str_field(obj, "detail"),
+        suggested_fix: str_field(obj, "suggested_fix"),
+        tags: tags_field(obj),
+        issuer: str_field(obj, "issuer"),
+        issuer_type: str_field(obj, "issuer_type"),
+        r#ref: str_field(obj, "ref"),
+        span: str_field(obj, "span"),
+        supersedes: str_field(obj, "supersedes"),
+        references: str_field(obj, "references"),
+    })
 }
