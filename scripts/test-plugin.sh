@@ -1465,6 +1465,26 @@ else
     ok "scaffold.sh refuses in an unreadable directory, writing nothing"
 fi
 
+# --- eval cases: per-case scaffold copies -----------------------------------
+# A case's scaffold_script must live in its own directory, so each case
+# that uses the shared fixture carries a copy of _fixture/scaffold.sh. The
+# checks below run _fixture/scaffold.sh itself, so a copy that drifted would
+# seed its eval with a fixture nothing here validates. no-qual-files has a
+# scaffold of its own, by design.
+copies=0
+for case_dir in "$PLUGIN"/evals/*/; do
+    case_name="$(basename "$case_dir")"
+    case "$case_name" in _fixture|no-qual-files) continue ;; esac
+    [ -f "$case_dir/case.yaml" ] || continue
+    grep -Eq '^[[:space:]]*scaffold_script:[[:space:]]*scaffold\.sh[[:space:]]*$' "$case_dir/case.yaml" || continue
+    [ -f "$case_dir/scaffold.sh" ] || fail "evals/$case_name: case.yaml names scaffold.sh, but the case has none"
+    cmp -s "$case_dir/scaffold.sh" "$SCAFFOLD" \
+        || fail "evals/$case_name/scaffold.sh differs from evals/_fixture/scaffold.sh; copy _fixture/scaffold.sh over it"
+    copies=$((copies + 1))
+done
+[ "$copies" -gt 0 ] || fail "no eval case uses the shared fixture's scaffold.sh"
+ok "every case's scaffold.sh is identical to evals/_fixture/scaffold.sh ($copies cases)"
+
 # --- eval cases: structure and graders ----------------------------------------
 # Every case under evals/ (except the shared _fixture) must load in
 # `claude plugin eval`, which rejects unknown keys. Key sets are the ones
