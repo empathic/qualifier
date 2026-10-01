@@ -27,6 +27,7 @@ fn make_att(subject: &str, kind: Kind, summary: &str) -> Annotation {
             summary: summary.into(),
             supersedes: None,
             tags: vec![],
+            extra: Default::default(),
         },
     })
 }
@@ -59,6 +60,7 @@ fn test_golden_annotation_id() {
             summary: "Panics on malformed input".into(),
             supersedes: None,
             tags: vec![],
+            extra: Default::default(),
         },
     });
     // ID is content-addressed: deterministic and matches generate_id.
@@ -84,6 +86,7 @@ fn test_golden_epoch_id() {
             refs: vec!["aaa".into(), "bbb".into(), "ccc".into()],
             span: None,
             summary: "Compacted from 3 annotations".into(),
+            extra: Default::default(),
         },
     });
     assert_eq!(epoch.id.len(), 64);
@@ -105,6 +108,7 @@ fn test_golden_dependency_id() {
         id: String::new(),
         body: DependencyBody {
             depends_on: vec!["lib/auth".into(), "lib/http".into()],
+            extra: Default::default(),
         },
     }));
     assert_eq!(
@@ -177,6 +181,7 @@ fn test_compaction_prune_removes_superseded() {
             summary: "fixed".into(),
             supersedes: Some(original.id().to_string()),
             tags: vec![],
+            extra: Default::default(),
         },
     })));
     let extra = make_record("mod.rs", Kind::Praise, "nice");
@@ -254,6 +259,7 @@ fn test_supersession_cycle_detected() {
             summary: "a".into(),
             supersedes: Some("bbb".into()),
             tags: vec![],
+            extra: Default::default(),
         },
     }));
     let b = Record::Annotation(Box::new(Annotation {
@@ -274,6 +280,7 @@ fn test_supersession_cycle_detected() {
             summary: "b".into(),
             supersedes: Some("aaa".into()),
             tags: vec![],
+            extra: Default::default(),
         },
     }));
 
@@ -306,6 +313,7 @@ fn test_cross_artifact_supersession_rejected() {
             summary: "fix in bar".into(),
             supersedes: Some(a.id().to_string()),
             tags: vec![],
+            extra: Default::default(),
         },
     })));
 
@@ -336,6 +344,7 @@ fn test_kind_typo_detected_in_validation() {
             summary: "oops".into(),
             supersedes: None,
             tags: vec![],
+            extra: Default::default(),
         },
     });
 
@@ -383,6 +392,7 @@ fn test_metabox_roundtrip() {
             summary: "Great code".into(),
             supersedes: None,
             tags: vec!["quality".into()],
+            extra: Default::default(),
         },
     });
     assert_eq!(att.metabox, "1");
@@ -444,6 +454,7 @@ fn test_supersession_filter() {
             summary: "fixed it".into(),
             supersedes: Some(original.id().to_string()),
             tags: vec![],
+            extra: Default::default(),
         },
     })));
 
@@ -719,4 +730,76 @@ fn test_threads_tie_break_by_origin_id_is_deterministic() {
     expected.sort();
     assert_eq!(order_forward, expected);
     assert_eq!(order_backward, expected);
+}
+
+// --- Canonical form stability ---
+
+/// Every record checked into this repository was written by qualifier. Their
+/// stored IDs must keep verifying across changes to the canonical form.
+#[test]
+fn test_repository_record_ids_still_verify() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let qual_files = qual_file::discover(root, true).unwrap();
+    let mut checked = 0;
+    for qf in &qual_files {
+        for record in &qf.records {
+            if matches!(record, Record::Unknown(_)) {
+                continue;
+            }
+            assert_eq!(
+                annotation::generate_record_id(record),
+                record.id(),
+                "stored ID no longer verifies in {}",
+                qf.path.display()
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked > 100,
+        "expected the repository's own records, found {checked}"
+    );
+}
+
+#[test]
+fn test_custom_body_fields_survive_roundtrip_and_hash_in_key_order() {
+    let line = r#"{"metabox":"1","type":"annotation","subject":"x.rs","issuer":"mailto:t@t.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-20,"summary":"custom field","zeta":{"b":1,"a":2}}}"#;
+    let record: Record = serde_json::from_str(line).unwrap();
+    let record = annotation::finalize_record(record);
+    let json = serde_json::to_string(&record).unwrap();
+    // Custom fields sort together with the defined ones.
+    assert!(
+        json.contains(
+            r#""body":{"kind":"concern","score":-20,"summary":"custom field","zeta":{"a":2,"b":1}}"#
+        ),
+        "unexpected body serialization: {json}"
+    );
+    // The ID is the BLAKE3 hash of that serialization with `id` emptied.
+    let canonical = json.replace(&format!(r#""id":"{}""#, record.id()), r#""id":"""#);
+    assert_eq!(
+        record.id(),
+        blake3::hash(canonical.as_bytes()).to_hex().to_string()
+    );
+    let reparsed: Record = serde_json::from_str(&json).unwrap();
+    assert_eq!(annotation::generate_record_id(&reparsed), record.id());
+    assert_eq!(reparsed, record);
+}
+
+#[test]
+fn test_custom_body_fields_on_epoch_and_dependency_survive() {
+    let epoch = r#"{"metabox":"1","type":"epoch","subject":"x.rs","issuer":"urn:qualifier:compact","created_at":"2026-02-24T10:00:00Z","id":"","body":{"note":"kept","refs":["a"],"summary":"s"}}"#;
+    let dep = r#"{"metabox":"1","type":"dependency","subject":"x.rs","issuer":"urn:t:t","created_at":"2026-02-24T10:00:00Z","id":"","body":{"depends_on":["y"],"weight":3}}"#;
+    for (line, expect) in [
+        (
+            epoch,
+            r#""body":{"note":"kept","refs":["a"],"summary":"s"}"#,
+        ),
+        (dep, r#""body":{"depends_on":["y"],"weight":3}"#),
+    ] {
+        let record = annotation::finalize_record(serde_json::from_str(line).unwrap());
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains(expect), "unexpected serialization: {json}");
+        let reparsed: Record = serde_json::from_str(&json).unwrap();
+        assert_eq!(annotation::generate_record_id(&reparsed), record.id());
+    }
 }

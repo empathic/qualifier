@@ -198,6 +198,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             summary: message,
             supersedes,
             tags: provenance::with_session_tag(tags),
+            extra: Default::default(),
         },
     });
 
@@ -577,6 +578,7 @@ fn build_record_from_overrides(
             summary: message,
             supersedes,
             tags: provenance::with_session_tag(tags),
+            extra: Default::default(),
         },
     });
 

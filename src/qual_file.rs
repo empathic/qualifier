@@ -317,6 +317,7 @@ mod tests {
                 summary: summary.into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         })
     }

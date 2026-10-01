@@ -6007,3 +6007,43 @@ fn test_show_marks_non_human_issuer_type() {
     assert!(!line("from a person").contains('('), "{stdout}");
     assert!(!line("unspecified").contains('('), "{stdout}");
 }
+
+// --- Custom body fields ---
+
+#[test]
+fn test_compact_keeps_custom_body_fields_and_their_id() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "fn x() {}\n").unwrap();
+    let custom: qualifier::annotation::Record = serde_json::from_str(
+        r#"{"metabox":"1","type":"annotation","subject":"x.rs","issuer":"mailto:t@t.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-20,"summary":"custom field"}}"#,
+    )
+    .unwrap();
+    let custom = qualifier::annotation::finalize_record(custom);
+    let custom_line = serde_json::to_string(&custom).unwrap();
+    assert!(custom_line.contains(r#""score":-20"#), "{custom_line}");
+    std::fs::write(dir.path().join("x.rs.qual"), format!("{custom_line}\n")).unwrap();
+
+    // Give compact a superseded record to prune so it rewrites the file.
+    let first = write_id(dir.path(), &["record", "comment", "x.rs", "first"]);
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "x.rs",
+            "second",
+            "--supersedes",
+            &first,
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "x.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("pruned"), "{stdout}");
+
+    let after = std::fs::read_to_string(dir.path().join("x.rs.qual")).unwrap();
+    assert!(
+        after.lines().any(|l| l == custom_line),
+        "custom record must survive byte-for-byte:\n{after}"
+    );
+}
