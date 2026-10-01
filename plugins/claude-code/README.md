@@ -90,10 +90,34 @@ copy of `evals/_fixture/scaffold.sh`. Edit `_fixture/scaffold.sh`, then
 copy it over each case's `scaffold.sh` (every case except `no-qual-files`,
 which has its own).
 
-Bash graders match only inside the call's `command`, not its
-description. The quiet cases' `no-record` grader counts any `record`,
-`reply`, `resolve`, or `emit` call, `record --stdin --dry-run` included:
-that is deliberately conservative, so a dry run fails a negative case.
+Graders check outcomes, not how a command was spelled. A record written
+from an eval session carries `"issuer_type":"ai"` and a
+`session:claude-code:<id>` tag (Claude Code sets `CLAUDECODE` in its Bash
+environment), while the fixture's own records carry neither. So each
+positive case's `wrote-record` grader is a regex over the `.qual` file its
+record lands in: `"kind":"alternative"` in `docs/.qual`
+(`design-rejects-option`), `"kind":"resolve"` in `src/.qual`
+(`done-commit`), a `status:needs-decision` tag in `docs/.qual`
+(`needs-decision`), and any session record in `src/.qual` or `docs/.qual`
+for the review cases. Cases whose skill only reads have a scored check
+on what it did: `edit-annotated-file` runs `threads` on `src/net.rs`
+before its first Edit of that file (`tool_order`), `handoff` runs
+`threads`, and the final reply of `plan-from-threads` and `triage-open`
+names at least two different thread IDs. `tool_used: Skill` graders are
+unscored indicators in a two-arm run, so every case except
+`no-qual-files` has at least one of these scored outcome graders.
+
+The quiet cases forbid writes twice. `no-session-records` requires that
+the `.qual` file the case could touch holds no session record after the
+run, whatever route wrote it. `no-record` counts any `record`, `reply`,
+`resolve`, or `emit` call however qualifier is reached (bare, by path, or
+the wrapper's `exec`, including through a variable such as `"$Q" exec
+record`), `record --stdin --dry-run` included: that is deliberately
+conservative, so a dry run fails a negative case. Bash graders match only
+inside the call's `command`, not its description.
+`scripts/test-plugin.sh` proves the file graders against the scaffolded
+fixture and records written by the real binary, and the others against
+sample calls and replies.
 
 Each run's agent session is isolated and inherits only an allowlist of
 environment variables (`PATH`, locale, provider credentials, `EVAL_*`), so

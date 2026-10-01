@@ -1575,14 +1575,57 @@ for case in with_no_record:
             assert not pat.search(json.dumps(make(p))), f"{case}/{found[0]} must not match {tool} on {p}"
 print("eval graders: no-skill-fired matches every qual skill; no-record cases also forbid .qual writes")
 
+# In a two-arm run every `tool_used: Skill` grader, every `arm: with-only`
+# grader, and every mock_calls grader is excluded from the score (a
+# with-arm indicator only) unless every grader in the case is. A case's
+# score then means something only if it has a scored grader on the outcome.
+# no-qual-files is the exception: its one grader is the arm: both
+# "no skill fired" check.
+def scored_outcome(g):
+    if g.get("arm") == "with-only" or "mock_calls" in (g.get("target"), g.get("focus")):
+        return False
+    return not (g.get("type") == "tool_used" and g.get("tool") == "Skill")
+
+for case in cases:
+    if case != "no-qual-files":
+        assert any(scored_outcome(g) for g in graders(case).values()), (
+            f"{case}: needs a scored grader that is not a Skill grader (Skill graders are unscored "
+            f"in a two-arm run)")
+
+# wrote-record grades what the session wrote, not how it spelled the
+# command: a regex over the .qual file the expected record lands in. The
+# fixture check further down proves each one against the real binary.
+WROTE_CASES = ["design-rejects-option", "done-commit", "needs-decision",
+               "review-branch", "review-spec", "review-subsystems"]
+FILE_GRADERS = ("wrote-record.md", "no-session-records.md")
+assert [c for c in cases if "wrote-record.md" in graders(c)] == WROTE_CASES, (
+    f"wrote-record.md must be in exactly {WROTE_CASES}")
+assert [c for c in cases if "no-session-records.md" in graders(c)] == with_no_record, (
+    f"every no-record case (and only those) needs no-session-records.md: {with_no_record}")
+for case in cases:
+    for name in FILE_GRADERS:
+        g = graders(case).get(name)
+        if g is None:
+            continue
+        where = f"{case}/{name}"
+        assert g["type"] == "regex", f"{where}: must be a regex grader"
+        file_target(where, g.get("target", ""))
+        expected = "not_contains" if name == "no-session-records.md" else None
+        assert g.get("match") == expected, f"{where}: match must be {expected or 'unset (contains)'}"
+        assert g.get("arm") == graders(case).get("no-record.md", {}).get("arm"), (
+            f"{where}: arm must be unset (scored), as on no-record.md")
+print(f"eval graders: every case but no-qual-files has a scored non-Skill grader; wrote-record "
+      f"({len(WROTE_CASES)} cases) and no-session-records ({len(with_no_record)}) are file-target regexes")
+
 # Bash graders match the JSON-encoded tool input, which also carries the
 # call's free-text `description`, so each is anchored inside the `command`
 # string and names real subcommands. The plugin keeps its qualifier binary
 # off PATH (scripts/ensure-qualifier.sh): no-bare-qualifier catches a bare
 # `qualifier <sub>` (which would fail outright) but not the wrapper form;
-# no-record and wrote-record accept either form. Every copy of a grader is
-# identical, and its subcommand list is checked against `qualifier --help`
-# so it can't drift from the CLI.
+# no-record catches either form however the wrapper is referenced (`"$Q"
+# exec record` as much as `ensure-qualifier.sh exec record`). Every copy
+# of a grader is identical, and its subcommand list is checked against
+# `qualifier --help` so it can't drift from the CLI.
 WRAPPER = '"/plugin/scripts/ensure-qualifier.sh"'
 
 def bash_call(command, description=None, description_first=False):
@@ -1624,7 +1667,6 @@ DESCRIPTION_ONLY = [
 no_bare, no_bare_cases = copies("no-bare-qualifier.md")
 assert (no_bare.get("min"), no_bare.get("max")) == ("0", "0"), "no-bare-qualifier must be min 0, max 0"
 no_record, no_record_cases = copies("no-record.md")
-wrote, wrote_cases = copies("wrote-record.md")
 
 if not qbin:
     print("skip: no qualifier binary; Bash grader subcommand and fixture checks skipped")
@@ -1639,8 +1681,6 @@ else:
         f"no-bare-qualifier subcommands must be `qualifier --help`'s: {sorted(all_subs)}")
     assert subcommands_of(no_record, "no-record") == write_subs, (
         f"no-record subcommands must be the 'Record observations' ones: {sorted(write_subs)}")
-    assert subcommands_of(wrote, "wrote-record") == write_subs - {"emit"}, (
-        f"wrote-record subcommands must be {sorted(write_subs - {'emit'})}")
 
     # Escaped quotes earlier in the command must not stop the match.
     QUOTED = 'git commit -m "fix: \\"retry\\" budget" && '
@@ -1663,26 +1703,103 @@ else:
             bash_call(f"cd /tmp/repo\n{WRAPPER} exec record blocker src/net.rs:1 \"msg\""),
             bash_call("cd /tmp/repo\nls qualifier-notes"),
         ])
-    for name, g, subs in (("no-record", no_record, write_subs), ("wrote-record", wrote, write_subs - {"emit"})):
-        pat = re.compile(g["input_match"])
-        check_calls(name, pat,
-            [bash_call(f'qualifier {sub} src/net.rs "m"') for sub in sorted(subs)]
-            + [bash_call(f'{WRAPPER} exec {sub} src/net.rs "m"') for sub in sorted(subs)] + [
-                bash_call(QUOTED + f'{WRAPPER} exec record concern src/net.rs:1 "m"', "Record it"),
-                bash_call(QUOTED + 'qualifier reply 1a2b3c4d "ok"'),
-                bash_call("/repo/target/debug/qualifier record --stdin < /tmp/x/batch.jsonl"),
-                bash_call('cd /tmp/repo\nqualifier reply 1a2b3c4d "ok"'),
-                bash_call(f'cd /tmp/repo\n{WRAPPER} exec record concern src/net.rs:1 "m"'),
-            ],
-            DESCRIPTION_ONLY + [
-                bash_call(f"{WRAPPER} exec threads --format json", "Record qualifier reply targets"),
-                bash_call("qualifier threads --all"),
-                bash_call("qualifier records"),
-                bash_call(f"{WRAPPER} exec agents batch"),
-            ])
+    # The wrapper is often held in a variable (`Q=".../ensure-qualifier.sh";
+    # "$Q" exec record ...`), so no-record keys on `exec <sub>` rather than
+    # on the wrapper's file name.
+    Q_SET = f"Q={WRAPPER}; "
+    pat = re.compile(no_record["input_match"])
+    check_calls("no-record", pat,
+        [bash_call(f'qualifier {sub} src/net.rs "m"') for sub in sorted(write_subs)]
+        + [bash_call(f'{WRAPPER} exec {sub} src/net.rs "m"') for sub in sorted(write_subs)]
+        + [bash_call(f'"$Q" exec {sub} src/net.rs "m"') for sub in sorted(write_subs)] + [
+            bash_call(QUOTED + f'{WRAPPER} exec record concern src/net.rs:1 "m"', "Record it"),
+            bash_call(QUOTED + 'qualifier reply 1a2b3c4d "ok"'),
+            bash_call("/repo/target/debug/qualifier record --stdin < /tmp/x/batch.jsonl"),
+            bash_call('cd /tmp/repo\nqualifier reply 1a2b3c4d "ok"'),
+            bash_call(f'cd /tmp/repo\n{WRAPPER} exec record concern src/net.rs:1 "m"'),
+            bash_call(Q_SET + '"$Q" exec record alternative docs/cache-design.md:5 "Per-tenant processes"'),
+            bash_call('cd x && "$Q" exec resolve 1a2b3c4d "fixed" --reason fixed'),
+            bash_call(Q_SET + '\n"$Q" exec reply 1a2b3c4d "ok"'),
+            bash_call('"$Q" exec record --stdin --dry-run < /tmp/x/batch.jsonl'),
+        ],
+        DESCRIPTION_ONLY + [
+            bash_call(f"{WRAPPER} exec threads --format json", "Record qualifier reply targets"),
+            bash_call("qualifier threads --all"),
+            bash_call("qualifier records"),
+            bash_call(f"{WRAPPER} exec agents batch"),
+            bash_call(Q_SET + '"$Q" exec threads src/net.rs --format json'),
+            bash_call('"$Q" exec threads --all', "Check before we record a reply"),
+        ])
+
+    # handoff: the session listed threads (the skill's "Read as a stranger"
+    # step), in either form.
+    g = values(f"{evals}/handoff/graders/listed-threads.md")
+    assert g["type"] == "tool_used" and g["tool"] == "Bash" and "min" not in g and "max" not in g, g
+    check_calls("handoff/listed-threads", re.compile(g["input_match"]),
+        [bash_call(Q_SET + "\"$Q\" exec threads --all --tag 'session:claude-code:x' --format json"),
+         bash_call(f"{WRAPPER} exec threads --status needs-decision"),
+         bash_call("qualifier threads --format json"),
+         bash_call('cd /tmp/repo\nqualifier threads --all')],
+        DESCRIPTION_ONLY[1:] + [
+         bash_call(f'{WRAPPER} exec record concern src/net.rs:1 "threads"'),
+         bash_call("grep -rn threads notes.md"),
+         bash_call("ls src", "List qualifier threads")])
     print(f"eval graders: Bash graders match only the command, and name `qualifier --help`'s "
-          f"subcommands (no-bare-qualifier: {len(no_bare_cases)}, no-record: {len(no_record_cases)}, "
-          f"wrote-record: {len(wrote_cases)} cases)")
+          f"subcommands (no-bare-qualifier: {len(no_bare_cases)}, no-record: {len(no_record_cases)} "
+          f"cases); handoff's listed-threads matches only a threads call")
+
+# edit-annotated-file: consulting-threads runs `threads` on src/net.rs
+# before the first Edit of it. tool_order passes when the first matching
+# `before` call precedes the first matching `after` call; simulate that over
+# sample call sequences.
+g = values(f"{evals}/edit-annotated-file/graders/threads-before-edit.md")
+assert g["type"] == "tool_order", g
+def order_side(raw):
+    m = re.fullmatch(r"\{\s*tool:\s*(\w+)\s*,\s*input_match:\s*(.+?)\s*\}", raw)
+    assert m, raw
+    return m.group(1), re.compile(scalar(m.group(2))[0])
+before, after = order_side(g["before"]), order_side(g["after"])
+assert (before[0], after[0]) == ("Bash", "Edit"), (before[0], after[0])
+def first(calls, side):
+    return next((i for i, (tool, inp) in enumerate(calls) if tool == side[0] and side[1].search(inp)), None)
+def order_passes(calls):
+    b, a = first(calls, before), first(calls, after)
+    return b is not None and a is not None and b < a
+def edit(path):
+    return ("Edit", json.dumps({"file_path": path, "old_string": "a", "new_string": "b", "replace_all": False}))
+READ = ("Read", json.dumps({"file_path": "/w/src/net.rs"}))
+for threads in ('"$Q" exec threads src/net.rs', f"{WRAPPER} exec threads src/net.rs:7:10 --format json",
+                "qualifier threads src/net.rs", 'cd /w && "$Q" exec threads ./src/net.rs'):
+    for target in ("/w/src/net.rs", "src/net.rs"):
+        calls = [READ, ("Bash", bash_call(threads, "Check threads")), edit(target)]
+        assert order_passes(calls), f"threads-before-edit misses {calls}"
+        assert not order_passes([READ, edit(target), ("Bash", bash_call(threads)), edit(target)]), (
+            f"threads-before-edit passes an edit made before {threads!r}")
+for wrong in ('"$Q" exec threads --format json', '"$Q" exec threads src/auth.rs',
+              "grep -n threads src/net.rs", '"$Q" exec record concern src/net.rs:1 "threads"'):
+    calls = [("Bash", bash_call(wrong, "List threads on src/net.rs")), edit("/w/src/net.rs")]
+    assert not order_passes(calls), f"threads-before-edit wrongly passes {wrong!r}"
+for other in ("/w/src/net.rs.bak", "/w/src/.qual", "/w/mysrc/net.rs", "/w/docs/cache-design.md"):
+    assert not order_passes([("Bash", bash_call('"$Q" exec threads src/net.rs')), edit(other)]), (
+        f"threads-before-edit treats an Edit of {other} as an edit of src/net.rs")
+print("edit-annotated-file: threads-before-edit needs a threads call on src/net.rs before its first Edit")
+
+# plan-from-threads and triage-open: the final message names at least two
+# different threads, by 8-character prefix or full ID.
+for case in ("plan-from-threads", "triage-open"):
+    g = values(f"{evals}/{case}/graders/cites-threads.md")
+    assert g["type"] == "regex" and g.get("target", "last_message") == "last_message" and "match" not in g, g
+    pat = re.compile(g["pattern"])
+    blocker, concern = "e2b30322158e645ae6c5fc723e9d6025ceb748cdeddb8851ca0e55b65f70a4af", "20168fda"
+    check_calls(f"{case}/cites-threads", pat,
+        ["1. Add a connect timeout (closes e2b30322).\n2. Retry on EINTR (closes 20168fda).",
+         "| ID | proposed |\n|---|---|\n| b2f66521 | escalate |\n| 20168fda | reply |",
+         f"Closes {blocker}, then {concern}.",
+         "e2b30322 first, e2b30322 again, then 20168fda."],
+        ["No open threads.", "Only e2b30322 is open; e2b30322 blocks the release.",
+         f"Closes {blocker} (e2b30322).", "commits abc1234 and def5678",
+         "Token e2b30322158e645a and 20168fdaz."])
+print("plan-from-threads, triage-open: cites-threads needs two different thread IDs in the reply")
 
 # verified-tag grades the file the verifier's replies land in, not the
 # trace (which also holds the loaded skill and the filled verifier brief,
@@ -1727,6 +1844,91 @@ if qbin:
     print(f"review-subsystems: verified-tag grades {target}, where the fixture's verdict replies land")
 else:
     print("skip: no qualifier binary; verified-tag fixture check skipped")
+
+# wrote-record and no-session-records grade the .qual file a run's record
+# lands in. Prove each against the real binary: scaffold the case's fixture
+# the way the runner does (on the host, with no Claude Code environment),
+# check the pattern does not match the fixture alone, then write the
+# record that case expects the way an eval session does (CLAUDECODE=1 and a
+# session ID, so the binary adds issuer_type ai and a session:claude-code:
+# tag) and check it does. For no-session-records (match: not_contains) that
+# means the grader passes on the fixture and fails once a record lands.
+SESSION = "0f8e2c1a-7b3d-4e5f-9a6b-1c2d3e4f5a6b"
+
+def root_of(q, subject, kind):
+    found = [t["root"] for t in json.loads(q("threads", subject, "--format", "json"))
+             if t["root"]["body"]["kind"] == kind]
+    assert len(found) == 1, (subject, kind, found)
+    return found[0]["id"]
+
+EXPECTED_WRITES = {
+    # A rejected option, as recording-design-decisions writes it.
+    "design-rejects-option": lambda q, git: q(
+        "record", "alternative", "docs/cache-design.md:5", "Per-tenant cache processes",
+        "--detail", "One shared process is simpler below 50 tenants", "--tag", "revisit:tenants exceed 50"),
+    # closing-the-loop resolving the fixture's blocker after the fix commit.
+    "done-commit": lambda q, git: q(
+        "resolve", root_of(q, "src/net.rs", "blocker"), "connect uses connect_timeout(5s)",
+        "--reason", "fixed", "--ref", f"git:{git('rev-parse', 'HEAD')}"),
+    # escalating-decisions marking the quota suggestion as waiting on a human.
+    "needs-decision": lambda q, git: q(
+        "reply", root_of(q, "docs/cache-design.md", "suggestion"), "Needs a decision: per-tenant quotas?",
+        "--detail", "Option A: quotas now. Option B: wait for 50 tenants.", "--tag", "status:needs-decision"),
+    # Review findings: on the code under review, or on the spec.
+    "review-branch": lambda q, git: q("record", "concern", "src/net.rs:2", "No bound on DNS resolution"),
+    "review-spec": lambda q, git: q("record", "concern", "docs/cache-design.md:9", "TTL has no rationale"),
+    "review-subsystems": lambda q, git: q(
+        "record", "blocker", "src/auth.rs:2", "Password comparison is not constant-time", "--tag", "review"),
+    # Anything a quiet case might write, on the file it would touch.
+    "quiet-typo": lambda q, git: q("record", "comment", "docs/cache-design.md:10", "Fixed a typo"),
+    "quiet-question": lambda q, git: q("record", "comment", "src/net.rs:1", "connect opens a TCP stream"),
+    "quiet-explore": lambda q, git: q("record", "comment", "src/net.rs:1", "networking lives in net.rs"),
+}
+file_graded = sorted(c for c in cases if any(n in graders(c) for n in FILE_GRADERS))
+assert sorted(EXPECTED_WRITES) == file_graded, (sorted(EXPECTED_WRITES), file_graded)
+if qbin:
+    host_env = {"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], "QUALIFIER_BIN": qbin,
+                "GIT_CONFIG_GLOBAL": os.devnull, "TMPDIR": os.environ.get("TMPDIR", "/tmp")}
+    session_env = {**host_env, "CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": SESSION}
+    for case in file_graded:
+        work = f"{sandbox}/outcome-{case}"
+        os.makedirs(work)
+        script = read_yaml(f"{evals}/{case}/case.yaml")["context"]["scaffold_script"][0]
+        run = subprocess.run(["bash", os.path.abspath(f"{evals}/{case}/{script}")], cwd=work,
+                             env=host_env, capture_output=True, text=True)
+        if run.returncode != 0:
+            sys.exit(f"FAIL: {case}: scaffold failed (exit {run.returncode}): {run.stderr.strip()}")
+        def q(*args):
+            return subprocess.run([qbin, *args], cwd=work, env=session_env, check=True,
+                                  capture_output=True, text=True).stdout
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=work, env=host_env, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+        checks = []
+        for name in FILE_GRADERS:
+            g = graders(case).get(name)
+            if g is not None:
+                path = f"{work}/{file_target(f'{case}/{name}', g['target'])}"
+                assert os.path.isfile(path), f"{case}/{name} reads {g['target']}, which the fixture lacks"
+                checks.append((name, path, re.compile(g["pattern"])))
+        before = {}
+        for name, path, pat in checks:
+            before[path] = open(path).read()
+            # The premise: the fixture's own records carry no session provenance.
+            assert "session:" not in before[path] and '"issuer_type"' not in before[path], (
+                f"{case}: the fixture's {path} already carries session provenance")
+            assert not pat.search(before[path]), f"{case}/{name} matches the fixture before the session writes"
+        EXPECTED_WRITES[case](q, git)
+        for name, path, pat in checks:
+            text = open(path).read()
+            added = text[len(before[path]):]
+            assert text.startswith(before[path]) and f'"session:claude-code:{SESSION}"' in added, (
+                f"{case}: the session's record did not land in {path}")
+            assert pat.search(added), f"{case}/{name} misses the session's record in {path}: {added!r}"
+    print(f"eval graders: wrote-record and no-session-records miss each scaffolded fixture and match "
+          f"the case's session record written by the real binary ({len(file_graded)} cases)")
+else:
+    print("skip: no qualifier binary; wrote-record / no-session-records fixture checks skipped")
 PY
 while IFS= read -r msg; do
     case "$msg" in

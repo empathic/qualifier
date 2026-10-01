@@ -10,8 +10,8 @@ skill's "Review" and "Verify" sections.
 
 ## Grader visibility into subagent tool calls
 
-`skill-fired`, `wrote-record`, and `no-bare-qualifier` are `tool_used`
-graders over the run's tool calls. `code.claude.com/docs/en/plugin-evals.md`
+`skill-fired` and `no-bare-qualifier` are `tool_used` graders over the
+run's tool calls. `code.claude.com/docs/en/plugin-evals.md`
 doesn't say directly whether a dispatched subagent's own tool calls count;
 it defines `trace` as "the session as JSON, one message per line."
 
@@ -25,13 +25,10 @@ verifier subagent's `Bash` calls the same as the controller session's own.
 
 Not yet confirmed against `claude plugin eval`; running the suite costs
 money. Treat it as a working assumption to verify on the first run: if
-`wrote-record` fails on an otherwise-correct run that fully delegated to
-subagents, the eval's tool calls do *not* include subagent calls, and the
-fix is to grade the controller session only — e.g. require its "After
-verification" `resolve` / `record --supersedes` step, or the closing
-`threads --tag review:<tag>` report, rather than the subagents' own
-writes. `verified-tag` doesn't depend on this: it reads the file the
-replies land in.
+`no-bare-qualifier` never sees a reviewer's or verifier's calls, the
+eval's tool calls do *not* include subagent calls, and it only checks the
+controller session. `wrote-record` and `verified-tag` don't depend on
+this: they read the file the records land in.
 
 ## Graders
 
@@ -43,8 +40,10 @@ each against sample calls and `qualifier --help`'s subcommand list.
 
 - `skill-fired.md` — `reviewing-into-qualifier` fired, prefixed or bare
   (same form as `review-branch`'s).
-- `wrote-record.md` — a `record`/`reply`/`resolve` call ran, wrapper or
-  bare form (same pattern as the other cases').
+- `wrote-record.md` — `src/.qual`, after the run, holds a record tagged
+  `session:claude-code:<id>`: a record this run wrote, by the controller
+  or a subagent, however it invoked qualifier. The fixture's own records
+  carry no session tag.
 - `no-bare-qualifier.md` — no Bash command runs a bare `qualifier <sub>`;
   only the wrapper's `"<path>" exec <args>` form, since the plugin keeps
   its binary off `PATH` (see `scripts/ensure-qualifier.sh` and
