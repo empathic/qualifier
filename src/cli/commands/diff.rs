@@ -3,20 +3,25 @@
 //!
 //! Compares records on `HEAD` against records at a git ref (default `main`,
 //! resolved via merge-base unless `--from-tip`). Output is grouped into
-//! three buckets, all reckoned by record `id`:
+//! four buckets:
 //!
 //! - **Added** — records active on `HEAD` whose id is not in `<ref>`.
 //!   Annotations only; resolve-kind records are filtered to avoid
 //!   double-counting with the closer in *Resolved*.
+//! - **Changed** — open threads (matched by thread origin, see
+//!   [`crate::threads`]) whose root at `<ref>` was superseded on this
+//!   branch by an edit or re-anchor. Listed here instead of under both
+//!   *Added* and *Resolved*.
 //! - **Resolved** — records active at `<ref>` that are no longer active on
-//!   `HEAD`, with the closer (the head-side record whose `supersedes`
-//!   points at it) named when one exists, or `removed` if not.
+//!   `HEAD`, with the closers (the head-side records whose `supersedes`
+//!   points at it) named when any exist, or `removed` if not.
 //! - **Drifted** — records present at *both* refs whose
 //!   `body.span.content_hash` no longer matches the file's current
 //!   content. Drift on records freshly added on this branch is suppressed.
 //!
 //! Both human and JSON output are stable; CI gating uses `--fail-on
-//! <KIND[,KIND...]>` and `--fail-on-drift`.
+//! <KIND[,KIND...]>` (Added records, plus Changed records whose kind moved
+//! into the list) and `--fail-on-drift`.
 //!
 //! Backed by [`gix`] in-process — no subprocess spawn per `.qual` file
 //! at the ref.
@@ -33,6 +38,7 @@ use crate::cli::span_context;
 use crate::compact::filter_superseded;
 use crate::content_hash::{self, FreshnessStatus};
 use crate::qual_file;
+use crate::threads::build_threads;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -52,7 +58,9 @@ pub struct Args {
     pub from_tip: bool,
 
     /// Exit non-zero if Added contains any record whose kind matches one of
-    /// the comma-separated list. Common: `--fail-on blocker` for CI.
+    /// the comma-separated list, or Changed contains a record whose kind
+    /// moved into the list (e.g. concern -> blocker). Common: `--fail-on
+    /// blocker` for CI.
     #[arg(long, value_name = "KIND[,KIND...]")]
     pub fail_on: Option<String>,
 
@@ -61,7 +69,8 @@ pub struct Args {
     pub fail_on_drift: bool,
 
     /// Filter to records whose kind matches one of the comma-separated list.
-    /// Applies to all three buckets (added, resolved, drifted).
+    /// Applies to every bucket; a Changed entry matches on either its old or
+    /// its new kind.
     #[arg(long, value_name = "KIND[,KIND...]")]
     pub kind: Option<String>,
 
@@ -83,8 +92,24 @@ pub struct Args {
 
 struct Diff {
     added: Vec<Record>,
+    changed: Vec<ChangedEntry>,
     resolved: Vec<ResolvedEntry>,
     drifted: Vec<DriftEntry>,
+}
+
+/// An open thread whose root changed on this branch.
+struct ChangedEntry {
+    /// The thread's root at <ref>.
+    previous: Record,
+    /// The thread's root on this branch, which supersedes `previous`
+    /// directly or through intermediate edits.
+    record: Record,
+}
+
+impl ChangedEntry {
+    fn kinds(&self) -> [Option<&Kind>; 2] {
+        [self.previous.kind(), self.record.kind()]
+    }
 }
 
 struct ResolvedEntry {
@@ -226,6 +251,8 @@ fn apply_filters(diff: &mut Diff, args: &Args) -> crate::Result<()> {
     };
 
     diff.added.retain(|r| kind_match(r) && issuer_match(r));
+    diff.changed
+        .retain(|e| (kind_match(&e.previous) || kind_match(&e.record)) && issuer_match(&e.record));
     diff.resolved
         .retain(|e| kind_match(&e.old) && issuer_match(&e.old));
     diff.drifted
@@ -238,6 +265,7 @@ fn print_subjects(diff: &Diff) {
         .added
         .iter()
         .map(|r| r.subject())
+        .chain(diff.changed.iter().map(|e| e.record.subject()))
         .chain(diff.resolved.iter().map(|e| e.old.subject()))
         .chain(diff.drifted.iter().map(|d| d.record.subject()))
         .collect();
@@ -320,10 +348,26 @@ fn enforce_fail_flags(args: &Args, diff: &Diff) -> crate::Result<()> {
                     .unwrap_or(false)
             })
             .collect();
-        if !matched.is_empty() {
+        let in_list = |k: Option<&Kind>| k.is_some_and(|k| kinds.contains(&k.to_string().as_str()));
+        let escalated = diff
+            .changed
+            .iter()
+            .filter(|e| {
+                let [before, after] = e.kinds();
+                in_list(after) && !in_list(before)
+            })
+            .count();
+        if !matched.is_empty() || escalated > 0 {
+            let mut parts = Vec::new();
+            if !matched.is_empty() {
+                parts.push(format!("{} added record(s)", matched.len()));
+            }
+            if escalated > 0 {
+                parts.push(format!("{escalated} changed record(s)"));
+            }
             return Err(crate::Error::Validation(format!(
-                "diff failed: {} added record(s) match --fail-on {}",
-                matched.len(),
+                "diff failed: {} match --fail-on {}",
+                parts.join(" and "),
                 list
             )));
         }
@@ -524,9 +568,14 @@ fn compute_diff(old: &[Record], new: &[Record], project_root: &Path) -> Diff {
     // epoch/dependency are noise here. Resolve-kind records are filtered out
     // because they're surfaced as the closer in the Resolved section already;
     // listing them under Added too would double-count the same event.
+    let changed = find_changed(old, new, &old_ids);
+    let changed_new: HashSet<&str> = changed.iter().map(|e| e.record.id()).collect();
+    let changed_old: HashSet<&str> = changed.iter().map(|e| e.previous.id()).collect();
+
     let mut added: Vec<Record> = new_active
         .iter()
         .filter(|r| !old_ids.contains(r.id()))
+        .filter(|r| !changed_new.contains(r.id()))
         .filter(|r| r.as_annotation().is_some())
         .filter(|r| r.kind() != Some(&Kind::Resolve))
         .map(|r| (*r).clone())
@@ -548,6 +597,7 @@ fn compute_diff(old: &[Record], new: &[Record], project_root: &Path) -> Diff {
     let mut resolved: Vec<ResolvedEntry> = old_active
         .iter()
         .filter(|r| !new_active_ids.contains(r.id()))
+        .filter(|r| !changed_old.contains(r.id()))
         .map(|r| ResolvedEntry {
             old: (*r).clone(),
             closers: supersedes_index
@@ -593,9 +643,34 @@ fn compute_diff(old: &[Record], new: &[Record], project_root: &Path) -> Diff {
 
     Diff {
         added,
+        changed,
         resolved,
         drifted,
     }
+}
+
+/// Threads open on both sides whose root on this branch is a record not
+/// present at <ref>: an edit or re-anchor of the root, matched by thread
+/// origin so a chain of several edits still pairs with the <ref>-side root.
+fn find_changed(old: &[Record], new: &[Record], old_ids: &HashSet<&str>) -> Vec<ChangedEntry> {
+    let old_roots: HashMap<&str, &Record> = build_threads(old)
+        .into_iter()
+        .filter(|t| t.open)
+        .map(|t| (t.origin, t.root))
+        .collect();
+    let mut changed: Vec<ChangedEntry> = build_threads(new)
+        .into_iter()
+        .filter(|t| t.open && !old_ids.contains(t.root.id()))
+        .filter_map(|t| {
+            let previous = old_roots.get(t.origin)?;
+            Some(ChangedEntry {
+                previous: (*previous).clone(),
+                record: t.root.clone(),
+            })
+        })
+        .collect();
+    changed.sort_by_key(|e| sort_key(&e.record));
+    changed
 }
 
 fn created_at(r: &Record) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -612,7 +687,11 @@ fn sort_key(r: &Record) -> (String, u32) {
 }
 
 fn print_human(header: &DiffHeader, diff: &Diff, project_root: &Path) {
-    if diff.added.is_empty() && diff.resolved.is_empty() && diff.drifted.is_empty() {
+    if diff.added.is_empty()
+        && diff.changed.is_empty()
+        && diff.resolved.is_empty()
+        && diff.drifted.is_empty()
+    {
         println!("{}: no annotation changes.", header.human());
         return;
     }
@@ -625,6 +704,14 @@ fn print_human(header: &DiffHeader, diff: &Diff, project_root: &Path) {
         println!("Added on this branch ({})", diff.added.len());
         for r in &diff.added {
             print_added(r);
+        }
+    }
+
+    if !diff.changed.is_empty() {
+        println!();
+        println!("Changed on this branch ({})", diff.changed.len());
+        for entry in &diff.changed {
+            print_changed(entry);
         }
     }
 
@@ -655,6 +742,36 @@ fn print_added(r: &Record) {
         &att.body.summary,
         id_prefix(&att.id),
         &[],
+    );
+}
+
+fn print_changed(entry: &ChangedEntry) {
+    let Some(att) = entry.record.as_annotation() else {
+        return;
+    };
+    let was = match entry.previous.as_annotation() {
+        Some(prev) => {
+            let head = format!(
+                "was {} {} ({})",
+                prev.body.kind,
+                format_location(prev),
+                id_prefix(&prev.id)
+            );
+            if prev.body.summary != att.body.summary && !prev.body.summary.is_empty() {
+                format!("{head}: {:?}", prev.body.summary)
+            } else {
+                head
+            }
+        }
+        None => format!("was {}", id_prefix(entry.previous.id())),
+    };
+    print_record_row(
+        '*',
+        &att.body.kind.to_string(),
+        &format_location(att),
+        &att.body.summary,
+        id_prefix(&att.id),
+        &[was],
     );
 }
 
@@ -835,6 +952,16 @@ fn format_location(att: &crate::annotation::Annotation) -> String {
 
 fn print_json(header: &DiffHeader, diff: &Diff) {
     let added: Vec<_> = diff.added.iter().collect();
+    let changed: Vec<serde_json::Value> = diff
+        .changed
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "record": e.record,
+                "previous": e.previous,
+            })
+        })
+        .collect();
     let resolved: Vec<serde_json::Value> = diff
         .resolved
         .iter()
@@ -863,6 +990,7 @@ fn print_json(header: &DiffHeader, diff: &Diff) {
         "from_tip": header.from_tip,
         "comparison": header.comparison.as_str(),
         "added": added,
+        "changed": changed,
         "resolved": resolved,
         "drifted": drifted,
     });
