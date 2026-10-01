@@ -1406,6 +1406,7 @@ pub struct Position {
 }
 
 pub enum Kind { Pass, Fail, Blocker, Concern, Comment, Resolve, Praise, Suggestion, Waiver, Custom(String) }
+impl Kind { pub const BUILT_IN: &'static [Kind]; }   // every variant but Custom
 pub enum IssuerType { Human, Ai, Tool, Unknown }
 
 pub fn generate_id(annotation: &Annotation) -> String;
