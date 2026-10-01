@@ -3200,8 +3200,8 @@ fn test_record_stdin_reply_and_resolve_keys_are_not_line_shapes() {
     let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
     assert_ne!(code, 0);
     assert!(
-        stderr.contains("stdin line 1: stdin object missing 'kind'")
-            && stderr.contains("stdin line 2: stdin object missing 'kind'"),
+        stderr.contains("stdin line 1: key 'reply': unknown field")
+            && stderr.contains("stdin line 2: key 'reason': unknown field"),
         "{stderr}"
     );
     let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
@@ -5538,6 +5538,38 @@ fn test_batch_dry_run_creates_no_directories() {
 }
 
 // --- write path: envelopes, pointers, containment ---
+
+#[test]
+fn test_record_stdin_overrides_reject_unknown_keys_and_bad_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","suggestedfix":"lost"}"#,
+            "suggestedfix",
+        ),
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","supersede":"x"}"#,
+            "supersede",
+        ),
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","tags":["ok",3]}"#,
+            "tags",
+        ),
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","span":42}"#,
+            "span",
+        ),
+    ];
+    for (line, key) in cases {
+        let (_, stderr, code) = run_qualifier_stdin(
+            dir.path(),
+            &["record", "--stdin", "--dry-run"],
+            &format!("{line}\n"),
+        );
+        assert_ne!(code, 0, "{line} must be rejected");
+        assert!(stderr.contains(key), "error must name '{key}': {stderr}");
+    }
+}
 
 #[test]
 fn test_supersedes_across_subjects_is_rejected_on_single_record_paths() {
