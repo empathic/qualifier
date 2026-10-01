@@ -230,6 +230,8 @@ pub fn discover(root: &Path, respect_ignore: bool) -> crate::Result<Vec<QualFile
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
+            // Apply .gitignore under every VCS, not only inside a git repo.
+            .require_git(false)
             .add_custom_ignore_filename(".qualignore");
     } else {
         builder
