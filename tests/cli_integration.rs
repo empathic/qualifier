@@ -4319,6 +4319,39 @@ fn git_commit_all_allow_empty(dir: &Path) {
     assert!(status.success());
 }
 
+/// The human example on the `diff` agents page keeps the layout
+/// `print_record_row` produces: row headers end in the ID, closers and
+/// other detail sit on continuation lines, and nothing exceeds 80 columns.
+#[test]
+fn test_diff_agents_page_example_matches_row_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _, code) = run_qualifier(dir.path(), &["agents", "diff"]);
+    assert_eq!(code, 0);
+    let section = stdout
+        .split("## Output shape (human)")
+        .nth(1)
+        .expect("human output section");
+    let example = section.split("```").nth(1).expect("fenced example");
+    let mut rows = 0;
+    for line in example.lines() {
+        assert!(line.chars().count() <= 80, "wider than 80: {line:?}");
+        assert!(!line.contains("original:"), "never printed: {line:?}");
+        let marker = line.strip_prefix("  ").and_then(|l| l.chars().next());
+        if matches!(marker, Some('+' | '-' | '*' | '~')) && line.chars().nth(3) == Some(' ') {
+            rows += 1;
+            let id = line.rsplit_once('(').map(|(_, id)| id).unwrap_or("");
+            assert!(
+                id.len() == 9 && id.ends_with(')'),
+                "row header must end with the 8-char ID: {line:?}"
+            );
+        }
+    }
+    assert!(
+        rows >= 4,
+        "example should show a row per section: {example}"
+    );
+}
+
 #[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();

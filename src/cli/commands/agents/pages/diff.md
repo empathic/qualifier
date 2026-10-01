@@ -106,25 +106,45 @@ build log shows exactly which record triggered the failure.
 
 ## Output shape (human)
 
-```
-Comparing HEAD against merge-base of origin/main (a3f1c4e)
+Captured with `COLUMNS=80`:
 
-Added on this branch (3)
-  + concern    src/cli/commands/ls.rs:46         ls --unqualified is a stub  (da1fabb9)
-  + concern    src/cli/commands/emit.rs:130      empty id for custom records (d7b8f76a)
-  + suggestion Cargo.toml:24                     petgraph dependency unused  (ccfe88fa)
+```
+Comparing HEAD against merge-base of main (3476ded)
+
+Added on this branch (2)
+  + concern    src/auth.rs:5:7  login() ignores the user argument  (567f5707)
+  + suggestion src/parser.rs:2  (3de024f6)
+      split on ',' allocates; return an iterator
+
+Changed on this branch (1)
+  * blocker    src/config.rs:2  (15f8e94d)
+      unwrap on a missing config file panics at startup
+      was concern src/config.rs:2 (345f1275): "unwrap on a missing config file …
 
 Resolved on this branch (1)
-  - concern    src/auth.rs:88                    Token comparison timing-unsafe  (ce7d1a3c) — resolved by 8f790b7b: "constant-time compare landed in PR #142"
+  - concern    src/auth.rs:2  (aa2a64d2)
+      Token comparison is not constant-time
+      resolved by 2340089c: "constant-time compare landed in PR #142"
 
 Drifted (1)
-  ~ concern    src/annotation.rs:243             span content drifted  (b4a15cbd)
-      original: "AnnotationBody field-order pin"
-      src/annotation.rs:
-        242 | }
-      > 243 | // line moved underneath the span
-        244 | impl AnnotationBody {
+  ~ concern    src/parser.rs:5:7  (1b125cee)
+      depth() counts bytes, not nesting
+        src/parser.rs:
+          2 |     input.split(",").collect()
+          3 | }
+          4 |
+        > 5 | pub fn depth(s: &str) -> usize {
+        > 6 |     s.matches('(').count()
+        > 7 | }
 ```
+
+A row fits on one line (`marker KIND LOCATION  SUMMARY  (ID)`) only when
+it has nothing else to show and fits the width. Otherwise the header
+keeps the kind, location, and ID, and the summary and any further detail
+(the `was ...` line under Changed, each `resolved by` / `superseded by`
+closer under Resolved, the current code under Drifted) follow as
+indented lines, each cut to the width with `…`. The width is `$COLUMNS`
+when exported, else the terminal width, else 80.
 
 ## Output shape (json)
 

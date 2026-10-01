@@ -877,11 +877,13 @@ fn print_drifted(entry: &DriftEntry, project_root: &Path) {
 
     let mut continuations: Vec<String> = Vec::new();
     if let Some(ref span) = att.body.span {
-        let ctx = span_context::read_span_context(
+        let mut ctx = span_context::read_span_context(
             &project_root.join(&att.subject),
             span,
             span_context::DEFAULT_CONTEXT_LINES,
         );
+        // Label the snippet with the subject, not the absolute path read.
+        ctx.path = att.subject.clone();
         let formatted = span_context::format_human(&ctx);
         for line in formatted.lines() {
             continuations.push(line.to_string());
