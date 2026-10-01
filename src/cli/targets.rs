@@ -314,33 +314,42 @@ fn candidate_line(r: &Record, place: &str) -> String {
     )
 }
 
-/// Decide whether a target string should be parsed as a `<location>`
-/// rather than an id-prefix. Locations either contain a `:` (line/range)
-/// or contain a path separator (and are not pure hex).
-fn looks_like_location(target: &str) -> bool {
-    if target.contains(':') {
-        return true;
-    }
-    if target.contains('/') || target.contains('\\') || target.contains('.') {
-        // Path-like and not a pure hex id-prefix.
-        let is_hex = target.chars().all(|c| c.is_ascii_hexdigit());
-        return !is_hex;
-    }
-    false
+/// Whether `target` can be an ID prefix: non-empty lowercase hex.
+/// Anything else (`Makefile`, `src/a.rs`, `a.rs:3`) is a location.
+fn looks_like_id_prefix(target: &str) -> bool {
+    !target.is_empty()
+        && target
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Resolve a target string to a unique, live record. Accepts an id-prefix
-/// or a `<location>` (subject + optional span). A superseded or resolved
-/// record is rejected (see [`ensure_live`]).
+/// Resolve a target string to a unique, live record. A lowercase-hex
+/// target is an ID prefix; when no record ID starts with it, it is tried
+/// as a location (a file named `cafe`). Anything else is a `<location>`
+/// (subject + optional span). A superseded or resolved record is rejected
+/// (see [`ensure_live`]).
 pub(crate) fn resolve_target(
     target: &str,
     qual_files: &[QualFile],
     locator: &Locator,
 ) -> crate::Result<Record> {
-    let record = if looks_like_location(target) {
-        resolve_location_target(target, qual_files, locator)?
+    let record = if looks_like_id_prefix(target) {
+        let any_id_matches = qual_files
+            .iter()
+            .flat_map(|qf| qf.records.iter())
+            .any(|r| r.id().starts_with(target));
+        if any_id_matches {
+            resolve_id_prefix(target, qual_files)?
+        } else {
+            resolve_location_target(target, qual_files, locator).map_err(|_| {
+                crate::Error::Validation(format!(
+                    "no record found matching prefix '{target}', and no active record \
+                     at location '{target}'\nhint: for a file named '{target}', write ./{target}"
+                ))
+            })?
+        }
     } else {
-        resolve_id_prefix(target, qual_files)?
+        resolve_location_target(target, qual_files, locator)?
     };
     ensure_live(&record, qual_files)?;
     Ok(record)
