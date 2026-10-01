@@ -4290,6 +4290,36 @@ fn test_diff_warns_on_kinds_that_match_nothing() {
 }
 
 #[test]
+fn test_diff_width_without_columns_or_tty_is_80() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    git_commit_all_allow_empty(dir.path());
+    git_checkout_new(dir.path(), "feat");
+    let long = "word ".repeat(40);
+    record_as_ab(dir.path(), &["concern", "a.rs", long.trim()]);
+
+    // Piped stdout is not a terminal, so with COLUMNS unset the width is 80.
+    let output = qualifier_cmd()
+        .args(["diff", "main"])
+        .env_remove("COLUMNS")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let widest = stdout.lines().map(|l| l.chars().count()).max().unwrap();
+    assert_eq!(widest, 80, "{stdout}");
+}
+
+fn git_commit_all_allow_empty(dir: &Path) {
+    let status = Command::new("git")
+        .args(["commit", "-q", "--allow-empty", "-m", "init"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
     let (stdout, _stderr, code) = run_qualifier(dir.path(), &["--help"]);
