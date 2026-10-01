@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 // ─── Span types ─────────────────────────────────────────────────────────────
@@ -1022,41 +1022,40 @@ fn is_likely_typo(a: &str, b: &str) -> bool {
 
 /// Check a slice of records for supersession cycles.
 /// Returns Err with cycle details if a cycle is found.
+///
+/// Runs in time linear in the number of records: each record is walked at
+/// most once across all chains.
 pub fn check_supersession_cycles(records: &[Record]) -> crate::Result<()> {
-    let id_set: HashSet<&str> = records.iter().map(|r| r.id()).collect();
+    let next: HashMap<&str, &str> = records
+        .iter()
+        .filter_map(|r| r.supersedes().map(|target| (r.id(), target)))
+        .collect();
+    let ids: HashSet<&str> = records.iter().map(|r| r.id()).collect();
 
+    // Records whose chain is known to end without a cycle.
+    let mut done: HashSet<&str> = HashSet::new();
     for record in records {
-        if let Some(target) = record.supersedes() {
-            // Walk the chain from this record
-            let mut visited = HashSet::new();
-            visited.insert(record.id());
-            let mut current = target;
-
-            loop {
-                if visited.contains(current) {
-                    return Err(crate::Error::Cycle {
-                        context: "supersession".into(),
-                        detail: format!("cycle detected involving record {}", current),
-                    });
-                }
-
-                // Find the record with this ID
-                if !id_set.contains(current) {
-                    break; // target not in this file — that's fine
-                }
-
-                visited.insert(current);
-
-                // Find next link in chain
-                match records.iter().find(|r| r.id() == current) {
-                    Some(next) => match next.supersedes() {
-                        Some(next_target) => current = next_target,
-                        None => break,
-                    },
-                    None => break,
-                }
+        let mut path: Vec<&str> = Vec::new();
+        let mut on_path: HashSet<&str> = HashSet::new();
+        let mut current = record.id();
+        loop {
+            if done.contains(current) {
+                break;
+            }
+            if !on_path.insert(current) {
+                return Err(crate::Error::Cycle {
+                    context: "supersession".into(),
+                    detail: format!("cycle detected involving record {}", current),
+                });
+            }
+            path.push(current);
+            // A target outside this slice ends the chain.
+            match next.get(current) {
+                Some(&target) if ids.contains(target) => current = target,
+                _ => break,
             }
         }
+        done.extend(path);
     }
 
     Ok(())
@@ -1416,6 +1415,30 @@ mod tests {
         }));
 
         assert!(check_supersession_cycles(&[a, b]).is_err());
+    }
+
+    #[test]
+    fn test_supersession_cycle_check_long_chain_is_linear() {
+        let base = sample_annotation();
+        let link = |i: usize| -> Record {
+            let mut att = base.clone();
+            att.id = format!("id{i}");
+            att.body.supersedes = (i > 0).then(|| format!("id{}", i - 1));
+            Record::Annotation(Box::new(att))
+        };
+        let mut chain: Vec<Record> = (0..50_000).map(link).collect();
+        assert!(check_supersession_cycles(&chain).is_ok());
+
+        // Closing the loop anywhere is still caught.
+        if let Record::Annotation(first) = &mut chain[0] {
+            first.body.supersedes = Some("id49999".into());
+        }
+        assert!(check_supersession_cycles(&chain).is_err());
+
+        // A self-supersession is a cycle.
+        let mut own = base.clone();
+        own.body.supersedes = Some(own.id.clone());
+        assert!(check_supersession_cycles(&[Record::Annotation(Box::new(own))]).is_err());
     }
 
     fn with_span(start: (u32, Option<u32>), end: (u32, Option<u32>)) -> Annotation {
