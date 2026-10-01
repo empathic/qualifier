@@ -156,7 +156,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         },
     )?;
 
-    let qual_path = locator.write_path(&att.subject, args.file.as_deref().map(Path::new));
+    let qual_path = locator.write_path(&att.subject, args.file.as_deref().map(Path::new))?;
     let record = Record::Annotation(Box::new(att.clone()));
     targets::preflight_supersession(&qual_path, &record)?;
     targets::append(&qual_path, &record)?;

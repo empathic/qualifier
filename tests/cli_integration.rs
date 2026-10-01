@@ -5513,6 +5513,78 @@ fn test_batch_dry_run_creates_no_directories() {
     );
 }
 
+// --- write path: envelopes, pointers, containment ---
+
+/// A record envelope line for `record --stdin` / `emit --stdin`.
+fn envelope_line(subject: &str, body: &str) -> String {
+    format!(
+        "{{\"metabox\":\"1\",\"subject\":\"{subject}\",\"issuer\":\"mailto:t@x\",\
+         \"created_at\":\"2026-01-01T00:00:00Z\",\"id\":\"\",\"body\":{body}}}\n"
+    )
+}
+
+#[test]
+fn test_record_stdin_envelope_subject_outside_root_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_init(&repo);
+    for subject in ["../escaped.rs", "/tmp/escaped.rs"] {
+        let input = envelope_line(subject, r#"{"kind":"concern","summary":"x"}"#);
+        let (_, stderr, code) = run_qualifier_stdin(&repo, &["record", "--stdin"], &input);
+        assert_ne!(code, 0, "{subject} must be rejected");
+        assert!(stderr.contains("outside the project root"), "{stderr}");
+    }
+    let (_, stderr, code) = run_qualifier(
+        &repo,
+        &["record", "concern", "a.rs", "x", "--file", "../out.qual"],
+    );
+    assert_ne!(code, 0, "--file above the root must be rejected");
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+    assert!(
+        !dir.path().join(".qual").exists(),
+        "nothing written above root"
+    );
+    assert!(
+        !dir.path().join("out.qual").exists(),
+        "nothing written above root"
+    );
+}
+
+#[test]
+fn test_record_stdin_envelope_subject_is_normalized() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    let input = envelope_line("./src/../src/a.rs", r#"{"kind":"concern","summary":"x"}"#);
+    let (stdout, stderr, code) = run_qualifier_stdin(
+        &dir.path().join("src"),
+        &["record", "--stdin", "--format", "json"],
+        &input,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let v: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(
+        v["subject"], "src/a.rs",
+        "envelope subjects are root-relative"
+    );
+    assert!(dir.path().join("src/.qual").exists());
+}
+
+#[test]
+fn test_record_stdin_envelope_pointers_must_be_live() {
+    let dir = tempfile::tempdir().unwrap();
+    let zeros = "0".repeat(64);
+    for key in ["references", "supersedes"] {
+        let body = format!(r#"{{"kind":"concern","summary":"x","{key}":"{zeros}"}}"#);
+        let input = envelope_line("a.rs", &body);
+        let (_, stderr, code) =
+            run_qualifier_stdin(dir.path(), &["record", "--stdin", "--dry-run"], &input);
+        assert_ne!(code, 0, "dangling {key} must be rejected");
+        assert!(stderr.contains("no record with ID"), "{stderr}");
+    }
+}
+
 #[test]
 fn test_location_target_skips_resolve_records() {
     let dir = tempfile::tempdir().unwrap();
