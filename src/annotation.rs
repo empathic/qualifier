@@ -146,6 +146,102 @@ pub fn parse_location(s: &str) -> (String, Option<Span>) {
     }
 }
 
+// ─── Timestamp ──────────────────────────────────────────────────────────────
+
+/// An RFC 3339 `created_at` timestamp that keeps the exact text it was
+/// read from.
+///
+/// Record IDs hash `created_at` as written, so a record keeps its ID when
+/// it is rewritten and when another tool wrote it in a different (valid)
+/// RFC 3339 form. Timestamps qualifier creates use the canonical form
+/// (see [`Timestamp::canonical`]). Ordering and equality compare the
+/// instant first, then the text.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Timestamp {
+    instant: DateTime<Utc>,
+    text: String,
+}
+
+impl Timestamp {
+    /// The current time, in canonical form.
+    pub fn now() -> Self {
+        Utc::now().into()
+    }
+
+    /// Parse an RFC 3339 timestamp, keeping `text` as written.
+    pub fn parse(text: &str) -> Result<Self, chrono::ParseError> {
+        let instant = DateTime::parse_from_rfc3339(text)?.with_timezone(&Utc);
+        Ok(Timestamp {
+            instant,
+            text: text.to_string(),
+        })
+    }
+
+    /// The canonical text of an instant: RFC 3339 in UTC with a `Z`
+    /// suffix and 0, 3, 6 or 9 fractional-second digits (the fewest that
+    /// represent it exactly), e.g. `2026-02-24T10:00:00Z`,
+    /// `2026-02-24T10:00:00.500Z`, `2026-02-24T10:00:00.123456Z`.
+    pub fn canonical(instant: DateTime<Utc>) -> String {
+        instant.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    }
+
+    /// The timestamp text exactly as written.
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The instant this timestamp denotes.
+    pub fn instant(&self) -> DateTime<Utc> {
+        self.instant
+    }
+}
+
+impl From<DateTime<Utc>> for Timestamp {
+    fn from(instant: DateTime<Utc>) -> Self {
+        Timestamp {
+            text: Timestamp::canonical(instant),
+            instant,
+        }
+    }
+}
+
+impl std::ops::Deref for Timestamp {
+    type Target = DateTime<Utc>;
+
+    fn deref(&self) -> &DateTime<Utc> {
+        &self.instant
+    }
+}
+
+impl fmt::Display for Timestamp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::str::FromStr for Timestamp {
+    type Err = chrono::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Timestamp::parse(s)
+    }
+}
+
+impl Serialize for Timestamp {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text)
+    }
+}
+
+impl<'de> Deserialize<'de> for Timestamp {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Timestamp::parse(&text).map_err(|e| {
+            serde::de::Error::custom(format!("invalid RFC 3339 timestamp {text:?}: {e}"))
+        })
+    }
+}
+
 // ─── Kind enum ──────────────────────────────────────────────────────────────
 
 /// The type of an annotation.
@@ -437,8 +533,8 @@ pub struct Annotation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer_type: Option<IssuerType>,
 
-    /// When this annotation was created (RFC 3339).
-    pub created_at: DateTime<Utc>,
+    /// When this annotation was created (RFC 3339, hashed as written).
+    pub created_at: Timestamp,
 
     /// Content-addressed record ID (BLAKE3).
     pub id: String,
@@ -461,7 +557,7 @@ pub struct Epoch {
     pub issuer: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub id: String,
     pub body: EpochBody,
 }
@@ -479,7 +575,7 @@ pub struct DependencyRecord {
     pub issuer: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub id: String,
     pub body: DependencyBody,
 }
@@ -633,7 +729,7 @@ struct AnnotationCanonicalView<'a> {
     issuer: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     issuer_type: Option<&'a IssuerType>,
-    created_at: &'a DateTime<Utc>,
+    created_at: &'a Timestamp,
     id: &'a str,
     body: &'a AnnotationBody,
 }
@@ -647,7 +743,7 @@ struct EpochCanonicalView<'a> {
     issuer: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     issuer_type: Option<&'a IssuerType>,
-    created_at: &'a DateTime<Utc>,
+    created_at: &'a Timestamp,
     id: &'a str,
     body: &'a EpochBody,
 }
@@ -661,7 +757,7 @@ struct DependencyCanonicalView<'a> {
     issuer: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     issuer_type: Option<&'a IssuerType>,
-    created_at: &'a DateTime<Utc>,
+    created_at: &'a Timestamp,
     id: &'a str,
     body: &'a DependencyBody,
 }
@@ -994,7 +1090,8 @@ mod tests {
             issuer_type: None,
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1047,7 +1144,7 @@ mod tests {
             subject: String::new(),
             issuer: String::new(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1085,7 +1182,7 @@ mod tests {
             subject: "test".into(),
             issuer: "mailto:bot@localhost".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: "will be replaced".into(),
             body: AnnotationBody {
                 detail: None,
@@ -1113,7 +1210,7 @@ mod tests {
             subject: "test.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1158,7 +1255,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1180,7 +1277,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1215,7 +1312,7 @@ mod tests {
             subject: "x".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: "aaa".into(),
             body: AnnotationBody {
                 detail: None,
@@ -1236,7 +1333,7 @@ mod tests {
             subject: "x".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: "bbb".into(),
             body: AnnotationBody {
                 detail: None,
@@ -1358,7 +1455,7 @@ mod tests {
             subject: "foo.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1380,7 +1477,7 @@ mod tests {
             subject: "bar.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1408,7 +1505,7 @@ mod tests {
             subject: "foo.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1430,7 +1527,7 @@ mod tests {
             subject: "foo.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1466,7 +1563,7 @@ mod tests {
             subject: "test.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1497,7 +1594,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1519,7 +1616,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: Some(IssuerType::Human),
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1541,7 +1638,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1571,7 +1668,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1607,7 +1704,8 @@ mod tests {
             issuer_type: Some(IssuerType::Human),
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1644,7 +1742,8 @@ mod tests {
             issuer_type: None,
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1684,7 +1783,8 @@ mod tests {
             issuer_type: Some(IssuerType::Tool),
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: EpochBody {
                 refs: vec!["aaa".into(), "bbb".into()],
@@ -1825,7 +1925,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1847,7 +1947,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1874,7 +1974,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,

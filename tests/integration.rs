@@ -15,7 +15,8 @@ fn make_att(subject: &str, kind: Kind, summary: &str) -> Annotation {
         issuer_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
-            .with_timezone(&Utc),
+            .with_timezone(&Utc)
+            .into(),
         id: String::new(),
         body: AnnotationBody {
             detail: None,
@@ -48,7 +49,8 @@ fn test_golden_annotation_id() {
         issuer_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
-            .with_timezone(&Utc),
+            .with_timezone(&Utc)
+            .into(),
         id: String::new(),
         body: AnnotationBody {
             detail: None,
@@ -80,7 +82,8 @@ fn test_golden_epoch_id() {
         issuer_type: Some(IssuerType::Tool),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T12:00:00Z")
             .unwrap()
-            .with_timezone(&Utc),
+            .with_timezone(&Utc)
+            .into(),
         id: String::new(),
         body: EpochBody {
             refs: vec!["aaa".into(), "bbb".into(), "ccc".into()],
@@ -104,7 +107,8 @@ fn test_golden_dependency_id() {
         issuer_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T10:00:00Z")
             .unwrap()
-            .with_timezone(&Utc),
+            .with_timezone(&Utc)
+            .into(),
         id: String::new(),
         body: DependencyBody {
             depends_on: vec!["lib/auth".into(), "lib/http".into()],
@@ -169,7 +173,8 @@ fn test_compaction_prune_removes_superseded() {
         issuer_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
-            .with_timezone(&Utc),
+            .with_timezone(&Utc)
+            .into(),
         id: String::new(),
         body: AnnotationBody {
             detail: None,
@@ -247,7 +252,7 @@ fn test_supersession_cycle_detected() {
         subject: "x".into(),
         issuer: "mailto:test@test.com".into(),
         issuer_type: None,
-        created_at: now,
+        created_at: now.into(),
         id: "aaa".into(),
         body: AnnotationBody {
             detail: None,
@@ -268,7 +273,7 @@ fn test_supersession_cycle_detected() {
         subject: "x".into(),
         issuer: "mailto:test@test.com".into(),
         issuer_type: None,
-        created_at: now,
+        created_at: now.into(),
         id: "bbb".into(),
         body: AnnotationBody {
             detail: None,
@@ -301,7 +306,8 @@ fn test_cross_artifact_supersession_rejected() {
         issuer_type: None,
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
-            .with_timezone(&Utc),
+            .with_timezone(&Utc)
+            .into(),
         id: String::new(),
         body: AnnotationBody {
             detail: None,
@@ -332,7 +338,7 @@ fn test_kind_typo_detected_in_validation() {
         subject: "x.rs".into(),
         issuer: "mailto:test@test.com".into(),
         issuer_type: None,
-        created_at: Utc::now(),
+        created_at: Utc::now().into(),
         id: String::new(),
         body: AnnotationBody {
             detail: None,
@@ -380,7 +386,8 @@ fn test_metabox_roundtrip() {
         issuer_type: Some(IssuerType::Human),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
             .unwrap()
-            .with_timezone(&Utc),
+            .with_timezone(&Utc)
+            .into(),
         id: String::new(),
         body: AnnotationBody {
             detail: None,
@@ -442,7 +449,8 @@ fn test_supersession_filter() {
         issuer_type: Some(qualifier::annotation::IssuerType::Human),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
             .unwrap()
-            .with_timezone(&Utc),
+            .with_timezone(&Utc)
+            .into(),
         id: String::new(),
         body: AnnotationBody {
             detail: None,
@@ -481,7 +489,7 @@ fn ann(
     supersedes: Option<&str>,
 ) -> Record {
     let mut a = make_att(subject, kind, summary);
-    a.created_at = at(secs);
+    a.created_at = at(secs).into();
     a.body.references = references.map(String::from);
     a.body.supersedes = supersedes.map(String::from);
     Record::Annotation(Box::new(annotation::finalize(a)))
@@ -622,12 +630,12 @@ fn test_threads_ignore_epochs() {
 #[test]
 fn test_threads_ordered_by_subject_then_line() {
     let mut b = make_att("b.rs", Kind::Concern, "b");
-    b.created_at = at(0);
+    b.created_at = at(0).into();
     let mut a2 = make_att("a.rs", Kind::Concern, "a line 20");
-    a2.created_at = at(1);
+    a2.created_at = at(1).into();
     a2.body.span = Some(annotation::parse_span("20").unwrap());
     let mut a1 = make_att("a.rs", Kind::Concern, "a line 5");
-    a1.created_at = at(2);
+    a1.created_at = at(2).into();
     a1.body.span = Some(annotation::parse_span("5").unwrap());
     let records: Vec<Record> = [b, a2, a1]
         .into_iter()
@@ -802,4 +810,76 @@ fn test_custom_body_fields_on_epoch_and_dependency_survive() {
         let reparsed: Record = serde_json::from_str(&json).unwrap();
         assert_eq!(annotation::generate_record_id(&reparsed), record.id());
     }
+}
+
+// --- created_at is hashed as written ---
+
+#[test]
+fn test_created_at_is_kept_and_hashed_as_written() {
+    use qualifier::annotation::Timestamp;
+
+    let line = r#"{"metabox":"1","type":"annotation","subject":"x.rs","issuer":"mailto:t@t.com","created_at":"2026-02-24T10:00:00.5+00:00","id":"","body":{"kind":"concern","summary":"s"}}"#;
+    let record = annotation::finalize_record(serde_json::from_str(line).unwrap());
+    let json = serde_json::to_string(&record).unwrap();
+    assert!(
+        json.contains(r#""created_at":"2026-02-24T10:00:00.5+00:00""#),
+        "{json}"
+    );
+    assert_eq!(
+        record.id(),
+        "5a9a039a6c9a66f708ed504e6cf23df7f62af152c7030703f8a0527383cf3242",
+        "golden ID for a non-canonical created_at"
+    );
+    // The input line is already in canonical form, with `id` empty.
+    assert_eq!(
+        record.id(),
+        blake3::hash(line.as_bytes()).to_hex().to_string()
+    );
+
+    // The same instant in canonical form is a different record.
+    let canonical_line = line.replace("10:00:00.5+00:00", "10:00:00.500Z");
+    let other = annotation::finalize_record(serde_json::from_str(&canonical_line).unwrap());
+    assert_ne!(other.id(), record.id());
+    let a = record.as_annotation().unwrap();
+    let b = other.as_annotation().unwrap();
+    assert_eq!(a.created_at.instant(), b.created_at.instant());
+
+    // Records qualifier creates use the canonical form.
+    let t: Timestamp = "2026-02-24T12:00:00.5+02:00".parse().unwrap();
+    assert_eq!(
+        Timestamp::from(t.instant()).as_str(),
+        "2026-02-24T10:00:00.500Z"
+    );
+    assert!(Timestamp::parse("2026-02-24 10:00").is_err());
+}
+
+#[test]
+fn test_canonical_timestamp_matches_previous_serialization() {
+    use qualifier::annotation::Timestamp;
+
+    // Records written before created_at kept its text were serialized by
+    // chrono's serde impl; the canonical form must match it byte for byte.
+    for text in [
+        "2026-02-24T10:00:00Z",
+        "2026-02-24T10:00:00.5Z",
+        "2026-02-24T10:00:00.123456Z",
+        "2026-02-24T10:00:00.123456789Z",
+        "2026-02-24T10:00:00.000001+05:30",
+    ] {
+        let instant = chrono::DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&Utc);
+        let chrono_json = serde_json::to_string(&instant).unwrap();
+        assert_eq!(
+            format!("\"{}\"", Timestamp::canonical(instant)),
+            chrono_json
+        );
+    }
+}
+
+#[test]
+fn test_invalid_created_at_is_rejected() {
+    let line = r#"{"metabox":"1","type":"annotation","subject":"x.rs","issuer":"mailto:t@t.com","created_at":"yesterday","id":"","body":{"kind":"concern","summary":"s"}}"#;
+    let err = qual_file::parse_str(line).unwrap_err().to_string();
+    assert!(err.contains("RFC 3339"), "{err}");
 }

@@ -31,7 +31,7 @@ pub(crate) fn build_reply(target: &Record, input: ReplyInput) -> crate::Result<A
         subject: target.subject().to_string(),
         issuer: provenance::issuer(input.issuer.as_deref()),
         issuer_type: provenance::issuer_type(input.issuer_type.as_deref())?,
-        created_at: Utc::now(),
+        created_at: Utc::now().into(),
         id: String::new(),
         body: AnnotationBody {
             detail: input.detail,

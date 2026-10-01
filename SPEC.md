@@ -435,6 +435,16 @@ obey the following rules:
 8. **Number encoding.** Integers serialize as bare decimal with no leading
    zeros, no decimal point, no exponent. Negative values use a leading `-`.
 
+9. **Timestamps.** `created_at` is hashed exactly as it is written in the
+   record. Implementations MUST NOT re-encode it (normalize the offset,
+   add or drop fractional digits) when hashing or rewriting a record, so a
+   record keeps its ID wherever it is copied. Any valid RFC 3339 timestamp
+   is accepted. Records an implementation creates SHOULD use the
+   **canonical timestamp form**: UTC with a `Z` suffix and 0, 3, 6 or 9
+   fractional-second digits, the fewest that represent the instant exactly
+   (`2026-02-24T10:00:00Z`, `2026-02-24T10:00:00.500Z`,
+   `2026-02-24T10:00:00.123456Z`). Qualifier writes only this form.
+
 See the [Metabox specification](METABOX.md) for the full MCF definition.
 
 #### 2.8.2 Example
@@ -1317,7 +1327,7 @@ pub struct Annotation {
     pub subject: String,
     pub issuer: String,
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,              // hashed as written (§2.8.1 rule 9)
     pub id: String,
     pub body: AnnotationBody,
 }
@@ -1344,7 +1354,7 @@ pub struct Epoch {
     pub subject: String,
     pub issuer: String,
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub id: String,
     pub body: EpochBody,
 }
@@ -1362,7 +1372,7 @@ pub struct DependencyRecord {
     pub subject: String,
     pub issuer: String,
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub id: String,
     pub body: DependencyBody,
 }
@@ -1371,6 +1381,18 @@ pub struct DependencyBody {
     pub depends_on: Vec<String>,
     pub extra: ExtraFields,
 }
+
+/// RFC 3339 timestamp that keeps the text it was read from. Derefs to
+/// DateTime<Utc>; ordered by instant, then text.
+pub struct Timestamp { /* private */ }
+impl Timestamp {
+    pub fn now() -> Timestamp;                         // canonical form
+    pub fn parse(text: &str) -> Result<Timestamp, chrono::ParseError>;
+    pub fn canonical(instant: DateTime<Utc>) -> String; // UTC, Z, 0/3/6/9 digits
+    pub fn as_str(&self) -> &str;                       // as written
+    pub fn instant(&self) -> DateTime<Utc>;
+}
+impl From<DateTime<Utc>> for Timestamp;                // canonical form
 
 pub struct Span {
     pub start: Position,

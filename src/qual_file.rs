@@ -305,7 +305,8 @@ mod tests {
             issuer_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,

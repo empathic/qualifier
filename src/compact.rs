@@ -163,7 +163,7 @@ fn snapshot_where(
             subject: subject.to_string(),
             issuer: "urn:qualifier:compact".into(),
             issuer_type: Some(IssuerType::Tool),
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: EpochBody {
                 refs: live.iter().map(|r| r.id().to_string()).collect(),
@@ -217,7 +217,8 @@ mod tests {
             issuer_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -247,7 +248,8 @@ mod tests {
             issuer_type: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T11:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
