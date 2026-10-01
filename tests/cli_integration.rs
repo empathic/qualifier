@@ -5515,6 +5515,56 @@ fn test_batch_dry_run_creates_no_directories() {
 
 // --- write path: envelopes, pointers, containment ---
 
+#[test]
+fn test_supersedes_across_subjects_is_rejected_on_single_record_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let orig = write_id(dir.path(), &["record", "concern", "src/a.rs:1", "orig"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib/b.rs:1",
+            "replaces",
+            "--supersedes",
+            &orig,
+        ],
+    );
+    assert_ne!(code, 0, "record --supersedes across subjects must fail");
+    assert!(stderr.contains("cross-subject"), "{stderr}");
+
+    let a_reply = write_id(dir.path(), &["reply", &orig[..8], "on a"]);
+    let b = write_id(dir.path(), &["record", "concern", "lib/b.rs", "b"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &["reply", &b[..8], "moved", "--supersedes", &a_reply],
+    );
+    assert_ne!(code, 0, "reply --supersedes across subjects must fail");
+    assert!(stderr.contains("cross-subject"), "{stderr}");
+    let lib = std::fs::read_to_string(dir.path().join("lib/.qual")).unwrap();
+    assert!(!lib.contains("replaces") && !lib.contains("moved"), "{lib}");
+}
+
+#[test]
+fn test_existing_cross_subject_record_does_not_block_unrelated_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "src/a.rs:1", "a"]);
+    // A cross-subject supersession already on disk (written by another tool).
+    let bad = envelope_line(
+        "lib/b.rs",
+        &format!(r#"{{"kind":"concern","summary":"bad","supersedes":"{a}"}}"#),
+    )
+    .replace("\"id\":\"\"", &format!("\"id\":\"{}\"", "b".repeat(64)));
+    std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+    std::fs::write(dir.path().join("lib/.qual"), bad).unwrap();
+    let a2 = write_id(dir.path(), &["record", "concern", "src/a.rs:2", "a2"]);
+    let line = format!(
+        "{{\"kind\":\"concern\",\"location\":\"src/a.rs:2\",\"message\":\"a2 again\",\"supersedes\":\"{a2}\"}}\n"
+    );
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &line);
+    assert_eq!(code, 0, "{stderr}");
+}
+
 /// A record envelope line for `record --stdin` / `emit --stdin`.
 fn envelope_line(subject: &str, body: &str) -> String {
     format!(

@@ -402,12 +402,9 @@ fn resolve_location_target(
 /// Check a pointer value (`--supersedes`, `--references`, or the same
 /// keys on a batch line): it must be the full ID (64 lowercase hex) of a
 /// record in `qual_files`, and that record must be live (see
-/// [`ensure_live`]). Returns the ID. Errors are prefixed with `flag`.
-pub(crate) fn require_live_id(
-    flag: &str,
-    id: &str,
-    qual_files: &[QualFile],
-) -> crate::Result<String> {
+/// [`ensure_live`]). Returns the target record. Errors are prefixed with
+/// `flag`.
+fn find_live<'a>(flag: &str, id: &str, qual_files: &'a [QualFile]) -> crate::Result<&'a Record> {
     let err = |msg: String| crate::Error::Validation(format!("{flag}: {msg}"));
     let is_full_id = id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if !is_full_id {
@@ -426,38 +423,40 @@ pub(crate) fn require_live_id(
             ))
         })?;
     ensure_live(record, qual_files).map_err(|e| err(e.to_string()))?;
-    Ok(id.to_string())
+    Ok(record)
 }
 
 /// Check the pointer fields of a new record: `supersedes` and
 /// `references` must each be the full ID of a live record in
-/// `qual_files` (see [`require_live_id`]).
-pub(crate) fn check_pointers(record: &Record, qual_files: &[QualFile]) -> crate::Result<()> {
+/// `qual_files` (see [`find_live`]), and a superseded record must
+/// have the new record's subject. Only the new record's own edges are
+/// checked, so a bad record already on disk does not block unrelated
+/// writes. A new record cannot close a supersession cycle: its ID hashes
+/// its pointers, and every pointer names a record that already exists.
+/// Errors are prefixed with `flag_prefix` plus the field name (`--` for
+/// command-line flags, empty for batch keys).
+pub(crate) fn check_pointers(
+    record: &Record,
+    qual_files: &[QualFile],
+    flag_prefix: &str,
+) -> crate::Result<()> {
     if let Some(id) = record.supersedes() {
-        require_live_id("supersedes", id, qual_files)?;
+        let flag = format!("{flag_prefix}supersedes");
+        let target = find_live(&flag, id, qual_files)?;
+        if target.subject() != record.subject() {
+            return Err(crate::Error::Validation(format!(
+                "{flag}: target {} is on subject '{}', not '{}' \
+                 — cross-subject supersession is not allowed",
+                short_id(id),
+                target.subject(),
+                record.subject(),
+            )));
+        }
     }
     if let Some(id) = record.references() {
-        require_live_id("references", id, qual_files)?;
+        find_live(&format!("{flag_prefix}references"), id, qual_files)?;
     }
     Ok(())
-}
-
-/// Check that adding `record` to `existing` keeps supersession acyclic and
-/// same-subject.
-pub(crate) fn check_supersession(mut existing: Vec<Record>, record: &Record) -> crate::Result<()> {
-    existing.push(record.clone());
-    annotation::check_supersession_cycles(&existing)?;
-    annotation::validate_supersession_targets(&existing)
-}
-
-/// [`check_supersession`] against the records already in `qual_path`.
-pub(crate) fn preflight_supersession(qual_path: &Path, record: &Record) -> crate::Result<()> {
-    let existing = if qual_path.exists() {
-        qual_file::parse(qual_path)?.records
-    } else {
-        Vec::new()
-    };
-    check_supersession(existing, record)
 }
 
 pub(crate) fn record_created_at(r: &Record) -> chrono::DateTime<chrono::Utc> {
