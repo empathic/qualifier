@@ -926,6 +926,13 @@ write lands in a `.qual` file under the project root, laid out as in
 
 ### 6.1 Core Commands
 
+**Setup and agent guide:**
+
+```
+qualifier init [--yes] [--dry-run]              Bootstrap VCS merge config and agent directives
+qualifier agents [topic]                        Self-contained guide for AI coding agents
+```
+
 **Write commands:**
 
 ```
@@ -944,6 +951,8 @@ qualifier ls [--kind <k>]                 List subjects by kind
 qualifier praise <artifact>               Show who annotated an artifact and why
                                           (also available as the `blame` alias)
 qualifier review [subject]                Check freshness of annotations
+qualifier diff [ref]                      Records added, changed, resolved, or
+                                          drifted since a git ref
 ```
 
 **Maintain commands:**
@@ -1320,6 +1329,92 @@ changed since `main` (or `master`, or the `--changed-since` ref), and
 threads waiting on a decision — and nothing when both counts are zero.
 On the base branch, or outside git, the first line counts project-wide and
 ends with `(project-wide)`.
+
+### 6.13 `qualifier diff`
+
+```
+qualifier diff [REF] [--from-tip] [--fail-on K[,K]] [--fail-on-drift]
+               [--kind K[,K]] [--issuer-type TYPE] [--subjects-only]
+               [--format human|json] [--no-ignore]
+```
+
+Compares the live annotation records in the working tree against the
+`.qual` files committed at a git ref (default `main`). Git only.
+
+**Comparison point.** By default the comparison commit is the merge base
+of `HEAD` and `REF`, so records that landed on `REF` after the branch
+forked count as old, which is what a pull request introduces. `--from-tip`
+compares against the tip of `REF`. When `HEAD` and `REF` share no merge
+base, the tip is used and a hint is printed on stderr. The human header
+and the JSON `comparison` field name the comparison used: `merge-base`,
+`tip`, or `fallback-tip`.
+
+**Buckets.** Only annotation records are reported.
+
+- **Added** — live records whose ID is not present at the ref.
+- **Changed** — threads open on both sides whose root was edited or
+  re-anchored (superseded without being resolved). Matched by thread
+  origin (§7), so several edits in a row pair with the root at the ref.
+  Each entry shows the new root and what it was at the ref. These records
+  appear here instead of under Added and Resolved.
+- **Resolved** — records live at the ref that are no longer live, with
+  every record that superseded them (more than one after merging branches
+  that each closed it), or marked removed when nothing superseded them.
+- **Drifted** — records present on both sides whose span `content_hash`
+  no longer matches the file in the working tree. Records added on this
+  branch are not checked.
+
+`--kind` filters every bucket (a Changed entry matches on its old or new
+kind); `--issuer-type` filters by issuer type; `--subjects-only` prints
+only the affected subjects, one per line. A `--kind` or `--fail-on` kind
+that is neither built in nor carried by any record on either side prints
+`qualifier diff: warning: kind '<k>' matches no known kind` on stderr and
+the command still runs.
+
+The working tree's ignore rules (§10.1) apply to both sides, so a `.qual`
+file that is ignored now is not read at the ref either; `--no-ignore`
+reads every `.qual` file on both sides.
+
+**Exit codes.** The diff is printed first. Then `diff` exits 1 when
+`--fail-on` is given and Added holds a record of a listed kind, or a
+Changed entry's kind moved into the list (`concern` to `blocker`;
+rewording or re-anchoring an existing blocker does not count), or when
+`--fail-on-drift` is given and Drifted is non-empty. Otherwise it exits 0.
+
+**JSON output:**
+
+```json
+{
+  "ref": "main",
+  "base": "<full SHA of the comparison commit>",
+  "from_tip": false,
+  "comparison": "merge-base",
+  "added":    [<record>],
+  "changed":  [{"record": <new root>, "previous": <root at the ref>}],
+  "resolved": [{"record": <record at the ref>, "closer": <newest closer or null>, "closers": [<every closer, oldest first>]}],
+  "drifted":  [{"record": <record>, "expected": "<hash>", "actual": "<hash>"}]
+}
+```
+
+`qualifier agents diff` shows the human layout.
+
+### 6.14 `qualifier init`
+
+Bootstraps a project: configures union merges for `.qual` files (git:
+`*.qual merge=union` in `.gitattributes`; other VCSes get the §8.2
+instructions) and adds a one-line directive pointing AI coding agents at
+`qualifier agents` to the agent-instruction files it finds (`AGENTS.md`,
+`CLAUDE.md`, and similar), offering to create `AGENTS.md` when there is
+none. Each step is skipped when already configured. `--yes` accepts every
+step at its default; `--dry-run` reports what would change.
+
+### 6.15 `qualifier agents`
+
+Prints a self-contained guide for AI coding agents, following
+[AGENTS-CLI 0.1](AGENTS-CLI.md). With no argument it prints an orientation
+page and a topic index; `qualifier agents <topic>` prints one topic. An
+unknown topic prints `qualifier agents: no such topic '<topic>'.
+Available: <topics>` on stderr and exits 2.
 
 ## 7. Library API
 
