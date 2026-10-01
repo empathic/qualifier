@@ -113,7 +113,8 @@ pub struct Args {
     /// Resolution message (defaults to "Resolved")
     pub message: Option<String>,
 
-    /// Issuer identity URI (defaults to QUALIFIER_ISSUER, then detected agent harness, then VCS user email)
+    /// Issuer identity URI (defaults to QUALIFIER_ISSUER, then `issuer` in
+    /// .qualifier.toml or the user config, then the VCS user email).
     #[arg(long)]
     pub issuer: Option<String>,
 
