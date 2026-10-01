@@ -4029,8 +4029,8 @@ fn test_diff_resolved_inlines_closer_summary() {
     let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main"]);
     assert_eq!(code, 0);
     assert!(
-        stdout.contains("resolved by"),
-        "should mention closer: {stdout}"
+        stdout.contains("closed: fixed in PR #42"),
+        "should name the closer: {stdout}"
     );
     assert!(
         stdout.contains("fixed in PR #42"),
@@ -4459,6 +4459,150 @@ fn test_diff_fail_on_trips_when_changed_record_escalates() {
     // Shown by --kind when either side matches.
     let (stdout, _, _) = run_qualifier(dir.path(), &["diff", "main", "--kind", "concern"]);
     assert!(stdout.contains("Changed on this branch (1)"), "{stdout}");
+}
+
+/// Run a write command (`reply`, `resolve`) as `mailto:a@b.com` with JSON
+/// output, asserting success, and return the new record's ID.
+fn write_as_ab(dir: &Path, args: &[&str]) -> String {
+    let mut full = args.to_vec();
+    full.extend_from_slice(&["--issuer", "mailto:a@b.com", "--format", "json"]);
+    let (stdout, stderr, code) = run_qualifier(dir, &full);
+    assert_eq!(code, 0, "{args:?} failed: {stderr}");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("record json");
+    v["id"].as_str().expect("id").to_string()
+}
+
+/// The lines of one human `diff` section, from its heading to the next
+/// blank line.
+fn diff_section(stdout: &str, heading: &str) -> String {
+    stdout
+        .lines()
+        .skip_while(|l| !l.starts_with(heading))
+        .take_while(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn test_diff_shows_the_closer_of_a_thread_closed_on_the_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let root = record_as_ab(dir.path(), &["concern", "lib.rs", "a() rounds wrong"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    let question = write_as_ab(
+        dir.path(),
+        &[
+            "reply",
+            &root,
+            "Open question: also change b()?",
+            "--tag",
+            "status:needs-decision",
+        ],
+    );
+    let closer = write_as_ab(
+        dir.path(),
+        &["resolve", &root, "Won't change b()", "--reason", "wontfix"],
+    );
+
+    let (stdout, stderr, code) = run_qualifier_with_columns(dir.path(), &["diff", "main"], 200);
+    assert_eq!(code, 0, "{stderr}");
+    // The question added on the branch carries its thread's answer.
+    let added = diff_section(&stdout, "Added on this branch");
+    assert!(added.contains(&question[..8]), "{stdout}");
+    assert!(
+        added.contains(&format!(
+            "on thread {}, closed (wontfix): Won't change b() — question still pending  ({})",
+            &root[..8],
+            &closer[..8]
+        )),
+        "{stdout}"
+    );
+    // The resolved root names the closing resolve in the shared vocabulary.
+    let resolved = diff_section(&stdout, "Resolved on this branch");
+    assert!(
+        resolved.contains(&format!(
+            "closed (wontfix): Won't change b() — question still pending  ({})",
+            &closer[..8]
+        )),
+        "{stdout}"
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let threads = v["threads"].as_array().expect("threads array");
+    assert_eq!(threads.len(), 1, "{stdout}");
+    let t = &threads[0];
+    assert_eq!(t["origin"], root.as_str());
+    assert_eq!(t["closed_by"], closer.as_str());
+    assert_eq!(t["state"]["name"], "closed");
+    assert_eq!(t["state"]["reason"], "wontfix");
+    assert_eq!(t["state"]["pending_question"], true);
+    let listed: Vec<&str> = t["records"]
+        .as_array()
+        .expect("records array")
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    assert!(
+        listed.contains(&question.as_str()) && listed.contains(&root.as_str()),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn test_diff_resolved_after_edit_names_the_resolve() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let root = record_as_ab(dir.path(), &["concern", "a.rs", "needs work"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    let edit = record_as_ab(
+        dir.path(),
+        &["concern", "a.rs", "needs more work", "--supersedes", &root],
+    );
+    let closer = write_as_ab(
+        dir.path(),
+        &["resolve", &edit, "landed the fix", "--reason", "fixed"],
+    );
+
+    let (stdout, stderr, code) = run_qualifier_with_columns(dir.path(), &["diff", "main"], 200);
+    assert_eq!(code, 0, "{stderr}");
+    let resolved = diff_section(&stdout, "Resolved on this branch (1)");
+    assert!(
+        resolved.contains(&format!(
+            "closed (fixed): landed the fix  ({})",
+            &closer[..8]
+        )),
+        "a closed thread must be shown with the resolve that closed it: {stdout}"
+    );
+}
+
+#[test]
+fn test_diff_changed_thread_carries_its_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, new) = diff_changed_setup(dir.path(), "concern", "concern");
+    write_as_ab(
+        dir.path(),
+        &[
+            "reply",
+            &new,
+            "keep or drop?",
+            "--tag",
+            "status:needs-decision",
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier_with_columns(dir.path(), &["diff", "main"], 200);
+    assert_eq!(code, 0, "{stderr}");
+    let changed = diff_section(&stdout, "Changed on this branch");
+    assert!(changed.contains("needs decision"), "{stdout}");
+    let added = diff_section(&stdout, "Added on this branch");
+    assert!(
+        added.contains(&format!("on thread {}, needs decision", &new[..8])),
+        "{stdout}"
+    );
 }
 
 #[test]
