@@ -1,9 +1,14 @@
+use std::collections::HashSet;
+
 use clap::Args as ClapArgs;
 
 use crate::cli::output::Format;
+
+use crate::annotation::Record;
 use crate::cli::targets;
 use crate::compact::filter_superseded;
 use crate::qual_file;
+use crate::threads::{self, ThreadRenderer};
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -36,119 +41,105 @@ pub fn run(args: Args) -> crate::Result<()> {
 
 fn run_records(args: Args) -> crate::Result<()> {
     let subject = targets::Locator::from_cwd()?.subject(&args.artifact)?;
-    let all_qual_files = targets::discover_project(!args.no_ignore)?;
+    let records: Vec<Record> = targets::discover_project(!args.no_ignore)?
+        .into_iter()
+        .flat_map(|qf| qf.records)
+        .collect();
 
-    let records: Vec<&crate::annotation::Record> =
-        qual_file::find_records_for(&subject, &all_qual_files);
-
-    if records.is_empty() {
+    if !records.iter().any(|r| r.subject() == subject) {
         return Err(crate::Error::Validation(format!(
             "No records found for '{subject}'"
         )));
     }
 
-    let owned: Vec<crate::annotation::Record> = records.iter().map(|r| (*r).clone()).collect();
-    let active = filter_superseded(&owned);
+    // Annotations are attributed thread by thread: each thread's root, live
+    // replies, and closing resolve. Live epochs on the subject follow.
+    let thread_list = threads::threads_touching(&records, &subject, false);
+    let live: HashSet<&str> = filter_superseded(&records)
+        .into_iter()
+        .map(|r| r.id())
+        .collect();
+    let epochs: Vec<&Record> = records
+        .iter()
+        .filter(|r| r.subject() == subject && r.as_epoch().is_some() && live.contains(r.id()))
+        .collect();
 
     if args.format == Format::Json {
-        let entries: Vec<serde_json::Value> =
-            active.iter().filter_map(|r| record_to_json(r)).collect();
+        let mut ids: HashSet<&str> = epochs.iter().map(|r| r.id()).collect();
+        for t in &thread_list {
+            ids.extend(t.live_records().map(|r| r.id()));
+        }
+        let entries: Vec<serde_json::Value> = records
+            .iter()
+            .filter(|r| ids.contains(r.id()))
+            .filter_map(record_to_json)
+            .collect();
         let output = serde_json::json!({
             "subject": subject,
             "records": entries,
+            "threads": thread_list
+                .iter()
+                .map(threads::thread_summary_json)
+                .collect::<Vec<_>>(),
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&output).unwrap_or_default()
-        );
+        println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
 
-    // Human output
+    let renderer = ThreadRenderer {
+        all: false,
+        expand_closed: false,
+        attribution: true,
+        continuation: Some(&detail_lines),
+    };
+    let open = thread_list.iter().filter(|t| t.open).count();
+    let n = thread_list.len();
     println!();
-    println!("  {} \u{2014} {} records", subject, active.len());
-    println!();
-
-    for record in &active {
-        if let Some(att) = record.as_annotation() {
-            let date = att.created_at.format("%Y-%m-%d");
-            let id_short = if att.id.len() >= 8 {
-                format!("{}\u{2026}", &att.id[..8])
-            } else {
-                att.id.clone()
-            };
-
-            // Line 1: kind + summary
-            println!(
-                "    {:<10} {:?}",
-                att.body.kind.to_string(),
-                att.body.summary,
-            );
-
-            // Line 2: issuer + date + truncated ID + (issuer_type)
-            let issuer_type_suffix = match &att.issuer_type {
-                Some(at) if *at != crate::annotation::IssuerType::Human => {
-                    format!("  ({})", at)
-                }
-                _ => String::new(),
-            };
-            println!(
-                "          {}  {}  {}{}",
-                att.issuer, date, id_short, issuer_type_suffix,
-            );
-
-            // Line 3 (optional): suggested_fix, detail, or span
-            if let Some(ref fix) = att.body.suggested_fix {
-                println!("          suggested fix: {:?}", fix);
-            } else if let Some(ref detail) = att.body.detail {
-                println!("          detail: {:?}", detail);
-            }
-            if let Some(ref span) = att.body.span {
-                let end_str = match &span.end {
-                    Some(end) => format!(":{}", format_position(end)),
-                    None => String::new(),
-                };
-                println!(
-                    "          span: {}{}",
-                    format_position(&span.start),
-                    end_str,
-                );
-            }
-
-            println!();
-        } else if let Some(epoch) = record.as_epoch() {
-            let date = epoch.created_at.format("%Y-%m-%d");
-            let id_short = if epoch.id.len() >= 8 {
-                format!("{}\u{2026}", &epoch.id[..8])
-            } else {
-                epoch.id.clone()
-            };
-            println!("    {:<10} {:?}", "epoch", epoch.body.summary,);
-            let issuer_type_suffix = match &epoch.issuer_type {
-                Some(at) if *at != crate::annotation::IssuerType::Human => {
-                    format!("  ({})", at)
-                }
-                _ => String::new(),
-            };
-            println!(
-                "          {}  {}  {}{}",
-                epoch.issuer, date, id_short, issuer_type_suffix,
-            );
-            println!();
+    println!(
+        "  {subject} \u{2014} {n} thread{} ({open} open)",
+        if n == 1 { "" } else { "s" }
+    );
+    for t in &thread_list {
+        println!();
+        for line in renderer.render(t) {
+            println!("    {line}");
         }
     }
+    for epoch in epochs.iter().filter_map(|r| r.as_epoch()) {
+        let date = epoch.created_at.format("%Y-%m-%d");
+        let issuer_type = epoch
+            .issuer_type
+            .as_ref()
+            .map(|t| format!(", {t}"))
+            .unwrap_or_default();
+        println!();
+        println!(
+            "    [{}] epoch  {:?}  ({}{issuer_type}, {date})",
+            threads::short_id(&epoch.id),
+            epoch.body.summary,
+            threads::short_issuer(&epoch.issuer),
+        );
+    }
+    println!();
 
     Ok(())
 }
 
-fn format_position(pos: &crate::annotation::Position) -> String {
-    match pos.col {
-        Some(col) => format!("{}.{}", pos.line, col),
-        None => format!("{}", pos.line),
+/// The suggested fix, else the detail, under a record line.
+fn detail_lines(record: &Record) -> Vec<String> {
+    let Some(att) = record.as_annotation() else {
+        return Vec::new();
+    };
+    if let Some(ref fix) = att.body.suggested_fix {
+        vec![format!("suggested fix: {fix:?}")]
+    } else if let Some(ref detail) = att.body.detail {
+        vec![format!("detail: {detail:?}")]
+    } else {
+        Vec::new()
     }
 }
 
-fn record_to_json(record: &crate::annotation::Record) -> Option<serde_json::Value> {
+fn record_to_json(record: &Record) -> Option<serde_json::Value> {
     if let Some(att) = record.as_annotation() {
         let mut entry = serde_json::json!({
             "id": att.id,
