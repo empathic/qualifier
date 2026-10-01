@@ -1426,7 +1426,8 @@ pub fn append(path: &Path, record: &Record) -> Result<()>;
 pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>;
 
 // qualifier::content_hash — span freshness checking
-pub fn compute_span_hash(file_path: &Path, span: &Span) -> Option<String>;
+pub fn compute_span_hash(file_path: &Path, span: &Span) -> Result<String, SpanHashError>;
+pub enum SpanHashError { NotFound, Io(String), NotUtf8, OutOfRange { start, end, lines }, Reversed { start, end } }
 pub enum FreshnessStatus { Fresh, Drifted { expected, actual }, Missing { reason }, NoHash }
 pub fn check_freshness(file_path: &Path, span: &Span) -> FreshnessStatus;
 
