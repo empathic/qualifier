@@ -55,8 +55,9 @@ hidden by an ignore rule.
 ## Gotchas
 
 - `ls` operates on `.qual` files discovered from the project root. It does
-  not scan source files for artifacts that lack annotations — the
-  `--unqualified` flag exists as a placeholder but is not yet implemented.
+  not scan source files, so it cannot list artifacts that lack annotations.
+  To find those, compare `git ls-files` against the subjects `qualifier ls`
+  prints.
 - Counts include all records in the `.qual` file, not just active ones.
   An artifact that was annotated and then fully resolved will still appear
   in `ls` output with a non-zero count.
