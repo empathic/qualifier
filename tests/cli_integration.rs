@@ -4017,6 +4017,46 @@ fn test_diff_json_includes_base_and_from_tip() {
     assert!(v["added"].is_array());
 }
 
+/// Create and switch to a new branch in `dir`.
+fn git_checkout_new(dir: &Path, branch: &str) {
+    let status = Command::new("git")
+        .args(["checkout", "-q", "-b", branch])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Record an annotation as `mailto:a@b.com`, asserting success, and return
+/// the new record's ID.
+fn record_as_ab(dir: &Path, args: &[&str]) -> String {
+    let mut full = vec!["record"];
+    full.extend_from_slice(args);
+    full.extend_from_slice(&["--issuer", "mailto:a@b.com", "--format", "json"]);
+    let (stdout, stderr, code) = run_qualifier(dir, &full);
+    assert_eq!(code, 0, "record {args:?} failed: {stderr}");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("record json");
+    v["id"].as_str().expect("id").to_string()
+}
+
+#[test]
+fn test_diff_deleted_qual_file_surfaces_as_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("gone")).unwrap();
+    record_as_ab(dir.path(), &["concern", "gone/x.rs", "old finding"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    std::fs::remove_file(dir.path().join("gone/.qual")).unwrap();
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("Resolved on this branch (1)") && stdout.contains("removed (no successor)"),
+        "records in a .qual file deleted on the branch should be removed: {stdout}"
+    );
+}
+
 #[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
