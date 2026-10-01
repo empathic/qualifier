@@ -843,8 +843,13 @@ pids_gone() {
     return 1
 }
 
-# The call line every hook context with a binary must give.
-CALL_FORM="Run qualifier as \`\"$PWD/$PLUGIN/scripts/ensure-qualifier.sh\" exec <args>\`"
+# The call line every hook context with a binary must give: the wrapper
+# path unquoted, as the skills' allowed-tools rule spells it, unless the
+# path needs shell quoting.
+case "$PWD/$PLUGIN/scripts/ensure-qualifier.sh" in
+    *[!A-Za-z0-9/._+@%=:,-]*) CALL_FORM="Run qualifier as \`\"$PWD/$PLUGIN/scripts/ensure-qualifier.sh\" exec <args>\`" ;;
+    *) CALL_FORM="Run qualifier as \`$PWD/$PLUGIN/scripts/ensure-qualifier.sh exec <args>\`" ;;
+esac
 
 HOOK_PATH="$NOACCESS:$INTERP:/usr/bin:/bin"
 
@@ -980,6 +985,44 @@ case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call li
 # shellcheck disable=SC2016
 case "$ctx" in *'Call it as `qualifier`'*) fail "context must not route calls to the qualifier on PATH: $ctx" ;; esac
 ok "hook ignores a qualifier on PATH and gives the wrapper call line"
+
+# H7b. The call line the hook prints is approved by every skill's
+#      allowed-tools rule: with ${CLAUDE_PLUGIN_ROOT} replaced by the plugin
+#      root (Claude Code substitutes it in Bash rules), the rule's prefix
+#      (the text before `:*`) starts the printed command. The context says
+#      the skills list the form only when that holds.
+PLAIN_ROOT="$SANDBOX/plainroot/claude-code"
+mkdir -p "$PLAIN_ROOT"
+cp -R "$PLUGIN/hooks" "$PLUGIN/scripts" "$PLUGIN/skills" "$PLUGIN/.claude-plugin" "$PLAIN_ROOT/"
+SPACED_ROOT="$SANDBOX/spaced root/claude-code"
+mkdir -p "$SPACED_ROOT"
+cp -R "$PLUGIN/hooks" "$PLUGIN/scripts" "$PLUGIN/skills" "$PLUGIN/.claude-plugin" "$SPACED_ROOT/"
+for root in "$PLAIN_ROOT" "$SPACED_ROOT"; do
+    out="$(cd "$WITHQUAL" && env CLAUDE_PROJECT_DIR="$WITHQUAL" CLAUDE_PLUGIN_ROOT="$root" \
+        QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH" "$root/hooks/session-start" </dev/null)"
+    # ${CLAUDE_PLUGIN_ROOT} is the literal rule text, not a shell expansion.
+    # shellcheck disable=SC2016
+    printf '%s' "$out" | context_of | python3 -c '
+import glob, re, sys
+root, ctx = sys.argv[1], sys.stdin.read()
+m = re.search(r"Run qualifier as `(.*?) exec <args>`", ctx)
+assert m, f"no call line in: {ctx}"
+called, approved = m.group(1) + " exec", []
+for path in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
+    tools = re.search(r"^allowed-tools: (.*)$", open(path).read(), re.M).group(1)
+    rules = re.findall(r"Bash\(([^)]*ensure-qualifier\.sh exec):\*\)", tools)
+    assert rules, f"{path}: no wrapper rule"
+    approved.append(any(called.startswith(r.replace("${CLAUDE_PLUGIN_ROOT}", root)) for r in rules))
+claims = "allowed-tools" in ctx
+if " " in root:
+    assert called.startswith(chr(34)), f"a path with a space must be quoted: {called}"
+    assert not any(approved) and not claims, "a quoted call line must not claim the allowed-tools form"
+else:
+    assert all(approved), f"{called} is not approved by every skill rule"
+    assert claims, "an unquoted call line names the allowed-tools form"
+' "$root" || fail "the hook's call line and the skills' allowed-tools rule disagree (root $root)"
+done
+ok "the hook's call line matches every skill's allowed-tools rule, and a path needing quotes claims nothing"
 
 # H8. A slow summary is dropped instead of delaying the session, and
 #     everything it started is killed. The fixture would run for a minute;
@@ -1705,6 +1748,7 @@ else:
             bash_call("/opt/bin/qualifier threads"),
             bash_call(f"cd /tmp/repo\n{WRAPPER} exec record blocker src/net.rs:1 \"msg\""),
             bash_call("cd /tmp/repo\nls qualifier-notes"),
+            bash_call("/plugin/scripts/ensure-qualifier.sh exec threads --format json"),
         ])
     # The wrapper is often held in a variable (`Q=".../ensure-qualifier.sh";
     # "$Q" exec record ...`), so no-record keys on `exec <sub>` rather than
@@ -1724,6 +1768,7 @@ else:
             bash_call('cd x && "$Q" exec resolve 1a2b3c4d "fixed" --reason fixed'),
             bash_call(Q_SET + '\n"$Q" exec reply 1a2b3c4d "ok"'),
             bash_call('"$Q" exec record --stdin --dry-run < /tmp/x/batch.jsonl'),
+            bash_call('/plugin/scripts/ensure-qualifier.sh exec record concern src/net.rs:1 "m"'),
         ],
         DESCRIPTION_ONLY + [
             bash_call(f"{WRAPPER} exec threads --format json", "Record qualifier reply targets"),
