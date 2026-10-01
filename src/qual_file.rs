@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::annotation::{Annotation, Record};
+use crate::annotation::Record;
 
 /// A parsed `.qual` file.
 #[derive(Debug, Clone)]
@@ -124,7 +124,11 @@ pub fn write_all(path: &Path, records: &[Record]) -> crate::Result<()> {
 /// 3. Otherwise, use `{parent_dir}/.qual` (recommended directory-level layout).
 ///
 /// Creates parent directories if needed.
-pub fn resolve_qual_path(subject: &str, explicit_path: Option<&Path>) -> crate::Result<PathBuf> {
+#[cfg_attr(not(feature = "cli"), allow(dead_code))]
+pub(crate) fn resolve_qual_path(
+    subject: &str,
+    explicit_path: Option<&Path>,
+) -> crate::Result<PathBuf> {
     if let Some(p) = explicit_path {
         if let Some(parent) = p.parent()
             && !parent.as_os_str().is_empty()
@@ -162,48 +166,13 @@ pub fn resolve_qual_path(subject: &str, explicit_path: Option<&Path>) -> crate::
 }
 
 /// Find all records for a given subject across all discovered `.qual` files.
-pub fn find_records_for<'a>(subject: &str, qual_files: &'a [QualFile]) -> Vec<&'a Record> {
+#[cfg_attr(not(feature = "cli"), allow(dead_code))]
+pub(crate) fn find_records_for<'a>(subject: &str, qual_files: &'a [QualFile]) -> Vec<&'a Record> {
     qual_files
         .iter()
         .flat_map(|qf| qf.records.iter())
         .filter(|r| r.subject() == subject)
         .collect()
-}
-
-/// Find all annotations for a given subject across all discovered `.qual` files.
-///
-/// Filters to annotation records only (excludes epochs, dependencies, etc.).
-pub fn find_annotations_for<'a>(subject: &str, qual_files: &'a [QualFile]) -> Vec<&'a Annotation> {
-    qual_files
-        .iter()
-        .flat_map(|qf| qf.records.iter())
-        .filter_map(|r| r.as_annotation())
-        .filter(|att| att.subject == subject)
-        .collect()
-}
-
-/// Find which `.qual` file on disk contains records for a given subject.
-///
-/// Checks for a 1:1 file first (`{subject}.qual`), then the directory-level
-/// file (`{parent}/.qual`). Returns `None` if neither exists.
-pub fn find_qual_file_for(subject: &str) -> Option<PathBuf> {
-    let one_to_one = PathBuf::from(format!("{subject}.qual"));
-    if one_to_one.exists() {
-        return Some(one_to_one);
-    }
-
-    let subject_path = Path::new(subject);
-    let parent = subject_path.parent().unwrap_or(Path::new("."));
-    let dir_qual = if parent.as_os_str().is_empty() {
-        PathBuf::from(".qual")
-    } else {
-        parent.join(".qual")
-    };
-    if dir_qual.exists() {
-        return Some(dir_qual);
-    }
-
-    None
 }
 
 /// Discover all `.qual` files under a root directory.
@@ -272,7 +241,7 @@ pub fn discover(root: &Path, respect_ignore: bool) -> crate::Result<Vec<QualFile
 ///
 /// - `src/parser.rs.qual` -> `src/parser.rs`
 /// - `src/.qual` -> `src/`
-pub fn subject_name(qual_path: &Path) -> String {
+pub(crate) fn subject_name(qual_path: &Path) -> String {
     let s = qual_path.to_string_lossy();
     if let Some(stripped) = s.strip_suffix(".qual") {
         if stripped.ends_with('/') || stripped.ends_with(std::path::MAIN_SEPARATOR) {
@@ -317,7 +286,8 @@ pub fn find_project_root(start: &Path) -> Option<PathBuf> {
 }
 
 /// Detect the VCS in use at a given root.
-pub fn detect_vcs(root: &Path) -> Option<&'static str> {
+#[cfg_attr(not(feature = "cli"), allow(dead_code))]
+pub(crate) fn detect_vcs(root: &Path) -> Option<&'static str> {
     if root.join(".git").exists() {
         Some("git")
     } else if root.join(".hg").exists() {
@@ -338,7 +308,7 @@ pub fn detect_vcs(root: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::annotation::{self, AnnotationBody, Kind};
+    use crate::annotation::{self, Annotation, AnnotationBody, Kind};
     use chrono::Utc;
     use std::fs;
 
@@ -605,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_annotations_for_across_files() {
+    fn test_find_records_for_across_files() {
         let att_a1 = make_annotation("src/a.rs", Kind::Praise, "good");
         let att_a2 = make_annotation("src/a.rs", Kind::Concern, "meh");
         let att_b = make_annotation("src/b.rs", Kind::Pass, "ok");
@@ -626,48 +596,16 @@ mod tests {
             },
         ];
 
-        let found = find_annotations_for("src/a.rs", &qfs);
+        let found = find_records_for("src/a.rs", &qfs);
         assert_eq!(found.len(), 2);
-        assert!(found.iter().any(|a| a.id == att_a1.id));
-        assert!(found.iter().any(|a| a.id == att_a2.id));
+        assert!(found.iter().any(|r| r.id() == att_a1.id));
+        assert!(found.iter().any(|r| r.id() == att_a2.id));
 
-        let found_b = find_annotations_for("src/b.rs", &qfs);
+        let found_b = find_records_for("src/b.rs", &qfs);
         assert_eq!(found_b.len(), 1);
-        assert_eq!(found_b[0].id, att_b.id);
+        assert_eq!(found_b[0].id(), att_b.id);
 
-        let found_none = find_annotations_for("src/c.rs", &qfs);
+        let found_none = find_records_for("src/c.rs", &qfs);
         assert!(found_none.is_empty());
-    }
-
-    #[test]
-    fn test_find_qual_file_for_1to1() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("foo.rs.qual"), "").unwrap();
-
-        let subject = format!("{}/foo.rs", src.display());
-        let found = find_qual_file_for(&subject);
-        assert_eq!(found, Some(PathBuf::from(format!("{subject}.qual"))));
-    }
-
-    #[test]
-    fn test_find_qual_file_for_dir_qual() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join(".qual"), "").unwrap();
-
-        let subject = format!("{}/foo.rs", src.display());
-        let found = find_qual_file_for(&subject);
-        assert_eq!(found, Some(src.join(".qual")));
-    }
-
-    #[test]
-    fn test_find_qual_file_for_not_found() {
-        let dir = tempfile::tempdir().unwrap();
-        let subject = format!("{}/foo.rs", dir.path().join("src").display());
-        let found = find_qual_file_for(&subject);
-        assert_eq!(found, None);
     }
 }

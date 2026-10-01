@@ -4,7 +4,10 @@ pub mod content_hash;
 pub mod qual_file;
 pub mod threads;
 
+/// The `qualifier` binary's implementation. Not part of the library API
+/// (SPEC.md §7).
 #[cfg(feature = "cli")]
+#[doc(hidden)]
 pub mod cli;
 
 /// Library-wide error type.

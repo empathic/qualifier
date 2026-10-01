@@ -103,7 +103,8 @@ fn parse_position(s: &str) -> Result<Position, String> {
 /// - `"src/parser.rs"` → `("src/parser.rs", None)`
 /// - `"src/parser.rs:42"` → `("src/parser.rs", Some(Span{start: line 42}))`
 /// - `"src/parser.rs:15:28"` → `("src/parser.rs", Some(Span{start: line 15, end: line 28}))`
-pub fn parse_location(s: &str) -> (String, Option<Span>) {
+#[cfg_attr(not(feature = "cli"), allow(dead_code))]
+pub(crate) fn parse_location(s: &str) -> (String, Option<Span>) {
     let parts: Vec<&str> = s.rsplitn(3, ':').collect();
     match parts.len() {
         3 => {

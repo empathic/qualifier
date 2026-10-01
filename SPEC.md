@@ -1296,8 +1296,14 @@ ends with `(project-wide)`.
 ## 7. Library API
 
 The `qualifier` crate exposes its library API from `src/lib.rs`. Library
-consumers add `qualifier = { version = "0.4", default-features = false }` to
-avoid pulling in CLI dependencies.
+consumers add `qualifier = { version = "0.9", default-features = false }` to
+avoid pulling in CLI dependencies (keep the version at the current minor
+release; pre-1.0, each minor release may change this API).
+
+This section lists the **complete supported library surface**. Items not
+listed here, including the `qualifier::cli` module (the binary's
+implementation, built with the default `cli` feature), are not part of the
+API and may change in any release.
 
 ```rust
 // qualifier::annotation — record types and core logic
@@ -1319,7 +1325,10 @@ impl Record {
     pub fn issuer_type(&self) -> Option<&IssuerType>;
     pub fn as_annotation(&self) -> Option<&Annotation>;
     pub fn as_epoch(&self) -> Option<&Epoch>;
+    pub fn record_type(&self) -> &str;          // envelope `type`; "" if absent
 }
+// Record, Annotation, Epoch, DependencyRecord and the body types implement
+// Serialize/Deserialize; a .qual line is `serde_json::from_str::<Record>`.
 
 pub struct Annotation {
     pub metabox: String,                    // always "1"
@@ -1399,6 +1408,12 @@ pub struct Span {
     pub end: Option<Position>,          // normalized to Some(start) before hashing
     pub content_hash: Option<String>,   // BLAKE3 of spanned lines
 }
+impl Span {
+    pub fn end_or_start(&self) -> &Position;
+    pub fn normalize(&mut self);        // materialize end = start
+}
+/// Parse CLI span syntax: "42", "42:58", "42.5:58.80".
+pub fn parse_span(s: &str) -> Result<Span, String>;
 
 pub struct Position {
     pub line: u32,               // 1-indexed
@@ -1408,6 +1423,7 @@ pub struct Position {
 pub enum Kind { Pass, Fail, Blocker, Concern, Comment, Resolve, Praise, Suggestion, Waiver, Custom(String) }
 impl Kind { pub const BUILT_IN: &'static [Kind]; }   // every variant but Custom
 pub enum IssuerType { Human, Ai, Tool, Unknown }
+// Kind and IssuerType implement Display and FromStr (snake_case names).
 
 pub fn generate_id(annotation: &Annotation) -> String;
 pub fn generate_epoch_id(epoch: &Epoch) -> String;
@@ -1415,6 +1431,8 @@ pub fn generate_dependency_id(dep: &DependencyRecord) -> String;
 pub fn generate_unknown_id(value: &serde_json::Value) -> String; // custom record types
 pub fn generate_record_id(record: &Record) -> String;
 pub fn validate(annotation: &Annotation) -> Vec<String>;
+pub fn check_supersession_cycles(records: &[Record]) -> Result<()>;      // Err(Error::Cycle)
+pub fn validate_supersession_targets(records: &[Record]) -> Result<()>;  // cross-subject
 pub fn finalize(annotation: Annotation) -> Annotation;
 pub fn finalize_epoch(epoch: Epoch) -> Epoch;
 pub fn finalize_record(record: Record) -> Record;
@@ -1424,7 +1442,10 @@ pub struct QualFile { pub path: PathBuf, pub subject: String, pub records: Vec<R
 pub fn parse(path: &Path) -> Result<QualFile>;                     // strict: first bad line is an error
 pub fn parse_lenient(path: &Path) -> Result<(QualFile, Vec<ParseIssue>)>; // skips bad lines
 pub struct ParseIssue { pub path: PathBuf, pub line: usize, pub message: String }
+pub fn parse_str(content: &str) -> Result<Vec<Record>>;            // strict, in memory
 pub fn append(path: &Path, record: &Record) -> Result<()>;
+pub fn write_all(path: &Path, records: &[Record]) -> Result<()>;    // rewrite a whole file
+pub fn find_project_root(start: &Path) -> Option<PathBuf>;          // nearest VCS root
 pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>; // lenient; warns on stderr
 
 // qualifier::content_hash — span freshness checking
@@ -1440,6 +1461,10 @@ pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult);
 pub fn prune_subject(qual_file: &QualFile, subject: &str) -> (QualFile, CompactResult);
 pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult);
 pub fn snapshot_subject(qual_file: &QualFile, subject: &str) -> (QualFile, CompactResult);
+
+// qualifier (crate root)
+pub enum Error { Io(std::io::Error), Json(serde_json::Error), Cycle { context: String, detail: String }, Validation(String) }
+pub type Result<T> = std::result::Result<T, Error>;
 
 // qualifier::threads — group annotations into conversations
 pub struct Thread<'a> {
@@ -1648,7 +1673,7 @@ cli = ["dep:clap", "dep:comfy-table", "dep:figment"]
 
 ## 12. Future Considerations (Out of Scope)
 
-These are explicitly **not** part of v0.3 but are anticipated:
+These are explicitly **not** part of the current release but are anticipated:
 
 - **First-class scoring layer:** A built-in implementation of the example
   scoring model in §4 (`qualifier score`, `qualifier check`, dependency
