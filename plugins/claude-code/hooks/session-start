@@ -124,9 +124,9 @@ if [ -z "$BIN" ] && ! "$WRAPPER" prebuilt-target >/dev/null 2>&1; then
     call_line="There is no prebuilt qualifier binary for this platform, so the plugin cannot"
     call_line+=" install its pinned release. Ask the user to ${manual_install}"
 elif [ -z "$BIN" ]; then
-    call_line="The plugin could not install its pinned qualifier release here (download or"
-    call_line+=" checksum failed; it retries next session). If that persists (e.g. no network"
-    call_line+=" access to GitHub releases), ask the user to ${manual_install}"
+    call_line="The plugin could not install its pinned qualifier release here (the download,"
+    call_line+=" its checksum, or the downloaded binary failed; it retries next session). If that"
+    call_line+=" persists (e.g. no network access to GitHub releases), ask the user to ${manual_install}"
 else
     # Each qual skill's allowed-tools rule is the plugin root's wrapper path
     # followed by ` exec`, unquoted, so the call line gives the path
