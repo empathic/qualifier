@@ -2103,6 +2103,43 @@ fn test_review_finds_annotations_from_subdirectory() {
     );
 }
 
+#[test]
+fn test_review_subject_is_cwd_relative_and_matches_subtree() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("src/net")).unwrap();
+    std::fs::write(dir.path().join("src/a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(dir.path().join("src/net/tcp.rs"), "fn t() {}\n").unwrap();
+    std::fs::write(dir.path().join("top.rs"), "fn top() {}\n").unwrap();
+    for loc in ["src/a.rs:1", "src/net/tcp.rs:1", "top.rs:1"] {
+        let (_, stderr, rc) = run_qualifier(
+            dir.path(),
+            &["record", "concern", loc, "x", "--issuer", "mailto:t@x.com"],
+        );
+        assert_eq!(rc, 0, "{stderr}");
+    }
+    let src = dir.path().join("src");
+
+    // From src/, `a.rs` names src/a.rs.
+    let (stdout, _, code) = run_qualifier(&src, &["review", "a.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("FRESH"), "{stdout}");
+    assert!(stdout.contains("src/a.rs:1"), "{stdout}");
+    assert!(stdout.contains("1 annotations checked"), "{stdout}");
+
+    // A directory selects every subject beneath it.
+    let (stdout, _, _) = run_qualifier(&src, &["review", "."]);
+    assert!(stdout.contains("2 annotations checked"), "{stdout}");
+    assert!(!stdout.contains("top.rs"), "{stdout}");
+    let (stdout, _, _) = run_qualifier(dir.path(), &["review", "src/net"]);
+    assert!(stdout.contains("src/net/tcp.rs:1"), "{stdout}");
+    assert!(stdout.contains("1 annotations checked"), "{stdout}");
+
+    // A path outside the project root is an error, not an empty success.
+    let (_, stderr, code) = run_qualifier(&src, &["review", "../../elsewhere.rs"]);
+    assert_ne!(code, 0, "{stderr}");
+}
+
 // --- qualifier emit (raw record write) ---
 
 #[test]
