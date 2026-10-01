@@ -45,7 +45,7 @@ each against sample calls and `qualifier --help`'s subcommand list.
   or a subagent, however it invoked qualifier. The fixture's own records
   carry no session tag.
 - `no-bare-qualifier.md` — no Bash command runs a bare `qualifier <sub>`;
-  only the wrapper's `"<path>" exec <args>` form, since the plugin keeps
+  only the wrapper's `<path>/ensure-qualifier.sh exec <args>` form, since the plugin keeps
   its binary off `PATH` (see `scripts/ensure-qualifier.sh` and
   `hooks/session-start`). The regex is coarse: a `grep`/`echo` command
   whose own text contains "qualifier record" would also match.

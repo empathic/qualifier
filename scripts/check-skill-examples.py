@@ -124,7 +124,7 @@ def extract(path, errors):
     """Returns the file's examples; appends extraction problems to errors."""
     lines = open(path, encoding="utf-8").read().split("\n")
     rel = os.path.relpath(path, REPO)
-    # Blank the frontmatter (allowed-tools names `qualifier:*`).
+    # Blank the frontmatter (allowed-tools names the wrapper, not an example).
     if lines and lines[0] == "---":
         for i in range(1, len(lines)):
             if lines[i] == "---":

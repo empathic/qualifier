@@ -246,8 +246,14 @@ download_and_verify() {
     rm -f "${STAGING}/${tarball}"
     [ -f "${STAGING}/qualifier" ] || { log "Error: ${tarball} does not contain qualifier."; exit 1; }
     chmod +x "${STAGING}/qualifier"
-    is_pinned "${STAGING}/qualifier" \
-        || { log "Error: the downloaded binary does not report qualifier ${PINNED_VERSION}."; exit 1; }
+    if ! is_pinned "${STAGING}/qualifier"; then
+        # A verified binary that won't run at all (e.g. a glibc build on a
+        # musl system) is a platform problem: the source install works.
+        "${STAGING}/qualifier" --version </dev/null >/dev/null 2>&1 \
+            || cargo_fallback "the prebuilt qualifier ${PINNED_VERSION} binary for ${target} does not run on this system"
+        log "Error: the downloaded binary does not report qualifier ${PINNED_VERSION}."
+        exit 1
+    fi
     sha256_of "${STAGING}/qualifier" >"${STAGING}/qualifier.sha256"
 }
 

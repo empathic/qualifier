@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # SessionStart hook for the qual plugin. In a project that contains .qual
 # files, inject how to call qualifier, a short thread summary, and the
-# using-qualifier skill. Silent everywhere else. Never fails the session:
-# every path exits 0.
+# using-qualifier skill. In the first session of each plugin version, in
+# any directory, also show the user a Getting started message. Silent
+# otherwise. Never fails the session: every path exits 0.
 
 set -uo pipefail
 
@@ -95,8 +96,75 @@ escape_for_json() {
     printf '%s' "$s"
 }
 
+# Getting started: a message shown to the user in the first session of each
+# plugin version (after install or upgrade), in any directory. The version
+# last shown is recorded in the plugin's persistent data directory
+# ($CLAUDE_PLUGIN_DATA, kept across plugin updates; the plugin root is
+# replaced on each one). The message is shown only once that record is
+# written: with no usable data directory it is never shown, rather than
+# shown in every session.
+GETTING_STARTED_MARKER="getting-started-shown"
+README_URL="https://github.com/empathic/qualifier/tree/main/plugins/claude-code#getting-started"
+
+plugin_version() {
+    awk -F'"' '/"version"[[:space:]]*:/ { print $4; exit }' \
+        "$PLUGIN_ROOT/.claude-plugin/plugin.json" 2>/dev/null
+}
+
+# Succeeds when the Getting started message is due for version $1, after
+# recording that it was shown.
+record_getting_started() {
+    local version="$1" data="${CLAUDE_PLUGIN_DATA:-}" marker tmp
+    [ -n "$version" ] || return 1
+    case "$data" in /?*) ;; *) return 1 ;; esac
+    marker="$data/$GETTING_STARTED_MARKER"
+    [ "$(cat "$marker" 2>/dev/null)" != "$version" ] || return 1
+    mkdir -p "$data" 2>/dev/null || return 1
+    tmp="$marker.$$"
+    { printf '%s\n' "$version" >"$tmp"; } 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+    mv -f "$tmp" "$marker" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+}
+
+# The message for plugin version $1, pinning qualifier $2.
+getting_started_message() {
+    local install
+    if "$WRAPPER" prebuilt-target >/dev/null 2>&1; then
+        install="The first qualifier call downloads qualifier $2, checks it against the checksum"
+        install+=" shipped with the plugin, and installs it in the plugin's own data directory"
+        install+=" (~/.local/share/qualifier/plugin by default). A qualifier on your PATH is not used."
+    else
+        install="There is no prebuilt qualifier for this platform: install qualifier $2 with"
+        install+=" cargo and set QUALIFIER_BIN to it (see the README). A qualifier on your PATH is not used."
+    fi
+    printf '%s\n' \
+        "qual $1: getting started" \
+        "" \
+        "qual keeps findings, decisions, and rejected options in .qual files next to the code, not in chat, so the next session or person can act on them." \
+        "" \
+        "Things to try:" \
+        "  \"Review the changes on this branch and record the findings in qualifier\"" \
+        "  \"We're choosing between two designs: record the one we reject and why\"" \
+        "  \"Triage the open qualifier threads\"" \
+        "" \
+        "$install" \
+        "" \
+        "More: the Getting started section of the plugin README, $README_URL"
+}
+
+pinned_version="$("$WRAPPER" pinned-version 2>/dev/null || true)"
+getting_started=""
+version="$(plugin_version)"
+if record_getting_started "$version"; then
+    getting_started="$(getting_started_message "$version" "$pinned_version")"
+fi
+
 ROOT="$(find_root "$PROJECT_DIR")" || ROOT="$PROJECT_DIR"
-has_qual_files "$ROOT" || exit 0
+if ! has_qual_files "$ROOT"; then
+    if [ -n "$getting_started" ]; then
+        printf '{"systemMessage":"%s"}\n' "$(escape_for_json "$getting_started")"
+    fi
+    exit 0
+fi
 
 # The skill body with its frontmatter stripped: the block between the first
 # and second `---` lines. A file with no frontmatter (first line isn't
@@ -109,7 +177,6 @@ skill_body="$(awk '
 ' "$PLUGIN_ROOT/skills/using-qualifier/SKILL.md" 2>/dev/null)"
 
 BIN="$("$WRAPPER" 2>/dev/null)" || BIN=""
-pinned_version="$("$WRAPPER" pinned-version 2>/dev/null || true)"
 
 # The manual route: the wrapper never looks on PATH, so a cargo-installed
 # qualifier is used only once QUALIFIER_BIN names it.
@@ -124,11 +191,23 @@ if [ -z "$BIN" ] && ! "$WRAPPER" prebuilt-target >/dev/null 2>&1; then
     call_line="There is no prebuilt qualifier binary for this platform, so the plugin cannot"
     call_line+=" install its pinned release. Ask the user to ${manual_install}"
 elif [ -z "$BIN" ]; then
-    call_line="The plugin could not install its pinned qualifier release here (download or"
-    call_line+=" checksum failed; it retries next session). If that persists (e.g. no network"
-    call_line+=" access to GitHub releases), ask the user to ${manual_install}"
+    call_line="The plugin could not install its pinned qualifier release here (the download,"
+    call_line+=" its checksum, or the downloaded binary failed; it retries next session). If that"
+    call_line+=" persists (e.g. no network access to GitHub releases), ask the user to ${manual_install}"
 else
-    call_line="Run qualifier as \`\"$WRAPPER\" exec <args>\` (pre-approved in every qual skill); the qual skills write \`qualifier\` for short. A \`qualifier\` on your PATH, if any, is not used and may be a different version."
+    # Each qual skill's allowed-tools rule is the plugin root's wrapper path
+    # followed by ` exec`, unquoted, so the call line gives the path
+    # unquoted whenever it needs no shell quoting. A path that does is
+    # quoted, and then no rule matches its text.
+    case "$WRAPPER" in
+        *[!A-Za-z0-9/._+@%=:,-]*)
+            call_line="Run qualifier as \`\"$WRAPPER\" exec <args>\`."
+            ;;
+        *)
+            call_line="Run qualifier as \`$WRAPPER exec <args>\` (the form each qual skill lists in its allowed-tools)."
+            ;;
+    esac
+    call_line+=" The qual skills write \`qualifier\` for short. A \`qualifier\` on your PATH, if any, is not used and may be a different version."
     summary="$(bounded_summary "$BIN")"
 fi
 
@@ -141,6 +220,10 @@ $(printf '%s\n' "${body_lines[@]}")
 ${skill_body}
 </qualifier-plugin>"
 
-printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
-    "$(escape_for_json "$context")"
+system_message=""
+if [ -n "$getting_started" ]; then
+    system_message="\"systemMessage\":\"$(escape_for_json "$getting_started")\","
+fi
+printf '{%s"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
+    "$system_message" "$(escape_for_json "$context")"
 exit 0
