@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 pub mod commands;
 pub mod config;
@@ -106,7 +106,13 @@ pub fn run() {
     // Detect if the user typed "blame" so we can print a hint
     let used_blame_alias = std::env::args().nth(1).is_some_and(|arg| arg == "blame");
 
-    let cli = Cli::parse();
+    // Load config before parsing: it supplies the `--format` default. A
+    // load error is reported after parsing, so `--help` still works.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let project_root = crate::qual_file::find_project_root(&cwd).unwrap_or(cwd);
+    let loaded = config::load(Some(&project_root));
+    let format_default = loaded.as_ref().map_or(output::Format::Human, |c| c.format);
+    let cli = parse_with_format_default(format_default);
 
     if used_blame_alias {
         eprintln!(
@@ -114,15 +120,14 @@ pub fn run() {
         );
     }
 
-    // Validate config eagerly so a malformed .qualifier.toml or
-    // ~/.config/qualifier/config.toml fails before the command runs. The
-    // result is discarded for now — no command consumes Config yet — but
-    // surfacing the parse error here is the contract callers expect.
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let project_root = crate::qual_file::find_project_root(&cwd);
-    if let Err(e) = config::load(project_root.as_deref()) {
-        eprintln!("qualifier: {e}");
-        std::process::exit(1);
+    // A malformed .qualifier.toml, user config, or QUALIFIER_FORMAT fails
+    // before the command runs.
+    match loaded {
+        Ok(cfg) => config::init(cfg),
+        Err(e) => {
+            eprintln!("qualifier: {e}");
+            std::process::exit(1);
+        }
     }
 
     let result: crate::Result<()> = match cli.command {
@@ -153,4 +158,26 @@ pub fn run() {
             std::process::exit(1);
         }
     }
+}
+
+/// Parse the command line with `format` as the default of every
+/// subcommand's `--format` flag (flags still win).
+fn parse_with_format_default(format: output::Format) -> Cli {
+    let mut cmd = Cli::command();
+    if format != output::Format::Human {
+        let value = match format {
+            output::Format::Human => "human",
+            output::Format::Json => "json",
+        };
+        let names: Vec<String> = cmd
+            .get_subcommands()
+            .filter(|sc| sc.get_arguments().any(|a| a.get_id() == "format"))
+            .map(|sc| sc.get_name().to_string())
+            .collect();
+        for name in names {
+            cmd = cmd.mut_subcommand(name, |sc| sc.mut_arg("format", |a| a.default_value(value)));
+        }
+    }
+    let matches = cmd.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
 }
