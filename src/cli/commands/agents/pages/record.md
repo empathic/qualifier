@@ -140,6 +140,9 @@ Behaviour:
   full, permissions revoked mid-run, etc.), the lines already written stay
   written. The error message names how many: `wrote N of M records before
   an I/O error appending stdin line L: <cause>`.
+- Result lines are printed only after every planned record is written, so
+  a reader that stops early (`| head -1`) cannot interrupt the batch; a
+  closed stdout ends the output quietly.
 
 **`--continue-on-error`** collects every failed line, writes the records
 that did pass, and exits non-zero with a final count. Use this when an
