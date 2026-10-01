@@ -13,11 +13,18 @@
 //!   branch by an edit or re-anchor. Listed here instead of under both
 //!   *Added* and *Resolved*.
 //! - **Resolved** — records active at `<ref>` that are no longer active on
-//!   `HEAD`, with the closers (the head-side records whose `supersedes`
-//!   points at it) named when any exist, or `removed` if not.
+//!   `HEAD`, with the resolve that closed its thread (when the thread is
+//!   closed on `HEAD`) and any other head-side record whose `supersedes`
+//!   points at it, or `removed` if there are none.
 //! - **Drifted** — records present at *both* refs whose
 //!   `body.span.content_hash` no longer matches the file's current
 //!   content. Drift on records freshly added on this branch is suppressed.
+//!
+//! Every row carries its thread's state on `HEAD` from
+//! [`crate::threads::Thread::state`], in the wording the other read
+//! commands use ([`crate::threads::ThreadState::describe`]), so a closed
+//! thread is never shown without the record that closed it. JSON adds a
+//! `threads` array of per-thread summaries.
 //!
 //! Both human and JSON output are stable; CI gating uses `--fail-on
 //! <KIND[,KIND...]>` (Added records, plus Changed records whose kind moved
@@ -39,7 +46,7 @@ use crate::cli::span_context;
 use crate::compact::filter_superseded;
 use crate::content_hash::{self, FreshnessStatus};
 use crate::qual_file;
-use crate::threads::build_threads;
+use crate::threads::{self, Thread, ThreadState, build_threads};
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -198,14 +205,20 @@ pub fn run(args: Args) -> crate::Result<()> {
     };
     let old_records = load_records_at_ref(&repo, effective_oid, ignore.as_mut())?;
 
-    let kind_filter = parse_kind_list(args.kind.as_deref());
-    let fail_on = parse_kind_list(args.fail_on.as_deref());
-    for kind in unknown_kinds(
-        kind_filter.iter().chain(fail_on.iter()).flatten(),
-        &old_records,
-        &new_records,
+    let kind_filter = args.kind.as_deref().map(threads::parse_kind_list);
+    let fail_on = args.fail_on.as_deref().map(threads::parse_kind_list);
+    let requested: Vec<Kind> = kind_filter
+        .iter()
+        .chain(fail_on.iter())
+        .flatten()
+        .cloned()
+        .collect();
+    for warning in threads::unknown_kind_warnings(
+        "qualifier diff",
+        &requested,
+        old_records.iter().chain(&new_records),
     ) {
-        eprintln!("qualifier diff: warning: kind '{kind}' matches no known kind");
+        eprintln!("{warning}");
     }
 
     let mut diff = compute_diff(&old_records, &new_records, &project_root);
@@ -218,66 +231,22 @@ pub fn run(args: Args) -> crate::Result<()> {
         comparison,
     };
 
+    let head_threads = build_threads(&new_records);
+    let thread_of = ThreadIndex::new(&head_threads);
+
     if args.subjects_only {
         print_subjects(&diff);
     } else if args.format == Format::Json {
-        print_json(&header, &diff);
+        print_json(&header, &diff, &head_threads, &thread_of);
     } else {
-        print_human(&header, &diff, &project_root);
+        print_human(&header, &diff, &project_root, &thread_of);
     }
 
     enforce_fail_flags(&args, fail_on.as_deref(), &diff)?;
     Ok(())
 }
 
-/// Split a comma-separated `--kind` / `--fail-on` value, dropping blanks.
-fn parse_kind_list(list: Option<&str>) -> Option<Vec<String>> {
-    list.map(|s| {
-        s.split(',')
-            .map(|k| k.trim().to_string())
-            .filter(|k| !k.is_empty())
-            .collect()
-    })
-}
-
-/// Kinds in `requested` that are neither built in nor carried by any record
-/// on either side, in first-seen order. Custom kinds are legal, so these
-/// are only warned about: a typo such as `blockers` would otherwise make a
-/// `--fail-on` gate pass silently.
-fn unknown_kinds<'a>(
-    requested: impl Iterator<Item = &'a String>,
-    old: &[Record],
-    new: &[Record],
-) -> Vec<&'a str> {
-    const BUILT_IN: &[&str] = &[
-        "pass",
-        "fail",
-        "blocker",
-        "concern",
-        "comment",
-        "resolve",
-        "praise",
-        "suggestion",
-        "waiver",
-    ];
-    let present: HashSet<String> = old
-        .iter()
-        .chain(new)
-        .filter_map(|r| r.kind().map(|k| k.to_string()))
-        .collect();
-    let mut out: Vec<&str> = Vec::new();
-    for kind in requested {
-        if !BUILT_IN.contains(&kind.as_str())
-            && !present.contains(kind)
-            && !out.contains(&kind.as_str())
-        {
-            out.push(kind);
-        }
-    }
-    out
-}
-
-fn apply_filters(diff: &mut Diff, kinds: Option<&[String]>, args: &Args) -> crate::Result<()> {
+fn apply_filters(diff: &mut Diff, kinds: Option<&[Kind]>, args: &Args) -> crate::Result<()> {
     let issuer_type = match &args.issuer_type {
         Some(s) => Some(
             s.parse::<crate::annotation::IssuerType>()
@@ -288,10 +257,7 @@ fn apply_filters(diff: &mut Diff, kinds: Option<&[String]>, args: &Args) -> crat
 
     let kind_match = |r: &Record| -> bool {
         match kinds {
-            Some(list) => r
-                .kind()
-                .map(|k| list.iter().any(|allowed| allowed == &k.to_string()))
-                .unwrap_or(false),
+            Some(list) => r.kind().is_some_and(|k| list.contains(k)),
             None => true,
         }
     };
@@ -378,7 +344,7 @@ impl DiffHeader {
 
 /// Apply --fail-on / --fail-on-drift after the diff has printed. We always
 /// surface the diff first so the user sees *what* triggered the failure.
-fn enforce_fail_flags(args: &Args, fail_on: Option<&[String]>, diff: &Diff) -> crate::Result<()> {
+fn enforce_fail_flags(args: &Args, fail_on: Option<&[Kind]>, diff: &Diff) -> crate::Result<()> {
     if args.fail_on_drift && !diff.drifted.is_empty() {
         return Err(crate::Error::Validation(format!(
             "diff failed: {} drifted record(s) (--fail-on-drift)",
@@ -389,13 +355,9 @@ fn enforce_fail_flags(args: &Args, fail_on: Option<&[String]>, diff: &Diff) -> c
         let matched: Vec<&Record> = diff
             .added
             .iter()
-            .filter(|r| {
-                r.kind()
-                    .map(|k| kinds.contains(&k.to_string()))
-                    .unwrap_or(false)
-            })
+            .filter(|r| r.kind().is_some_and(|k| kinds.contains(k)))
             .collect();
-        let in_list = |k: Option<&Kind>| k.is_some_and(|k| kinds.contains(&k.to_string()));
+        let in_list = |k: Option<&Kind>| k.is_some_and(|k| kinds.contains(k));
         let escalated = diff
             .changed
             .iter()
@@ -733,7 +695,59 @@ fn sort_key(r: &Record) -> (String, u32) {
     (r.subject().to_string(), line)
 }
 
-fn print_human(header: &DiffHeader, diff: &Diff, project_root: &Path) {
+/// The thread on `HEAD` that each record belongs to, so every row can carry
+/// its thread's state ([`Thread::state`]) the way `threads`, `show`, and
+/// `praise` do.
+struct ThreadIndex<'t, 'r> {
+    by_record: HashMap<&'r str, &'t Thread<'r>>,
+}
+
+impl<'t, 'r> ThreadIndex<'t, 'r> {
+    fn new(threads: &'t [Thread<'r>]) -> Self {
+        let mut by_record = HashMap::new();
+        for t in threads {
+            for r in t.records() {
+                by_record.insert(r.id(), t);
+            }
+        }
+        ThreadIndex { by_record }
+    }
+
+    fn get(&self, id: &str) -> Option<&'t Thread<'r>> {
+        self.by_record.get(id).copied()
+    }
+}
+
+/// The line naming where the thread holding `record_id` stands on `HEAD`,
+/// in the shared wording of [`ThreadState::describe`]: `needs decision`,
+/// `decided`, or `closed (reason): <closer summary>  (<closer ID>)` for a
+/// record in the thread's root chain, and `on thread <root ID>, <state>`
+/// for a reply. `None` for the root of an open thread with no decision
+/// pending, and for records with no thread on `HEAD`.
+fn thread_line(record_id: &str, thread_of: &ThreadIndex<'_, '_>) -> Option<String> {
+    let t = thread_of.get(record_id)?;
+    let state = t.state();
+    let closer = match state {
+        ThreadState::Closed { closer, .. } => format!("  ({})", id_prefix(closer.id())),
+        _ => String::new(),
+    };
+    let described = format!("{}{closer}", state.describe(false));
+    let is_reply = t.replies.iter().any(|e| e.record.id() == record_id);
+    if is_reply {
+        Some(format!("on thread {}, {described}", id_prefix(t.root.id())))
+    } else if matches!(state, ThreadState::Open) {
+        None
+    } else {
+        Some(described)
+    }
+}
+
+fn print_human(
+    header: &DiffHeader,
+    diff: &Diff,
+    project_root: &Path,
+    thread_of: &ThreadIndex<'_, '_>,
+) {
     if diff.added.is_empty()
         && diff.changed.is_empty()
         && diff.resolved.is_empty()
@@ -750,7 +764,7 @@ fn print_human(header: &DiffHeader, diff: &Diff, project_root: &Path) {
         println!();
         println!("Added on this branch ({})", diff.added.len());
         for r in &diff.added {
-            print_added(r);
+            print_added(r, thread_of);
         }
     }
 
@@ -758,7 +772,7 @@ fn print_human(header: &DiffHeader, diff: &Diff, project_root: &Path) {
         println!();
         println!("Changed on this branch ({})", diff.changed.len());
         for entry in &diff.changed {
-            print_changed(entry);
+            print_changed(entry, thread_of);
         }
     }
 
@@ -766,7 +780,7 @@ fn print_human(header: &DiffHeader, diff: &Diff, project_root: &Path) {
         println!();
         println!("Resolved on this branch ({})", diff.resolved.len());
         for entry in &diff.resolved {
-            print_resolved(entry);
+            print_resolved(entry, thread_of);
         }
     }
 
@@ -774,25 +788,26 @@ fn print_human(header: &DiffHeader, diff: &Diff, project_root: &Path) {
         println!();
         println!("Drifted ({})", diff.drifted.len());
         for entry in &diff.drifted {
-            print_drifted(entry, project_root);
+            print_drifted(entry, project_root, thread_of);
         }
     }
     println!();
 }
 
-fn print_added(r: &Record) {
+fn print_added(r: &Record, thread_of: &ThreadIndex<'_, '_>) {
     let Some(att) = r.as_annotation() else { return };
+    let extras: Vec<String> = thread_line(r.id(), thread_of).into_iter().collect();
     print_record_row(
         '+',
         &att.body.kind.to_string(),
         &format_location(att),
         &att.body.summary,
         id_prefix(&att.id),
-        &[],
+        &extras,
     );
 }
 
-fn print_changed(entry: &ChangedEntry) {
+fn print_changed(entry: &ChangedEntry, thread_of: &ThreadIndex<'_, '_>) {
     let Some(att) = entry.record.as_annotation() else {
         return;
     };
@@ -812,17 +827,24 @@ fn print_changed(entry: &ChangedEntry) {
         }
         None => format!("was {}", id_prefix(entry.previous.id())),
     };
+    let mut extras: Vec<String> = thread_line(entry.record.id(), thread_of)
+        .into_iter()
+        .collect();
+    extras.push(was);
     print_record_row(
         '*',
         &att.body.kind.to_string(),
         &format_location(att),
         &att.body.summary,
         id_prefix(&att.id),
-        &[was],
+        &extras,
     );
 }
 
-fn print_resolved(entry: &ResolvedEntry) {
+/// A Resolved row: the record from `<ref>`, then its thread's state on
+/// `HEAD` (naming the resolve that closed it), then any other record that
+/// supersedes it directly, or `removed (no successor)` when nothing does.
+fn print_resolved(entry: &ResolvedEntry, thread_of: &ThreadIndex<'_, '_>) {
     let kind = entry
         .old
         .kind()
@@ -839,22 +861,30 @@ fn print_resolved(entry: &ResolvedEntry) {
         .map(|a| a.body.summary.as_str())
         .unwrap_or("");
 
-    let mut closer_lines: Vec<String> = entry
-        .closers
-        .iter()
-        .map(|c| {
-            let verb = if c.kind() == Some(&Kind::Resolve) {
-                "resolved by"
-            } else {
-                "superseded by"
-            };
-            let closer_id = id_prefix(c.id());
-            match c.as_annotation().map(|a| a.body.summary.as_str()) {
-                Some(s) if !s.is_empty() => format!("{verb} {closer_id}: {s:?}"),
-                _ => format!("{verb} {closer_id}"),
-            }
-        })
-        .collect();
+    let state_line = thread_line(entry.old.id(), thread_of);
+    let thread_closer = thread_of
+        .get(entry.old.id())
+        .and_then(|t| t.closed_by.filter(|_| !t.open))
+        .map(|c| c.id());
+    let mut closer_lines: Vec<String> = state_line.into_iter().collect();
+    closer_lines.extend(
+        entry
+            .closers
+            .iter()
+            .filter(|c| Some(c.id()) != thread_closer)
+            .map(|c| {
+                let verb = if c.kind() == Some(&Kind::Resolve) {
+                    "resolved by"
+                } else {
+                    "superseded by"
+                };
+                let closer_id = id_prefix(c.id());
+                match c.as_annotation().map(|a| a.body.summary.as_str()) {
+                    Some(s) if !s.is_empty() => format!("{verb} {closer_id}: {s:?}"),
+                    _ => format!("{verb} {closer_id}"),
+                }
+            }),
+    );
     if closer_lines.is_empty() {
         closer_lines.push("removed (no successor)".into());
     }
@@ -869,14 +899,14 @@ fn print_resolved(entry: &ResolvedEntry) {
     );
 }
 
-fn print_drifted(entry: &DriftEntry, project_root: &Path) {
+fn print_drifted(entry: &DriftEntry, project_root: &Path, thread_of: &ThreadIndex<'_, '_>) {
     let Some(att) = entry.record.as_annotation() else {
         return;
     };
     let id_short = id_prefix(&att.id);
     let loc = format_location(att);
 
-    let mut continuations: Vec<String> = Vec::new();
+    let mut continuations: Vec<String> = thread_line(&att.id, thread_of).into_iter().collect();
     if let Some(ref span) = att.body.span {
         let mut ctx = span_context::read_span_context(
             &project_root.join(&att.subject),
@@ -1006,7 +1036,47 @@ fn format_location(att: &crate::annotation::Annotation) -> String {
     }
 }
 
-fn print_json(header: &DiffHeader, diff: &Diff) {
+/// The JSON `threads` array: one entry per `HEAD` thread holding a listed
+/// record, in [`build_threads`] order, as [`threads::thread_summary_json`]
+/// gives it (`origin`, `root`, `state`, `closed_by`) plus `records`, the
+/// IDs of the listed records in that thread.
+fn threads_json(
+    diff: &Diff,
+    head_threads: &[Thread<'_>],
+    thread_of: &ThreadIndex<'_, '_>,
+) -> Vec<serde_json::Value> {
+    let listed = diff
+        .added
+        .iter()
+        .chain(diff.changed.iter().flat_map(|e| [&e.record, &e.previous]))
+        .chain(diff.resolved.iter().map(|e| &e.old))
+        .chain(diff.drifted.iter().map(|d| &d.record));
+    let mut by_origin: HashMap<&str, Vec<&str>> = HashMap::new();
+    for r in listed {
+        if let Some(t) = thread_of.get(r.id()) {
+            let ids = by_origin.entry(t.origin).or_default();
+            if !ids.contains(&r.id()) {
+                ids.push(r.id());
+            }
+        }
+    }
+    head_threads
+        .iter()
+        .filter_map(|t| {
+            let ids = by_origin.get(t.origin)?;
+            let mut v = threads::thread_summary_json(t);
+            v["records"] = serde_json::json!(ids);
+            Some(v)
+        })
+        .collect()
+}
+
+fn print_json(
+    header: &DiffHeader,
+    diff: &Diff,
+    head_threads: &[Thread<'_>],
+    thread_of: &ThreadIndex<'_, '_>,
+) {
     let added: Vec<_> = diff.added.iter().collect();
     let changed: Vec<serde_json::Value> = diff
         .changed
@@ -1049,6 +1119,7 @@ fn print_json(header: &DiffHeader, diff: &Diff) {
         "changed": changed,
         "resolved": resolved,
         "drifted": drifted,
+        "threads": threads_json(diff, head_threads, thread_of),
     });
     println!("{}", serde_json::to_string_pretty(&payload).unwrap());
 }
