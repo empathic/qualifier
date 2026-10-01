@@ -213,7 +213,9 @@ chmod +x "$UNAME_SHIM/uname"
 
 # W1. pinned-version resolves nothing: it works with an empty PATH.
 out="$(env -i PATH= HOME="$HOME" "$BASH" "$ENSURE" pinned-version)" || fail "pinned-version failed with an empty PATH"
-[ "$out" = "0.8.0" ] || fail "pinned-version: expected 0.8.0, got $out"
+expected_pin="$(sed -n 's/^PINNED_VERSION="\(.*\)"$/\1/p' "$ENSURE")"
+[ -n "$expected_pin" ] && [ "$out" = "$expected_pin" ] \
+    || fail "pinned-version: expected PINNED_VERSION ($expected_pin), got $out"
 ok "pinned-version reports PINNED_VERSION with an empty PATH"
 
 # W2. The min-version mode is gone.
@@ -1247,6 +1249,27 @@ ok "every *-prompt.md is mapped to its dispatching skill; placeholders documente
 # Every qualifier command and record line in the skills and subagent briefs
 # runs against a real qualifier in a fixture repository, so no example can
 # use a flag, key, line shape, or subcommand the CLI rejects.
+#
+# That binary is the checkout's build, but the shipped plugin runs only
+# PINNED_VERSION, so the build must be that version: otherwise the skills
+# pass here against a CLI their users never get. ALLOW_UNPINNED_SKILLS=1
+# turns the mismatch into a warning, for development between a CLI version
+# bump and the plugin release that pins it (see AGENTS.md).
+examples_bin="$EXAMPLES_BIN"
+for candidate in target/debug/qualifier target/release/qualifier; do
+    [ -n "$examples_bin" ] && break
+    [ -x "$candidate" ] && examples_bin="$PWD/$candidate"
+done
+if [ -n "$examples_bin" ]; then
+    built="$("$examples_bin" --version 2>/dev/null || true)"
+    if [ "$built" = "qualifier $PINNED" ]; then
+        ok "the skill-example binary is the pinned release's version ($built)"
+    elif [ "${ALLOW_UNPINNED_SKILLS:-}" = 1 ]; then
+        echo "warning: the skill-example binary reports '$built', not 'qualifier $PINNED' (PINNED_VERSION); allowed by ALLOW_UNPINNED_SKILLS=1"
+    else
+        fail "the skill-example binary $examples_bin reports '$built', but the plugin pins qualifier $PINNED (PINNED_VERSION in $PLUGIN/scripts/ensure-qualifier.sh). Skills checked against it may not work with the release users run. Set ALLOW_UNPINNED_SKILLS=1 to check them anyway."
+    fi
+fi
 status=0
 QUALIFIER_BIN="$EXAMPLES_BIN" python3 scripts/check-skill-examples.py || status=$?
 case "$status" in
