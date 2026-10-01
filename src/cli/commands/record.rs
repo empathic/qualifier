@@ -270,12 +270,12 @@ fn span_suffix(span: Option<&Span>) -> String {
 
 /// The records a batch line can see: everything discovered on disk plus the
 /// lines already planned in this batch (the last, synthetic file).
-struct BatchView {
+pub(crate) struct BatchView {
     files: Vec<QualFile>,
 }
 
 impl BatchView {
-    fn new(mut files: Vec<QualFile>) -> Self {
+    pub(crate) fn new(mut files: Vec<QualFile>) -> Self {
         files.push(QualFile {
             path: PathBuf::from("<stdin>"),
             subject: String::new(),
@@ -284,7 +284,7 @@ impl BatchView {
         Self { files }
     }
 
-    fn push(&mut self, record: Record) {
+    pub(crate) fn push(&mut self, record: Record) {
         self.files
             .last_mut()
             .expect("BatchView always holds the pending file")
@@ -292,7 +292,7 @@ impl BatchView {
             .push(record);
     }
 
-    fn files(&self) -> &[QualFile] {
+    pub(crate) fn files(&self) -> &[QualFile] {
         &self.files
     }
 }
