@@ -16,14 +16,19 @@ pub struct ContextLine {
 /// Source context around a span, with optional warning.
 #[derive(Debug, Clone)]
 pub struct SpanContext {
+    /// Display label for the file (the root-relative subject).
     pub path: String,
     pub lines: Vec<ContextLine>,
     pub warning: Option<String>,
 }
 
 /// Read source lines around a span. Never errors — captures warnings instead.
-pub fn read_span_context(file_path: &Path, span: &Span, context: u32) -> SpanContext {
-    let path_str = file_path.display().to_string();
+///
+/// `file_path` is where the file is read from; `label` is how it is named in
+/// [`SpanContext::path`] and in warnings, normally the root-relative subject,
+/// so output carries no machine-specific absolute paths.
+pub fn read_span_context(file_path: &Path, label: &str, span: &Span, context: u32) -> SpanContext {
+    let path_str = label.to_string();
 
     let content = match std::fs::read_to_string(file_path) {
         Ok(c) => c,
@@ -168,7 +173,7 @@ mod tests {
     fn test_basic_read() {
         let f = sample_file();
         let s = span(10, None);
-        let ctx = read_span_context(f.path(), &s, 2);
+        let ctx = read_span_context(f.path(), "sample.rs", &s, 2);
 
         assert!(ctx.warning.is_none());
         assert_eq!(ctx.lines.len(), 5); // lines 8..=12
@@ -183,7 +188,7 @@ mod tests {
     fn test_range_span() {
         let f = sample_file();
         let s = span(5, Some(8));
-        let ctx = read_span_context(f.path(), &s, 1);
+        let ctx = read_span_context(f.path(), "sample.rs", &s, 1);
 
         assert!(ctx.warning.is_none());
         // lines 4..=9
@@ -197,7 +202,7 @@ mod tests {
     #[test]
     fn test_file_not_found() {
         let s = span(1, None);
-        let ctx = read_span_context(Path::new("/nonexistent/file.rs"), &s, 3);
+        let ctx = read_span_context(Path::new("/nonexistent/file.rs"), "file.rs", &s, 3);
 
         assert!(ctx.lines.is_empty());
         assert!(ctx.warning.is_some());
@@ -208,7 +213,7 @@ mod tests {
     fn test_beyond_eof() {
         let f = sample_file(); // 20 lines
         let s = span(999, None);
-        let ctx = read_span_context(f.path(), &s, 3);
+        let ctx = read_span_context(f.path(), "sample.rs", &s, 3);
 
         assert!(ctx.lines.is_empty());
         assert!(ctx.warning.is_some());
@@ -219,7 +224,7 @@ mod tests {
     fn test_end_beyond_eof() {
         let f = sample_file(); // 20 lines
         let s = span(18, Some(25));
-        let ctx = read_span_context(f.path(), &s, 1);
+        let ctx = read_span_context(f.path(), "sample.rs", &s, 1);
 
         // Should still show lines 17..=20, with a warning
         assert!(!ctx.lines.is_empty());
@@ -231,7 +236,7 @@ mod tests {
     fn test_file_start_edge() {
         let f = sample_file();
         let s = span(1, None);
-        let ctx = read_span_context(f.path(), &s, 3);
+        let ctx = read_span_context(f.path(), "sample.rs", &s, 3);
 
         assert_eq!(ctx.lines[0].line_number, 1);
         assert!(ctx.lines[0].in_span);
@@ -243,7 +248,7 @@ mod tests {
     fn test_file_end_edge() {
         let f = sample_file(); // 20 lines
         let s = span(20, None);
-        let ctx = read_span_context(f.path(), &s, 3);
+        let ctx = read_span_context(f.path(), "sample.rs", &s, 3);
 
         assert_eq!(ctx.lines.last().unwrap().line_number, 20);
         assert!(ctx.lines.last().unwrap().in_span);
@@ -255,7 +260,7 @@ mod tests {
     fn test_format_human_output() {
         let f = sample_file();
         let s = span(5, None);
-        let ctx = read_span_context(f.path(), &s, 1);
+        let ctx = read_span_context(f.path(), "sample.rs", &s, 1);
         let output = format_human(&ctx);
 
         assert!(output.contains("> "));
@@ -279,7 +284,7 @@ mod tests {
     fn test_to_json_structure() {
         let f = sample_file();
         let s = span(3, None);
-        let ctx = read_span_context(f.path(), &s, 1);
+        let ctx = read_span_context(f.path(), "sample.rs", &s, 1);
         let json = to_json(&ctx);
 
         assert!(json["lines"].is_array());
@@ -294,7 +299,7 @@ mod tests {
     #[test]
     fn test_to_json_with_warning() {
         let s = span(1, None);
-        let ctx = read_span_context(Path::new("/no/such/file.rs"), &s, 1);
+        let ctx = read_span_context(Path::new("/no/such/file.rs"), "file.rs", &s, 1);
         let json = to_json(&ctx);
 
         assert!(json["warning"].is_string());

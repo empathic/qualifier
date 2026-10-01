@@ -87,6 +87,7 @@ pub fn run(args: Args) -> crate::Result<()> {
                     {
                         let ctx = span_context::read_span_context(
                             &source,
+                            &subject,
                             span,
                             span_context::DEFAULT_CONTEXT_LINES,
                         );
@@ -171,8 +172,12 @@ fn print_record(
         if args.pretty
             && let Some(ref span) = att.body.span
         {
-            let ctx =
-                span_context::read_span_context(source, span, span_context::DEFAULT_CONTEXT_LINES);
+            let ctx = span_context::read_span_context(
+                source,
+                &att.subject,
+                span,
+                span_context::DEFAULT_CONTEXT_LINES,
+            );
             if let Some(ref warning) = ctx.warning {
                 println!("{cont_prefix}  note: {warning}");
             }
