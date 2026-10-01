@@ -597,8 +597,45 @@ impl Serialize for Record {
             Record::Annotation(a) => a.serialize(serializer),
             Record::Epoch(e) => e.serialize(serializer),
             Record::Dependency(d) => d.serialize(serializer),
-            Record::Unknown(v) => v.serialize(serializer),
+            Record::Unknown(v) => UnknownView(v).serialize(serializer),
         }
+    }
+}
+
+/// Envelope fields in Metabox order.
+const ENVELOPE_ORDER: [&str; 8] = [
+    "metabox",
+    "type",
+    "subject",
+    "issuer",
+    "issuer_type",
+    "created_at",
+    "id",
+    "body",
+];
+
+/// Serializes a record of a type this crate does not know with its
+/// envelope fields in Metabox order, followed by any other top-level
+/// fields in lexicographic order. Values serialize as stored.
+struct UnknownView<'a>(&'a serde_json::Value);
+
+impl Serialize for UnknownView<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let Some(fields) = self.0.as_object() else {
+            return self.0.serialize(serializer);
+        };
+        let envelope = ENVELOPE_ORDER
+            .iter()
+            .filter_map(|k| fields.get_key_value(*k));
+        let rest = fields
+            .iter()
+            .filter(|(k, _)| !ENVELOPE_ORDER.contains(&k.as_str()));
+        let mut map = serializer.serialize_map(Some(fields.len()))?;
+        for (key, value) in envelope.chain(rest) {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
     }
 }
 
@@ -813,13 +850,28 @@ pub fn generate_dependency_id(dep: &DependencyRecord) -> String {
     blake3::hash(canonical.as_bytes()).to_hex().to_string()
 }
 
+/// Generate a deterministic ID for a record of a type this crate does not
+/// know: the BLAKE3 hash of its envelope-ordered serialization with `id`
+/// set to `""` and `metabox` materialized.
+pub fn generate_unknown_id(value: &serde_json::Value) -> String {
+    let mut value = value.clone();
+    if let Some(fields) = value.as_object_mut() {
+        fields
+            .entry("metabox")
+            .or_insert_with(|| serde_json::Value::String("1".into()));
+        fields.insert("id".into(), serde_json::Value::String(String::new()));
+    }
+    let canonical = serde_json::to_string(&UnknownView(&value)).expect("record must serialize");
+    blake3::hash(canonical.as_bytes()).to_hex().to_string()
+}
+
 /// Generate a deterministic ID for any record type.
 pub fn generate_record_id(record: &Record) -> String {
     match record {
         Record::Annotation(a) => generate_id(a),
         Record::Epoch(e) => generate_epoch_id(e),
         Record::Dependency(d) => generate_dependency_id(d),
-        Record::Unknown(_) => String::new(),
+        Record::Unknown(v) => generate_unknown_id(v),
     }
 }
 
@@ -1070,7 +1122,16 @@ pub fn finalize_record(record: Record) -> Record {
             d.id = generate_dependency_id(&d);
             Record::Dependency(d)
         }
-        other => other,
+        Record::Unknown(mut v) => {
+            let id = generate_unknown_id(&v);
+            if let Some(fields) = v.as_object_mut() {
+                fields
+                    .entry("metabox")
+                    .or_insert_with(|| serde_json::Value::String("1".into()));
+                fields.insert("id".into(), serde_json::Value::String(id));
+            }
+            Record::Unknown(v)
+        }
     }
 }
 

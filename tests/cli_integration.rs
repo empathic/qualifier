@@ -2055,6 +2055,30 @@ fn test_emit_unknown_type_roundtrips() {
         content.contains("\"foo\":\"bar\""),
         "should preserve body verbatim: {content}"
     );
+
+    // Envelope fields are in Metabox order and the ID is a real BLAKE3 hash.
+    let line = content.lines().next().unwrap();
+    let keys: Vec<&str> = [
+        "\"metabox\"",
+        "\"type\"",
+        "\"subject\"",
+        "\"issuer\"",
+        "\"created_at\"",
+        "\"id\"",
+        "\"body\"",
+    ]
+    .into_iter()
+    .collect();
+    let positions: Vec<usize> = keys.iter().map(|k| line.find(k).unwrap()).collect();
+    assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "envelope out of order: {line}"
+    );
+    let v: serde_json::Value = serde_json::from_str(line).unwrap();
+    let id = v["id"].as_str().unwrap();
+    assert_eq!(id.len(), 64, "{line}");
+    let canonical = line.replacen(&format!("\"id\":\"{id}\""), "\"id\":\"\"", 1);
+    assert_eq!(id, blake3::hash(canonical.as_bytes()).to_hex().to_string());
 }
 
 #[test]

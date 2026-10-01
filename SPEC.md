@@ -1307,7 +1307,7 @@ pub enum Record {
     Annotation(Box<Annotation>),
     Epoch(Epoch),
     Dependency(DependencyRecord),
-    Unknown(serde_json::Value),  // forward compatibility
+    Unknown(serde_json::Value),  // forward compatibility; serialized in envelope order
 }
 
 impl Record {
@@ -1411,6 +1411,7 @@ pub enum IssuerType { Human, Ai, Tool, Unknown }
 pub fn generate_id(annotation: &Annotation) -> String;
 pub fn generate_epoch_id(epoch: &Epoch) -> String;
 pub fn generate_dependency_id(dep: &DependencyRecord) -> String;
+pub fn generate_unknown_id(value: &serde_json::Value) -> String; // custom record types
 pub fn generate_record_id(record: &Record) -> String;
 pub fn validate(annotation: &Annotation) -> Vec<String>;
 pub fn finalize(annotation: Annotation) -> Annotation;

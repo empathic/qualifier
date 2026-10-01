@@ -954,3 +954,37 @@ fn test_invalid_created_at_is_rejected() {
     let err = qual_file::parse_str(line).unwrap_err().to_string();
     assert!(err.contains("RFC 3339"), "{err}");
 }
+
+// --- Records of custom types ---
+
+#[test]
+fn test_golden_custom_type_id_and_envelope_order() {
+    // Keys deliberately out of order, plus an extra top-level field.
+    let input = r#"{"body":{"z":1,"a":{"y":2,"x":3}},"created_at":"2026-04-01T00:00:00Z","extension":true,"id":"","issuer":"https://ci.example.com","issuer_type":"tool","metabox":"1","subject":"widget.rs","type":"https://example.com/custom/v1"}"#;
+    let record = annotation::finalize_record(serde_json::from_str(input).unwrap());
+    assert!(matches!(record, Record::Unknown(_)));
+
+    let json = serde_json::to_string(&record).unwrap();
+    let expected_canonical = concat!(
+        r#"{"metabox":"1","type":"https://example.com/custom/v1","subject":"widget.rs","#,
+        r#""issuer":"https://ci.example.com","issuer_type":"tool","#,
+        r#""created_at":"2026-04-01T00:00:00Z","id":"","body":{"a":{"x":3,"y":2},"z":1},"#,
+        r#""extension":true}"#
+    );
+    assert_eq!(
+        json.replacen(&format!(r#""id":"{}""#, record.id()), r#""id":"""#, 1),
+        expected_canonical
+    );
+    assert_eq!(
+        record.id(),
+        blake3::hash(expected_canonical.as_bytes())
+            .to_hex()
+            .to_string()
+    );
+    assert_eq!(
+        record.id(),
+        "47150273a6852379894eedf80d4677edfa64db064df4e82400ba2fb25d60f9a3",
+        "Golden custom-type ID changed! Canonical form or hashing is broken."
+    );
+    assert_eq!(annotation::generate_record_id(&record), record.id());
+}
