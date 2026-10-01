@@ -39,40 +39,85 @@ fn make_record(subject: &str, kind: Kind, summary: &str) -> Record {
 
 // --- Golden ID tests (regression guards for content-addressed hashing) ---
 
+/// The MCF of `record`: its serialization with `id` set to "".
+fn canonical_form(record: &Record) -> String {
+    let json = serde_json::to_string(record).unwrap();
+    json.replacen(&format!("\"id\":\"{}\"", record.id()), "\"id\":\"\"", 1)
+}
+
 #[test]
 fn test_golden_annotation_id() {
+    use qualifier::annotation::{IssuerType, Position, Span};
+
+    // Every field populated, so reordering or renaming any of them (or
+    // changing how a field serializes) changes the pinned ID.
     let att = annotation::finalize(Annotation {
         metabox: "1".into(),
         record_type: "annotation".into(),
         subject: "src/parser.rs".into(),
         issuer: "mailto:alice@example.com".into(),
-        issuer_type: None,
-        created_at: chrono::DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
-            .into(),
+        issuer_type: Some(IssuerType::Human),
+        created_at: "2026-02-24T10:00:00.250Z".parse().unwrap(),
         id: String::new(),
         body: AnnotationBody {
-            detail: None,
+            detail: Some("Index past the end of the token buffer.".into()),
             kind: Kind::Concern,
-            r#ref: None,
-            references: None,
-            span: None,
-            suggested_fix: None,
+            r#ref: Some("git:3aba500".into()),
+            references: Some("a".repeat(64)),
+            span: Some(Span {
+                start: Position {
+                    line: 42,
+                    col: Some(5),
+                },
+                end: Some(Position {
+                    line: 58,
+                    col: Some(80),
+                }),
+                content_hash: Some("c".repeat(64)),
+            }),
+            suggested_fix: Some("Check the length first.".into()),
             summary: "Panics on malformed input".into(),
-            supersedes: None,
-            tags: vec![],
+            supersedes: Some("b".repeat(64)),
+            tags: vec!["security".into(), "parser".into()],
             extra: Default::default(),
         },
     });
-    // ID is content-addressed: deterministic and matches generate_id.
-    assert_eq!(annotation::generate_id(&att), att.id);
-    assert_eq!(att.id.len(), 64);
+    let record = Record::Annotation(Box::new(att));
+    assert_eq!(
+        canonical_form(&record),
+        format!(
+            concat!(
+                r#"{{"metabox":"1","type":"annotation","subject":"src/parser.rs","#,
+                r#""issuer":"mailto:alice@example.com","issuer_type":"human","#,
+                r#""created_at":"2026-02-24T10:00:00.250Z","id":"","body":{{"#,
+                r#""detail":"Index past the end of the token buffer.","kind":"concern","#,
+                r#""ref":"git:3aba500","references":"{a}","#,
+                r#""span":{{"start":{{"line":42,"col":5}},"end":{{"line":58,"col":80}},"#,
+                r#""content_hash":"{c}"}},"suggested_fix":"Check the length first.","#,
+                r#""summary":"Panics on malformed input","supersedes":"{b}","#,
+                r#""tags":["security","parser"]}}}}"#
+            ),
+            a = "a".repeat(64),
+            b = "b".repeat(64),
+            c = "c".repeat(64),
+        )
+    );
+    assert_eq!(
+        record.id(),
+        blake3::hash(canonical_form(&record).as_bytes())
+            .to_hex()
+            .to_string()
+    );
+    assert_eq!(
+        record.id(),
+        "0a8c5336e9d37411907ad014f952d35d446ce74ca49e7e196d8e3372121a359e",
+        "Golden annotation ID changed! Canonical form or hashing is broken."
+    );
 }
 
 #[test]
 fn test_golden_epoch_id() {
-    use qualifier::annotation::{self, Epoch, EpochBody, IssuerType};
+    use qualifier::annotation::{self, Epoch, EpochBody, IssuerType, Position, Span};
 
     let epoch = annotation::finalize_epoch(Epoch {
         metabox: "1".into(),
@@ -80,19 +125,45 @@ fn test_golden_epoch_id() {
         subject: "src/parser.rs".into(),
         issuer: "urn:qualifier:compact".into(),
         issuer_type: Some(IssuerType::Tool),
-        created_at: chrono::DateTime::parse_from_rfc3339("2026-02-25T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
-            .into(),
+        created_at: "2026-02-25T12:00:00Z".parse().unwrap(),
         id: String::new(),
         body: EpochBody {
             refs: vec!["aaa".into(), "bbb".into(), "ccc".into()],
-            span: None,
-            summary: "Compacted from 3 annotations".into(),
+            span: Some(Span {
+                start: Position { line: 1, col: None },
+                end: Some(Position { line: 9, col: None }),
+                content_hash: Some("d".repeat(64)),
+            }),
+            summary: "Compacted from 3 records".into(),
             extra: Default::default(),
         },
     });
-    assert_eq!(epoch.id.len(), 64);
+    let record = Record::Epoch(epoch);
+    assert_eq!(
+        canonical_form(&record),
+        format!(
+            concat!(
+                r#"{{"metabox":"1","type":"epoch","subject":"src/parser.rs","#,
+                r#""issuer":"urn:qualifier:compact","issuer_type":"tool","#,
+                r#""created_at":"2026-02-25T12:00:00Z","id":"","body":{{"#,
+                r#""refs":["aaa","bbb","ccc"],"#,
+                r#""span":{{"start":{{"line":1}},"end":{{"line":9}},"content_hash":"{d}"}},"#,
+                r#""summary":"Compacted from 3 records"}}}}"#
+            ),
+            d = "d".repeat(64),
+        )
+    );
+    assert_eq!(
+        record.id(),
+        blake3::hash(canonical_form(&record).as_bytes())
+            .to_hex()
+            .to_string()
+    );
+    assert_eq!(
+        record.id(),
+        "6f0ad2ce85702b16851427de08637a6851f9b0f9acaae0f9c351e45a49048caa",
+        "Golden epoch ID changed! Canonical form or hashing is broken."
+    );
 }
 
 #[test]
