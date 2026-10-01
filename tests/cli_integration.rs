@@ -414,6 +414,63 @@ fn test_ls_kind_filter() {
 }
 
 #[test]
+fn test_ls_counts_live_records_and_kind_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let rec = |args: &[&str]| {
+        let mut full = vec!["record"];
+        full.extend_from_slice(args);
+        full.extend_from_slice(&["--issuer", "mailto:t@x.com"]);
+        let (stdout, _, code) = run_qualifier(dir.path(), &full);
+        assert_eq!(code, 0, "{stdout}");
+        stdout
+            .lines()
+            .find_map(|l| l.split("id:").nth(1))
+            .map(|s| s.trim().to_string())
+            .unwrap()
+    };
+    // a.rs: one concern, two comments.
+    rec(&["concern", "a.rs", "c1"]);
+    rec(&["comment", "a.rs", "n1"]);
+    rec(&["comment", "a.rs", "n2"]);
+    // b.rs: a concern that was resolved, plus one live comment.
+    let resolved = rec(&["concern", "b.rs", "old"]);
+    run_qualifier(
+        dir.path(),
+        &["resolve", &resolved, "done", "--issuer", "mailto:t@x.com"],
+    );
+    rec(&["comment", "b.rs", "still here"]);
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["ls"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("a.rs  (3 annotations)"), "{stdout}");
+    assert!(stdout.contains("b.rs  (1 annotation)"), "{stdout}");
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["ls", "--kind", "concern"]);
+    assert!(stdout.contains("a.rs  (1 annotation)"), "{stdout}");
+    assert!(
+        !stdout.contains("b.rs"),
+        "resolved concern still listed: {stdout}"
+    );
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["ls", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let b = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["subject"] == "b.rs")
+        .unwrap();
+    assert_eq!(b["annotation_count"], 1, "{stdout}");
+    assert_eq!(b["kinds"], serde_json::json!(["comment"]), "{stdout}");
+
+    let (stdout, _, _) =
+        run_qualifier(dir.path(), &["ls", "--kind", "concern", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v[0]["subject"], "a.rs", "{stdout}");
+    assert_eq!(v[0]["annotation_count"], 1, "{stdout}");
+}
+
+#[test]
 fn test_ls_unqualified_flag_removed() {
     let dir = tempfile::tempdir().unwrap();
     let (_, stderr, code) = run_qualifier(dir.path(), &["ls", "--unqualified"]);
