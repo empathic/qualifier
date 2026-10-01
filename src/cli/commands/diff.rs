@@ -25,6 +25,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use clap::Args as ClapArgs;
+use ignore::Match;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 use crate::annotation::{Kind, Record};
 use crate::cli::span_context;
@@ -72,8 +74,9 @@ pub struct Args {
     #[arg(long)]
     pub subjects_only: bool,
 
-    /// Disable .gitignore and .qualignore filtering when discovering current
-    /// .qual files (the ref-side enumeration is governed by git itself).
+    /// Disable .gitignore and .qualignore filtering. Without it, the working
+    /// tree's ignore rules apply to both sides: .qual files on disk and
+    /// .qual files read from <ref>.
     #[arg(long)]
     pub no_ignore: bool,
 }
@@ -158,7 +161,15 @@ pub fn run(args: Args) -> crate::Result<()> {
         .flat_map(|qf| qf.records.iter().cloned())
         .collect();
 
-    let old_records = load_records_at_ref(&repo, effective_oid)?;
+    let mut ignore = if args.no_ignore {
+        None
+    } else {
+        Some(WorkTreeIgnore::new(
+            &project_root,
+            &repo.common_dir().join("info/exclude"),
+        ))
+    };
+    let old_records = load_records_at_ref(&repo, effective_oid, ignore.as_mut())?;
 
     let mut diff = compute_diff(&old_records, &new_records, &project_root);
     apply_filters(&mut diff, &args)?;
@@ -323,17 +334,23 @@ fn short_sha(s: &str) -> &str {
     if s.len() >= 7 { &s[..7] } else { s }
 }
 
-/// Read every `.qual` blob in the tree at `commit_oid`. Files deleted on
-/// this branch are still in that tree, which is how their records reach
-/// the Resolved bucket as removed.
+/// Read every `.qual` blob in the tree at `commit_oid`, skipping paths that
+/// `ignore` matches. Files deleted on this branch are still in that tree,
+/// which is how their records reach the Resolved bucket as removed.
 fn load_records_at_ref(
     repo: &gix::Repository,
     commit_oid: gix::ObjectId,
+    mut ignore: Option<&mut WorkTreeIgnore>,
 ) -> crate::Result<Vec<Record>> {
     let qual_blobs_at_ref = enumerate_qual_blobs(repo, commit_oid)?;
 
     let mut all = Vec::new();
     for (rel, blob_oid) in qual_blobs_at_ref {
+        if let Some(ig) = ignore.as_deref_mut()
+            && ig.is_ignored(&rel)
+        {
+            continue;
+        }
         let blob = match repo.find_object(blob_oid) {
             Ok(o) => o,
             Err(e) => {
@@ -404,6 +421,89 @@ fn enumerate_qual_blobs(
         }
     }
     Ok(out)
+}
+
+/// The working tree's ignore rules, applied to paths read from `<ref>` so
+/// both sides of the diff see the same set of `.qual` files.
+///
+/// Mirrors the precedence `qual_file::discover` gets from the `ignore`
+/// crate: `.qualignore`, then `.ignore`, then `.gitignore` (each searched
+/// from the deepest directory up), then `.git/info/exclude`, then the
+/// global excludes file. A path is ignored when it or any parent directory
+/// is, because the walk never descends into an ignored directory.
+struct WorkTreeIgnore {
+    root: PathBuf,
+    exclude: Gitignore,
+    global: Gitignore,
+    /// Rules read from each directory, keyed by path relative to `root`.
+    dirs: HashMap<PathBuf, DirRules>,
+}
+
+/// Ignore files in one directory, highest precedence first.
+struct DirRules([Gitignore; 3]);
+
+impl WorkTreeIgnore {
+    fn new(root: &Path, exclude_file: &Path) -> Self {
+        WorkTreeIgnore {
+            root: root.to_path_buf(),
+            exclude: load_ignore_file(root, exclude_file),
+            global: GitignoreBuilder::new(root).build_global().0,
+            dirs: HashMap::new(),
+        }
+    }
+
+    fn is_ignored(&mut self, rel: &Path) -> bool {
+        let components: Vec<_> = rel.components().collect();
+        let mut prefix = PathBuf::new();
+        for (i, c) in components.iter().enumerate() {
+            prefix.push(c);
+            let is_dir = i + 1 < components.len();
+            if self.matched(&prefix, is_dir).is_ignore() {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn matched(&mut self, rel: &Path, is_dir: bool) -> Match<()> {
+        let abs = self.root.join(rel);
+        let ancestors: Vec<PathBuf> = rel.ancestors().skip(1).map(Path::to_path_buf).collect();
+        for dir in &ancestors {
+            if !self.dirs.contains_key(dir) {
+                let full = self.root.join(dir);
+                let rules = DirRules([
+                    load_ignore_file(&full, &full.join(".qualignore")),
+                    load_ignore_file(&full, &full.join(".ignore")),
+                    load_ignore_file(&full, &full.join(".gitignore")),
+                ]);
+                self.dirs.insert(dir.clone(), rules);
+            }
+        }
+        for category in 0..3 {
+            for dir in &ancestors {
+                let m = self.dirs[dir].0[category].matched(&abs, is_dir);
+                if !m.is_none() {
+                    return m.map(|_| ());
+                }
+            }
+        }
+        let m = self.exclude.matched(&abs, is_dir);
+        if !m.is_none() {
+            return m.map(|_| ());
+        }
+        self.global.matched(&abs, is_dir).map(|_| ())
+    }
+}
+
+/// Parse one ignore file rooted at `dir`, or an empty matcher when the file
+/// is absent or unreadable.
+fn load_ignore_file(dir: &Path, file: &Path) -> Gitignore {
+    if !file.is_file() {
+        return Gitignore::empty();
+    }
+    let mut builder = GitignoreBuilder::new(dir);
+    builder.add(file);
+    builder.build().unwrap_or_else(|_| Gitignore::empty())
 }
 
 fn is_qual_path(path: &Path) -> bool {
