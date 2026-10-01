@@ -1,7 +1,7 @@
 use qualifier::annotation::{self, Annotation, AnnotationBody, Kind, Record};
 use qualifier::compact::{self, filter_superseded};
 use qualifier::qual_file::{self, QualFile};
-use qualifier::threads::build_threads;
+use qualifier::threads::{ThreadState, build_threads};
 
 use chrono::Utc;
 use std::path::PathBuf;
@@ -526,6 +526,67 @@ fn test_threads_resolved_root_is_closed() {
     assert!(!threads[0].open);
     assert_eq!(threads[0].root.id(), root.id());
     assert_eq!(threads[0].closed_by.map(|r| r.id()), Some(fix.id()));
+}
+
+/// `ann` with tags, re-finalized so the ID covers them.
+fn tagged(mut r: Record, tags: &[&str]) -> Record {
+    let Record::Annotation(a) = &mut r else {
+        unreachable!()
+    };
+    a.body.tags = tags.iter().map(|t| t.to_string()).collect();
+    Record::Annotation(Box::new(annotation::finalize((**a).clone())))
+}
+
+#[test]
+fn test_thread_state_follows_latest_status_and_closer() {
+    let root = ann("a.rs", Kind::Concern, "root", 0, None, None);
+    let ask = tagged(
+        ann("a.rs", Kind::Comment, "A or B?", 10, Some(root.id()), None),
+        &["status:needs-decision:mailto:o@x"],
+    );
+    let records = vec![root.clone(), ask.clone()];
+    let threads = build_threads(&records);
+    assert!(matches!(
+        threads[0].state(),
+        ThreadState::NeedsDecision {
+            addressee: Some("mailto:o@x")
+        }
+    ));
+
+    // Closed while the question was still open: pending.
+    let fix = tagged(
+        ann("a.rs", Kind::Resolve, "moved on", 20, None, Some(root.id())),
+        &["reason:wontfix"],
+    );
+    let records = vec![root.clone(), ask.clone(), fix.clone()];
+    let threads = build_threads(&records);
+    match threads[0].state() {
+        ThreadState::Closed {
+            reason,
+            closer,
+            pending_question,
+        } => {
+            assert_eq!(reason, Some("wontfix"));
+            assert_eq!(closer.id(), fix.id());
+            assert!(pending_question);
+        }
+        other => panic!("expected closed, got {other:?}"),
+    }
+
+    // A decided reply before the close answers the question.
+    let decided = tagged(
+        ann("a.rs", Kind::Comment, "B", 15, Some(root.id()), None),
+        &["status:decided"],
+    );
+    let records = vec![root, ask, decided, fix];
+    let threads = build_threads(&records);
+    assert!(matches!(
+        threads[0].state(),
+        ThreadState::Closed {
+            pending_question: false,
+            ..
+        }
+    ));
 }
 
 #[test]

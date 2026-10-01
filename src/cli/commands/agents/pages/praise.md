@@ -9,15 +9,18 @@ since = "0.5.0"
 
 ## Purpose
 
-Show who annotated an artifact and why, with authorship detail for each
-active record.
+Show who annotated an artifact and why, thread by thread, with authorship
+detail for each record shown.
 
 ## When to use it
 
-`praise` is the attribution command. Where `show` presents a threaded view
-of open quality signals, `praise` focuses on who left each annotation, when,
-and with what issuer type — making it easy to see whether a review was done
-by a human, an AI agent, or a tool. It is useful when auditing the annotation
+`praise` is the attribution command. It renders threads with the same model
+and renderer as `show` and `threads` (open threads with their live replies;
+closed threads as one line carrying the resolve that closed them, and who
+closed it), and adds each record's suggested fix or detail beneath it. Each
+record line ends in `(issuer, issuer type, date)`, the type omitted for
+`human` — making it easy to see whether a review was done by a human, an AI
+agent, or a tool. It is useful when auditing the annotation
 history of a file or when you need to find the contact for an annotation
 before replying. The alias `blame` also works, but the CLI will print a hint
 suggesting `praise` — the format is designed to surface helpers rather than
@@ -41,11 +44,16 @@ qualifier praise src/auth.rs --vcs
 
 ## Flags worth knowing
 
-**`--format json`** returns a JSON object with `subject` and a `records`
-array. Each entry includes `id`, `kind`, `summary`, `issuer`,
+**`--format json`** returns a JSON object with `subject`, a `records`
+array, and a `threads` array. `records` holds each thread's root, live
+replies, and closing resolve, then the artifact's live epochs, in file
+order. Each entry includes `id`, `kind`, `summary`, `issuer`,
 `created_at`, and optionally `issuer_type`, `detail`, `suggested_fix`, and
-`span`. This is the right mode for an agent that needs to programmatically
-find who to notify or which annotations came from other agents.
+`span`. `threads` has one entry per thread,
+`{"origin", "root": "<id>", "state": {...}, "closed_by": "<id>"|null}`, with
+`state` as in `qualifier threads --format json`. This is the right mode for
+an agent that needs to programmatically find who to notify or which
+annotations came from other agents.
 
 **`--vcs`** delegates to the VCS `blame` / `annotate` command on the `.qual`
 file itself (git or hg), showing which VCS commit last touched each line.
@@ -55,9 +63,10 @@ It requires a supported VCS to be detected.
 
 ## Gotchas
 
-- `praise` only shows **active** records — superseded and resolved
-  annotations are filtered out. If you need the full history, use
-  `qualifier show --all`.
+- `praise` leaves out superseded records and edit history, and shows a
+  closed thread only as its root and closing resolve. For the full history,
+  use `qualifier show --all`, or `qualifier threads --all <id>` for one
+  closed thread's replies.
 - The `issuer` field is a URI (e.g., `mailto:alice@example.com`). The human
   output strips the `mailto:` prefix and the domain to show a short name;
   the JSON output always includes the full URI.
