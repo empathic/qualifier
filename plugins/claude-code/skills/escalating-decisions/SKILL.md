@@ -17,7 +17,11 @@ qualifier reply <id> "Needs a decision: <question>" \
 ```
 
 Address a specific person with `--tag status:needs-decision:<their issuer>`.
-Pending decisions: `qualifier threads --status needs-decision`.
+Pending decisions: `qualifier threads --status needs-decision --format json`
+(the JSON is the complete view; the human output can leave parts of a
+thread out). A thread that is already closed is not pending, whatever its
+replies ask: its answer is the closing resolve in `closed_by` (seen with
+`--all`).
 
 ## Walk
 
