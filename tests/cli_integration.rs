@@ -4336,6 +4336,59 @@ fn test_diff_ref_side_honors_qualignore() {
 }
 
 #[test]
+fn test_diff_lists_every_closer_of_a_resolved_record() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let old = record_as_ab(dir.path(), &["concern", "a.rs", "needs work"]);
+    std::fs::write(dir.path().join(".gitattributes"), "*.qual merge=union\n").unwrap();
+    git_commit_all(dir.path(), "baseline");
+    // Two branches each resolve the record; merging them leaves two closers.
+    for (branch, summary) in [
+        ("feat", "fixed on branch one"),
+        ("other", "fixed on branch two"),
+    ] {
+        let status = Command::new("git")
+            .args(["checkout", "-q", "-b", branch, "main"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let (_, stderr, code) = run_qualifier(
+            dir.path(),
+            &["resolve", &old, summary, "--issuer", "mailto:a@b.com"],
+        );
+        assert_eq!(code, 0, "{stderr}");
+        git_commit_all(dir.path(), summary);
+    }
+    let run_git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    };
+    run_git(&["checkout", "-q", "feat"]);
+    run_git(&["merge", "-q", "--no-edit", "other"]);
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("fixed on branch one") && stdout.contains("fixed on branch two"),
+        "both closers should be listed: {stdout}"
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let closers = v["resolved"][0]["closers"]
+        .as_array()
+        .expect("closers array");
+    assert_eq!(closers.len(), 2, "{stdout}");
+    assert!(v["resolved"][0]["closer"].is_object(), "{stdout}");
+}
+
+#[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
     let (stdout, _stderr, code) = run_qualifier(dir.path(), &["--help"]);
