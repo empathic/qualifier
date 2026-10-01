@@ -10,10 +10,6 @@ pub struct Args {
     #[arg(long)]
     pub kind: Option<String>,
 
-    /// Show only unannotated artifacts (no annotations)
-    #[arg(long)]
-    pub unqualified: bool,
-
     /// Output format (human, json)
     #[arg(long, value_enum, default_value_t = Format::Human)]
     pub format: Format,
@@ -41,21 +37,15 @@ pub fn run(args: Args) -> crate::Result<()> {
         }
     }
 
-    let rows: Vec<(String, Vec<String>)> = if args.unqualified {
-        // Without per-subject discovery we can't fully list "what doesn't exist";
-        // approximate by listing nothing. The flag stays as a placeholder.
-        Vec::new()
-    } else {
-        by_subject
-            .into_iter()
-            .filter(|(_, kinds)| {
-                if let Some(ref kind_filter) = args.kind {
-                    return kinds.iter().any(|k| k == kind_filter);
-                }
-                true
-            })
-            .collect()
-    };
+    let rows: Vec<(String, Vec<String>)> = by_subject
+        .into_iter()
+        .filter(|(_, kinds)| {
+            if let Some(ref kind_filter) = args.kind {
+                return kinds.iter().any(|k| k == kind_filter);
+            }
+            true
+        })
+        .collect();
 
     if args.format == Format::Json {
         let entries: Vec<serde_json::Value> = rows
@@ -70,11 +60,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             .collect();
         println!("{}", serde_json::to_string_pretty(&entries).unwrap());
     } else if rows.is_empty() {
-        if args.unqualified {
-            println!("(unqualified listing requires a project file index — not implemented)");
-        } else {
-            println!("No matching artifacts found.");
-        }
+        println!("No matching artifacts found.");
     } else {
         for (subject, kinds) in &rows {
             println!("  {}  ({} annotations)", subject, kinds.len());

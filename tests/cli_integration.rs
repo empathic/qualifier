@@ -414,6 +414,14 @@ fn test_ls_kind_filter() {
     assert!(!stdout.contains("b.rs"), "kind filter should hide praise");
 }
 
+#[test]
+fn test_ls_unqualified_flag_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier(dir.path(), &["ls", "--unqualified"]);
+    assert_eq!(code, 2, "clap rejects the removed flag: {stderr}");
+    assert!(stderr.contains("--unqualified"), "{stderr}");
+}
+
 // --- qualifier praise ---
 
 #[test]
