@@ -1605,6 +1605,8 @@ impl Timestamp {
     pub fn instant(&self) -> DateTime<Utc>;
 }
 impl From<DateTime<Utc>> for Timestamp;                // canonical form
+// Timestamp also implements Deref<Target = DateTime<Utc>>, Display and
+// FromStr (as written), and Serialize/Deserialize (as written).
 
 pub struct Span {
     pub start: Position,
@@ -1644,7 +1646,7 @@ pub fn finalize_record(record: Record) -> Record;
 pub struct QualFile { pub path: PathBuf, pub subject: String, pub records: Vec<Record> }
 pub fn parse(path: &Path) -> Result<QualFile>;                     // strict: first bad line is an error
 pub fn parse_lenient(path: &Path) -> Result<(QualFile, Vec<ParseIssue>)>; // skips bad lines
-pub struct ParseIssue { pub path: PathBuf, pub line: usize, pub message: String }
+pub struct ParseIssue { pub path: PathBuf, pub line: usize, pub message: String } // Display: "file:line: message"
 pub fn parse_str(content: &str) -> Result<Vec<Record>>;            // strict, in memory
 pub fn append(path: &Path, record: &Record) -> Result<()>;
 pub fn write_all(path: &Path, records: &[Record]) -> Result<()>;    // rewrite a whole file
@@ -1653,7 +1655,7 @@ pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>; // 
 
 // qualifier::content_hash — span freshness checking
 pub fn compute_span_hash(file_path: &Path, span: &Span) -> Result<String, SpanHashError>;
-pub enum SpanHashError { NotFound, Io(String), NotUtf8, OutOfRange { start, end, lines }, Reversed { start, end } }
+pub enum SpanHashError { NotFound, Io(String), NotUtf8, OutOfRange { start, end, lines }, Reversed { start, end } } // Display + Error
 pub enum FreshnessStatus { Fresh, Drifted { expected, actual }, Missing { reason }, NoHash }
 pub fn check_freshness(file_path: &Path, span: &Span) -> FreshnessStatus;
 
@@ -1666,7 +1668,13 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult);
 pub fn snapshot_subject(qual_file: &QualFile, subject: &str) -> (QualFile, CompactResult);
 
 // qualifier (crate root)
-pub enum Error { Io(std::io::Error), Json(serde_json::Error), Cycle { context: String, detail: String }, Validation(String) }
+pub enum Error {
+    Io(std::io::Error),
+    Json(serde_json::Error),
+    Cycle { context: String, detail: String },
+    Validation(String),
+    AlreadyReported(i32),   // failure already printed on stderr; the binary exits with this status
+}
 pub type Result<T> = std::result::Result<T, Error>;
 
 // qualifier::threads — group annotations into conversations
@@ -1681,6 +1689,50 @@ pub struct Thread<'a> {
 }
 pub struct ThreadEntry<'a> { pub record: &'a Record, pub active: bool }
 pub fn build_threads(records: &[Record]) -> Vec<Thread<'_>>;
+
+impl<'a> Thread<'a> {
+    pub fn records(&self) -> impl Iterator<Item = &'a Record>;       // root, history, replies, closed_by
+    pub fn live_records(&self) -> impl Iterator<Item = &'a Record>;  // root, live replies, closed_by
+    pub fn latest_status(&self) -> Option<(&'a str, Option<&'a str>)>; // newest status:* value, addressee
+    pub fn without_superseded_replies(self) -> Self;
+    pub fn state(&self) -> ThreadState<'a>;
+}
+
+/// Where a thread stands (§6.12).
+pub enum ThreadState<'a> {
+    Open,
+    NeedsDecision { addressee: Option<&'a str> },
+    Decided,
+    Closed { reason: Option<&'a str>, closer: &'a Record, pending_question: bool },
+}
+impl ThreadState<'_> {
+    pub fn name(&self) -> &'static str;          // "open", "needs-decision", "decided", "closed"
+    pub fn to_json(&self) -> serde_json::Value;  // the `state` object of threads JSON
+}
+
+/// Threads with any record on `subject`, open first; drops superseded replies unless `all`.
+pub fn threads_touching<'a>(records: &'a [Record], subject: &str, all: bool) -> Vec<Thread<'a>>;
+/// `<command>: warning: kind 'X' matches no known kind` for each requested
+/// custom kind that no record carries.
+pub fn unknown_kind_warnings<'r>(command: &str, requested: &[Kind],
+    records: impl IntoIterator<Item = &'r Record>) -> Vec<String>;
+
+/// The human thread renderer shared by `threads`, `show`, and `praise`.
+pub struct ThreadRenderer<'f> {
+    pub all: bool,             // also print edit history and superseded replies
+    pub expand_closed: bool,   // print a closed thread's replies and closing resolve
+    pub attribution: bool,     // append (issuer, issuer type, date) to each line
+    pub continuation: Option<&'f Continuation<'f>>, // extra lines under a record
+}
+pub type Continuation<'f> = dyn Fn(&Record) -> Vec<String> + 'f;
+impl ThreadRenderer<'_> { pub fn render(&self, t: &Thread<'_>) -> Vec<String>; }
+
+pub fn thread_json(t: &Thread<'_>) -> serde_json::Result<serde_json::Value>; // one element of threads JSON
+pub fn thread_summary_json(t: &Thread<'_>) -> serde_json::Value;            // {origin, root, state, closed_by}
+pub fn kind_label(r: &Record) -> String;   // kind, or envelope type for non-annotations
+pub fn location(r: &Record) -> String;     // subject, subject:line, or subject:start:end
+pub fn short_id(id: &str) -> &str;         // first 8 characters
+pub fn short_issuer(issuer: &str) -> &str; // mailto:alice@example.com -> alice
 ```
 
 A thread starts at an origin annotation. Records join it through
