@@ -113,7 +113,7 @@ fn build_record(
                 subject: subject.into(),
                 issuer,
                 issuer_type,
-                created_at: now,
+                created_at: now.into(),
                 id: String::new(),
                 body,
             });
@@ -137,7 +137,7 @@ fn build_record(
             }
             envelope.insert(
                 "created_at".into(),
-                serde_json::Value::String(now.to_rfc3339()),
+                serde_json::Value::String(annotation::Timestamp::canonical(now)),
             );
             envelope.insert("id".into(), serde_json::Value::String(String::new()));
             envelope.insert("body".into(), body);

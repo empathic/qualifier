@@ -186,7 +186,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         subject,
         issuer,
         issuer_type,
-        created_at: Utc::now(),
+        created_at: Utc::now().into(),
         id: String::new(),
         body: AnnotationBody {
             detail: args.detail,
@@ -566,7 +566,7 @@ fn build_record_from_overrides(
         subject,
         issuer,
         issuer_type,
-        created_at: Utc::now(),
+        created_at: Utc::now().into(),
         id: String::new(),
         body: AnnotationBody {
             detail,

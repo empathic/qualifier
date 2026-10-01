@@ -6048,6 +6048,44 @@ fn test_compact_keeps_custom_body_fields_and_their_id() {
     );
 }
 
+#[test]
+fn test_compact_keeps_created_at_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "fn x() {}\n").unwrap();
+    let foreign: qualifier::annotation::Record = serde_json::from_str(
+        r#"{"metabox":"1","type":"annotation","subject":"x.rs","issuer":"mailto:t@t.com","created_at":"2026-02-24T10:00:00.5+00:00","id":"","body":{"kind":"concern","summary":"other tool"}}"#,
+    )
+    .unwrap();
+    let foreign_line =
+        serde_json::to_string(&qualifier::annotation::finalize_record(foreign)).unwrap();
+    std::fs::write(dir.path().join("x.rs.qual"), format!("{foreign_line}\n")).unwrap();
+    let first = write_id(dir.path(), &["record", "comment", "x.rs", "first"]);
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "x.rs",
+            "second",
+            "--supersedes",
+            &first,
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "x.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let after = std::fs::read_to_string(dir.path().join("x.rs.qual")).unwrap();
+    assert!(
+        after.lines().any(|l| l == foreign_line),
+        "created_at must not be re-encoded:\n{after}"
+    );
+    // Records qualifier writes use the canonical form.
+    let written = after.lines().last().unwrap();
+    let v: serde_json::Value = serde_json::from_str(written).unwrap();
+    let ts = v["created_at"].as_str().unwrap();
+    assert!(ts.ends_with('Z') && !ts.contains('+'), "{ts}");
+}
+
 // --- compact scope and thread structure ---
 
 /// Threads built from every `.qual` file under `dir`.
