@@ -5515,6 +5515,43 @@ fn test_batch_dry_run_creates_no_directories() {
 
 // --- write path: envelopes, pointers, containment ---
 
+#[cfg(unix)]
+#[test]
+fn test_absolute_location_through_symlink_resolves() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    git_init(&repo);
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&repo, &link).unwrap();
+    // src/new.rs does not exist yet: only its parent can be canonicalized.
+    for file in ["src/a.rs", "src/new.rs"] {
+        std::fs::write(repo.join("src/a.rs"), "fn a() {}\n").unwrap();
+        let arg = link.join(file);
+        let (stdout, stderr, code) = run_qualifier(
+            &repo,
+            &[
+                "record",
+                "comment",
+                arg.to_str().unwrap(),
+                "abs",
+                "--format",
+                "json",
+            ],
+        );
+        assert_eq!(code, 0, "{}: {stderr}", arg.display());
+        let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert_eq!(v["subject"], file);
+    }
+    let outside = dir.path().join("elsewhere.rs");
+    let (_, stderr, code) = run_qualifier(
+        &repo,
+        &["record", "comment", outside.to_str().unwrap(), "x"],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+}
+
 #[test]
 fn test_writes_into_qualignored_directory_are_refused() {
     let dir = tempfile::tempdir().unwrap();

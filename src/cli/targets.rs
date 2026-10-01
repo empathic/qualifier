@@ -80,9 +80,7 @@ impl Locator {
         };
         let path = Path::new(arg);
         let joined = if path.is_absolute() {
-            path.strip_prefix(&self.root)
-                .map_err(|_| outside())?
-                .to_path_buf()
+            self.strip_root(path).ok_or_else(outside)?
         } else {
             base.join(path)
         };
@@ -102,6 +100,30 @@ impl Locator {
         } else {
             parts.join("/")
         })
+    }
+
+    /// `path` relative to the root. The lexical comparison is tried first;
+    /// failing that, both sides are canonicalized, so a path that reaches
+    /// the project through a symlink (macOS `/tmp` is `/private/tmp`)
+    /// still resolves. A path that does not exist yet is canonicalized
+    /// through its longest existing ancestor.
+    fn strip_root(&self, path: &Path) -> Option<PathBuf> {
+        if let Ok(rel) = path.strip_prefix(&self.root) {
+            return Some(rel.to_path_buf());
+        }
+        let root = self.root.canonicalize().ok()?;
+        let mut existing = path;
+        let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
+        let canonical = loop {
+            if let Ok(c) = existing.canonicalize() {
+                break c;
+            }
+            rest.push(existing.file_name()?);
+            existing = existing.parent()?;
+        };
+        let mut full = canonical;
+        full.extend(rest.iter().rev());
+        full.strip_prefix(&root).ok().map(Path::to_path_buf)
     }
 
     /// Parse a `path[:start[:end]]` location argument into a root-relative
@@ -171,7 +193,7 @@ impl Locator {
         } else {
             self.root.join(&self.cwd_rel).join(qual_path)
         };
-        let Ok(rel) = abs.strip_prefix(&self.root) else {
+        let Some(rel) = self.strip_root(&abs) else {
             return Ok(());
         };
         let rel = PathBuf::from(self.normalize(&rel.to_string_lossy(), Path::new(""))?);
