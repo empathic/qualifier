@@ -1,7 +1,7 @@
 ---
 name: reviewing-into-qualifier
 description: Use when reviewing code or a design document, whether asked for a review or reviewing your own work before merge — writes every finding as a qualifier annotation instead of reporting it in chat, then verifies each finding against the code
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
 ---
 
 # Reviewing into qualifier

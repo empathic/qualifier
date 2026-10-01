@@ -1,7 +1,7 @@
 ---
 name: triaging-threads
 description: Use when working through existing qualifier threads or review feedback — checks each claim against the current code, proposes closes with reasons as one batch for the human to approve, and replies with concrete resolutions for the rest
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
 ---
 
 # Triaging threads

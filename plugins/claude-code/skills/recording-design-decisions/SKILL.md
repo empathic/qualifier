@@ -1,7 +1,7 @@
 ---
 name: recording-design-decisions
 description: Use during design or brainstorming when an option is considered and rejected, a risk is knowingly accepted, or a spec or design document is critiqued — records each as a qualifier annotation on the spec so the reasoning outlives the conversation
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)
 ---
 
 # Recording design decisions

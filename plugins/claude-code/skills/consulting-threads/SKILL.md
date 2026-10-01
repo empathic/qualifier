@@ -1,7 +1,7 @@
 ---
 name: consulting-threads
 description: Use before modifying a file in a repository with .qual files — reads the open blockers, concerns, and alternatives on the lines about to change so the edit accounts for them
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)
 ---
 
 # Consulting threads before editing

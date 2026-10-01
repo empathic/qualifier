@@ -1,7 +1,7 @@
 ---
 name: closing-the-loop
 description: Use when a code change is complete, before committing or reporting it done, including when the user will commit it — resolves threads the change fixed, records shortcuts as concerns instead of TODO comments, re-records drifted annotations, and records design decisions settled in conversation
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
 ---
 
 # Closing the loop
