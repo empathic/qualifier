@@ -6,13 +6,17 @@ use crate::annotation::Span;
 ///
 /// Reads the file at `file_path`, extracts lines `start.line..=end.line`
 /// (1-indexed), joins them with `\n`, and returns the hex BLAKE3 hash.
-/// Returns `None` if the file is unreadable or the span extends beyond EOF.
+/// Returns `None` if the file is unreadable, the span ends before it
+/// starts, or the span extends beyond EOF.
 pub fn compute_span_hash(file_path: &Path, span: &Span) -> Option<String> {
-    let content = std::fs::read_to_string(file_path).ok()?;
-    let all_lines: Vec<&str> = content.lines().collect();
-
     let start = span.start.line as usize;
     let end = span.end_or_start().line as usize;
+    if end < start {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(file_path).ok()?;
+    let all_lines: Vec<&str> = content.lines().collect();
 
     if start == 0 || start > all_lines.len() || end > all_lines.len() {
         return None;
@@ -52,7 +56,15 @@ pub fn check_freshness(file_path: &Path, span: &Span) -> FreshnessStatus {
             }
         }
         None => {
-            if !file_path.exists() {
+            if span.end_or_start().line < span.start.line {
+                FreshnessStatus::Missing {
+                    reason: format!(
+                        "span end (line {}) precedes start (line {})",
+                        span.end_or_start().line,
+                        span.start.line
+                    ),
+                }
+            } else if !file_path.exists() {
                 FreshnessStatus::Missing {
                     reason: format!("file not found: {}", file_path.display()),
                 }
@@ -197,6 +209,25 @@ mod tests {
         match check_freshness(f.path(), &s) {
             FreshnessStatus::Missing { reason } => {
                 assert!(reason.contains("beyond file length"));
+            }
+            other => panic!("expected Missing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_compute_reversed_span_is_none() {
+        let f = make_file(&["1", "2", "3", "4", "5", "6"]);
+        assert!(compute_span_hash(f.path(), &span(5, Some(2))).is_none());
+    }
+
+    #[test]
+    fn test_freshness_reversed_span() {
+        let f = make_file(&["1", "2", "3", "4", "5", "6"]);
+        let mut s = span(5, Some(2));
+        s.content_hash = Some("abc".into());
+        match check_freshness(f.path(), &s) {
+            FreshnessStatus::Missing { reason } => {
+                assert!(reason.contains("precedes start"), "{reason}");
             }
             other => panic!("expected Missing, got {other:?}"),
         }

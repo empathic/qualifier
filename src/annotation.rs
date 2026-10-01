@@ -813,6 +813,25 @@ pub fn validate(annotation: &Annotation) -> Vec<String> {
         {
             errors.push("span.start.col must be >= 1 (1-indexed)".into());
         }
+        if let Some(ref end) = span.end {
+            if end.col == Some(0) {
+                errors.push("span.end.col must be >= 1 (1-indexed)".into());
+            }
+            if end.line < span.start.line {
+                errors.push(format!(
+                    "span end (line {}) must not precede span start (line {})",
+                    end.line, span.start.line
+                ));
+            } else if end.line == span.start.line
+                && let (Some(start_col), Some(end_col)) = (span.start.col, end.col)
+                && end_col < start_col
+            {
+                errors.push(format!(
+                    "span end (column {end_col}) must not precede span start (column {start_col}) on line {}",
+                    end.line
+                ));
+            }
+        }
     }
 
     errors
@@ -1234,6 +1253,41 @@ mod tests {
         }));
 
         assert!(check_supersession_cycles(&[a, b]).is_err());
+    }
+
+    fn with_span(start: (u32, Option<u32>), end: (u32, Option<u32>)) -> Annotation {
+        let mut att = sample_annotation();
+        att.body.span = Some(Span {
+            start: Position {
+                line: start.0,
+                col: start.1,
+            },
+            end: Some(Position {
+                line: end.0,
+                col: end.1,
+            }),
+            content_hash: None,
+        });
+        att.id = generate_id(&att);
+        att
+    }
+
+    #[test]
+    fn test_validate_rejects_reversed_span() {
+        let errors = validate(&with_span((5, None), (2, None)));
+        assert!(
+            errors.iter().any(|e| e.contains("must not precede")),
+            "{errors:?}"
+        );
+        let errors = validate(&with_span((3, Some(9)), (3, Some(4))));
+        assert!(errors.iter().any(|e| e.contains("column 4")), "{errors:?}");
+        let errors = validate(&with_span((3, Some(1)), (4, Some(0))));
+        assert!(
+            errors.iter().any(|e| e.contains("span.end.col")),
+            "{errors:?}"
+        );
+        assert!(validate(&with_span((3, Some(9)), (4, Some(1)))).is_empty());
+        assert!(validate(&with_span((3, None), (3, None))).is_empty());
     }
 
     #[test]
