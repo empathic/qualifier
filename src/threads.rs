@@ -282,6 +282,42 @@ impl ThreadState<'_> {
     }
 }
 
+impl ThreadState<'_> {
+    /// The human wording of the state, shared by every read command:
+    /// `open`, `needs decision`, `needs decision from alice`, `decided`, or
+    /// `closed (wontfix): Won't change b()`, ending in
+    /// `— question still pending` when the thread closed on an unanswered
+    /// `status:needs-decision`. With `attribution`, a closed thread names
+    /// who closed it: `closed (wontfix) by alice: ...`.
+    pub fn describe(&self, attribution: bool) -> String {
+        match self {
+            Self::Open => "open".into(),
+            Self::NeedsDecision { addressee: None } => "needs decision".into(),
+            Self::NeedsDecision { addressee: Some(a) } => {
+                format!("needs decision from {}", short_issuer(a))
+            }
+            Self::Decided => "decided".into(),
+            Self::Closed {
+                reason,
+                closer,
+                pending_question,
+            } => {
+                let reason = reason.map(|r| format!(" ({r})")).unwrap_or_default();
+                let by = match closer.as_annotation() {
+                    Some(a) if attribution => format!(" by {}", short_issuer(&a.issuer)),
+                    _ => String::new(),
+                };
+                let pending = if *pending_question {
+                    " — question still pending"
+                } else {
+                    ""
+                };
+                format!("closed{reason}{by}: {}{pending}", summary(closer))
+            }
+        }
+    }
+}
+
 impl<'a> Thread<'a> {
     /// Every record in the thread: root, history, replies (as currently
     /// held), and the closing resolve.
@@ -569,28 +605,7 @@ impl ThreadRenderer<'_> {
     fn state_suffix(&self, state: &ThreadState<'_>) -> String {
         match state {
             ThreadState::Open => String::new(),
-            ThreadState::NeedsDecision { addressee: None } => " — needs decision".into(),
-            ThreadState::NeedsDecision { addressee: Some(a) } => {
-                format!(" — needs decision from {}", short_issuer(a))
-            }
-            ThreadState::Decided => " — decided".into(),
-            ThreadState::Closed {
-                reason,
-                closer,
-                pending_question,
-            } => {
-                let reason = reason.map(|r| format!(" ({r})")).unwrap_or_default();
-                let by = match closer.as_annotation() {
-                    Some(a) if self.attribution => format!(" by {}", short_issuer(&a.issuer)),
-                    _ => String::new(),
-                };
-                let pending = if *pending_question {
-                    " — question still pending"
-                } else {
-                    ""
-                };
-                format!(" — closed{reason}{by}: {}{pending}", summary(closer))
-            }
+            _ => format!(" — {}", state.describe(self.attribution)),
         }
     }
 }
