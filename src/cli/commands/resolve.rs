@@ -90,6 +90,7 @@ pub(crate) fn build_resolve(target: &Record, input: ResolveInput) -> crate::Resu
             summary: input.message.unwrap_or_else(|| "Resolved".into()),
             supersedes: Some(target.id().to_string()),
             tags: provenance::with_session_tag(tags),
+            extra: Default::default(),
         },
     });
     let errors = annotation::validate(&att);

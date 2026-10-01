@@ -414,8 +414,10 @@ obey the following rules:
    `body`. Optional envelope fields (`issuer_type`) are omitted when absent.
 
 3. **Body field order.** Body fields MUST appear in lexicographic
-   (alphabetical) order. Nested objects (like `span`) also have their fields
-   in lexicographic order.
+   (alphabetical) order. Custom body fields that the record type does not
+   define (see §4) are part of the body: they are sorted together with the
+   defined fields, never appended after them. Nested objects (like `span`)
+   also have their fields in lexicographic order.
 
 4. **Absent optional fields.** Optional fields whose value is absent (null,
    None, etc.) MUST be omitted entirely. `tags` MUST be omitted when the
@@ -1316,7 +1318,11 @@ pub struct AnnotationBody {
     pub summary: String,
     pub supersedes: Option<String>,
     pub tags: Vec<String>,
+    pub extra: ExtraFields,             // custom body fields, preserved and hashed
 }
+
+/// Body fields a record type does not define, keyed by name.
+pub type ExtraFields = BTreeMap<String, serde_json::Value>;
 
 pub struct Epoch {
     pub metabox: String,                    // always "1"
@@ -1333,6 +1339,7 @@ pub struct EpochBody {
     pub refs: Vec<String>,
     pub span: Option<Span>,
     pub summary: String,
+    pub extra: ExtraFields,
 }
 
 pub struct DependencyRecord {
@@ -1348,6 +1355,7 @@ pub struct DependencyRecord {
 
 pub struct DependencyBody {
     pub depends_on: Vec<String>,
+    pub extra: ExtraFields,
 }
 
 pub struct Span {

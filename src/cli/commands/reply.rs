@@ -43,6 +43,7 @@ pub(crate) fn build_reply(target: &Record, input: ReplyInput) -> crate::Result<A
             summary: input.message,
             supersedes: input.supersedes,
             tags: provenance::with_session_tag(tags),
+            extra: Default::default(),
         },
     });
     let errors = annotation::validate(&att);

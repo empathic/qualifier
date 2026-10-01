@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 // ─── Span types ─────────────────────────────────────────────────────────────
@@ -238,42 +238,169 @@ impl std::str::FromStr for IssuerType {
     }
 }
 
-// ─── Body structs (fields alphabetical for MCF) ─────────────────────────────
+// ─── Body structs ───────────────────────────────────────────────────────────
+//
+// Bodies serialize with their top-level keys in lexicographic order (MCF),
+// merging the defined fields with any custom fields in `extra`. Values keep
+// their own serialization, so `span` keeps its start, end, content_hash order.
 
-/// Annotation body fields. Field order is alphabetical (MCF canonical form).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Body fields a record carries beyond the ones its type defines, keyed by
+/// name. They are preserved on rewrite and included in the record ID.
+pub type ExtraFields = BTreeMap<String, serde_json::Value>;
+
+/// One top-level body value, borrowed for serialization.
+enum BodyValue<'a> {
+    Str(&'a str),
+    Kind(&'a Kind),
+    Span(&'a Span),
+    List(&'a [String]),
+    Json(&'a serde_json::Value),
+}
+
+impl Serialize for BodyValue<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            BodyValue::Str(s) => s.serialize(serializer),
+            BodyValue::Kind(k) => k.serialize(serializer),
+            BodyValue::Span(s) => s.serialize(serializer),
+            BodyValue::List(l) => l.serialize(serializer),
+            BodyValue::Json(v) => v.serialize(serializer),
+        }
+    }
+}
+
+/// Serialize a body as a map whose keys are in lexicographic order.
+///
+/// `fields` holds the defined fields that are present; `names` lists every
+/// defined field name, so a custom field can never shadow one.
+fn serialize_body<'a, S: Serializer>(
+    serializer: S,
+    names: &[&str],
+    mut fields: Vec<(&'a str, BodyValue<'a>)>,
+    extra: &'a ExtraFields,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap;
+    fields.extend(
+        extra
+            .iter()
+            .filter(|(k, _)| !names.contains(&k.as_str()))
+            .map(|(k, v)| (k.as_str(), BodyValue::Json(v))),
+    );
+    fields.sort_by(|a, b| a.0.cmp(b.0));
+    let mut map = serializer.serialize_map(Some(fields.len()))?;
+    for (key, value) in &fields {
+        map.serialize_entry(key, value)?;
+    }
+    map.end()
+}
+
+/// Annotation body fields.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct AnnotationBody {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub detail: Option<String>,
     pub kind: Kind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub r#ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub references: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub span: Option<Span>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub suggested_fix: Option<String>,
     pub summary: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub supersedes: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub tags: Vec<String>,
+    /// Custom body fields (see [`ExtraFields`]).
+    #[serde(flatten)]
+    pub extra: ExtraFields,
 }
 
-/// Epoch body fields. Field order is alphabetical (MCF canonical form).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl Serialize for AnnotationBody {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        const NAMES: &[&str] = &[
+            "detail",
+            "kind",
+            "ref",
+            "references",
+            "span",
+            "suggested_fix",
+            "summary",
+            "supersedes",
+            "tags",
+        ];
+        let mut fields = vec![
+            ("kind", BodyValue::Kind(&self.kind)),
+            ("summary", BodyValue::Str(&self.summary)),
+        ];
+        let optional = [
+            ("detail", &self.detail),
+            ("ref", &self.r#ref),
+            ("references", &self.references),
+            ("suggested_fix", &self.suggested_fix),
+            ("supersedes", &self.supersedes),
+        ];
+        for (name, value) in optional {
+            if let Some(v) = value {
+                fields.push((name, BodyValue::Str(v)));
+            }
+        }
+        if let Some(span) = &self.span {
+            fields.push(("span", BodyValue::Span(span)));
+        }
+        if !self.tags.is_empty() {
+            fields.push(("tags", BodyValue::List(&self.tags)));
+        }
+        serialize_body(serializer, NAMES, fields, &self.extra)
+    }
+}
+
+/// Epoch body fields.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct EpochBody {
     pub refs: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub span: Option<Span>,
     pub summary: String,
+    /// Custom body fields (see [`ExtraFields`]).
+    #[serde(flatten)]
+    pub extra: ExtraFields,
 }
 
-/// Dependency body fields. Field order is alphabetical (MCF canonical form).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl Serialize for EpochBody {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut fields = vec![
+            ("refs", BodyValue::List(&self.refs)),
+            ("summary", BodyValue::Str(&self.summary)),
+        ];
+        if let Some(span) = &self.span {
+            fields.push(("span", BodyValue::Span(span)));
+        }
+        serialize_body(
+            serializer,
+            &["refs", "span", "summary"],
+            fields,
+            &self.extra,
+        )
+    }
+}
+
+/// Dependency body fields.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct DependencyBody {
     pub depends_on: Vec<String>,
+    /// Custom body fields (see [`ExtraFields`]).
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
+impl Serialize for DependencyBody {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let fields = vec![("depends_on", BodyValue::List(&self.depends_on))];
+        serialize_body(serializer, &["depends_on"], fields, &self.extra)
+    }
 }
 
 // ─── Annotation struct ──────────────────────────────────────────────────────
@@ -860,6 +987,7 @@ mod tests {
                 summary: "Panics on malformed input".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         att.id = generate_id(&att);
@@ -912,6 +1040,7 @@ mod tests {
                 summary: String::new(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         let errors = validate(&att);
@@ -949,6 +1078,7 @@ mod tests {
                 summary: "good".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         let finalized = finalize(att);
@@ -983,6 +1113,7 @@ mod tests {
                 summary: "issue".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         let finalized = finalize(att);
@@ -1020,6 +1151,7 @@ mod tests {
                 summary: "issue".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1048,6 +1180,7 @@ mod tests {
                 summary: "issue".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1075,6 +1208,7 @@ mod tests {
                 summary: "a".into(),
                 supersedes: Some("bbb".into()),
                 tags: vec![],
+                extra: Default::default(),
             },
         }));
         let b = Record::Annotation(Box::new(Annotation {
@@ -1095,6 +1229,7 @@ mod tests {
                 summary: "b".into(),
                 supersedes: Some("aaa".into()),
                 tags: vec![],
+                extra: Default::default(),
             },
         }));
 
@@ -1181,6 +1316,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         })));
         let a_id = a.id().to_string();
@@ -1202,6 +1338,7 @@ mod tests {
                 summary: "updated".into(),
                 supersedes: Some(a_id),
                 tags: vec![],
+                extra: Default::default(),
             },
         })));
         let result = validate_supersession_targets(&[a, b]);
@@ -1229,6 +1366,7 @@ mod tests {
                 summary: "bad".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         })));
         let a_id = a.id().to_string();
@@ -1250,6 +1388,7 @@ mod tests {
                 summary: "fixed".into(),
                 supersedes: Some(a_id),
                 tags: vec![],
+                extra: Default::default(),
             },
         })));
         let result = validate_supersession_targets(&[a, b]);
@@ -1285,6 +1424,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
         assert_eq!(att.metabox, "1");
@@ -1315,6 +1455,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1336,6 +1477,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1357,6 +1499,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1386,6 +1529,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         att.id = generate_id(&att);
@@ -1421,6 +1565,7 @@ mod tests {
                 summary: "great".into(),
                 supersedes: None,
                 tags: vec!["quality".into()],
+                extra: Default::default(),
             },
         });
 
@@ -1457,6 +1602,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
         let record = Record::Annotation(Box::new(att.clone()));
@@ -1490,6 +1636,7 @@ mod tests {
                 refs: vec!["aaa".into(), "bbb".into()],
                 span: None,
                 summary: "Compacted from 3 records".into(),
+                extra: Default::default(),
             },
         });
 
@@ -1636,6 +1783,7 @@ mod tests {
                 summary: "note".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1657,6 +1805,7 @@ mod tests {
                 summary: "note".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1683,6 +1832,7 @@ mod tests {
                 summary: "self-ref".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         att.id = generate_id(&att);

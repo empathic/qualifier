@@ -98,6 +98,7 @@ pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult) {
                 refs,
                 span: None,
                 summary: format!("Compacted from {} records", count),
+                extra: Default::default(),
             },
         });
         epoch_records.push(Record::Epoch(epoch));
@@ -150,6 +151,7 @@ mod tests {
                 summary: summary.into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         })
     }
@@ -179,6 +181,7 @@ mod tests {
                 summary: "updated".into(),
                 supersedes: Some(supersedes_id.into()),
                 tags: vec![],
+                extra: Default::default(),
             },
         })))
     }
