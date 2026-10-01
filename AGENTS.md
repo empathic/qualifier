@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/` holds the Rust library plus CLI entry at `src/bin/qualifier.rs`; key modules include `annotation`, `qual_file`, `scoring`, and `graph`.
+- `src/` holds the Rust library plus CLI entry at `src/bin/qualifier.rs`; key modules include `annotation`, `qual_file`, `compact`, `content_hash`, and `threads`.
 - `tests/` contains integration coverage (`integration.rs`) and CLI/system tests (`cli_integration.rs`).
 - `scripts/` offers helpers: `dev.sh` (serve docs site with pnpm + Eleventy) and `release.sh` (test, lint, and publish flow).
 - `site/` is the marketing/docs site; `README.md` and `SPEC.md` describe concepts and the format.
@@ -11,7 +11,7 @@
 - `cargo fmt` — format with rustfmt defaults.
 - `cargo clippy --all-targets --all-features -- -D warnings` — lint; keep warning-free.
 - `cargo test --all-features` — run library + CLI integration tests.
-- `cargo run --bin qualifier -- <args>` — run the CLI locally (e.g., `cargo run --bin qualifier -- score`).
+- `cargo run --bin qualifier -- <args>` — run the CLI locally (e.g., `cargo run --bin qualifier -- threads`).
 - `./scripts/dev.sh` — serve the Eleventy site locally; installs pnpm deps on first run.
 - `./scripts/release.sh [--execute] [--allow-dirty]` — dry-run publish by default; `--execute` actually publishes after tests/clippy.
 - `scripts/test-plugin.sh` — offline checks for the Claude Code plugin (manifests, binary wrapper, SessionStart hook, skills, eval cases), including running every skill's qualifier examples against `target/debug/qualifier` or `$QUALIFIER_BIN` (`scripts/check-skill-examples.py`).
@@ -27,11 +27,11 @@
 - Tests live in `tests/`; name cases `test_*` with focused scenarios.
 - `cargo test --all-features` is the expected pre-PR run; CLI tests rely on the built `target/debug/qualifier` binary.
 - Add regressions to `tests/integration.rs` for library logic and `tests/cli_integration.rs` for end-to-end CLI behavior; use `tempfile`/`std::fs` fixtures.
-- Cover edge cases: supersession cycles, score clamping, layout discovery, JSON output structure, and CLI exit codes.
+- Cover edge cases: supersession cycles, canonical form and IDs, layout discovery, JSON output structure, and CLI exit codes.
 
 ## Commit & Pull Request Guidelines
 - Follow conventional commits (e.g., `feat:`, `fix:`, `chore:`) as used in history.
-- PRs should describe behavior changes, link issues, and call out impacts to `.qual` layout, scoring, or CLI output.
+- PRs should describe behavior changes, link issues, and call out impacts to `.qual` layout, the record format, or CLI output.
 - Include results for `cargo fmt`, `cargo clippy --all-targets --all-features`, and `cargo test --all-features`; attach CLI examples when changing text output.
 - For release work, note whether `./scripts/release.sh --execute` should be run.
 
@@ -39,7 +39,7 @@
 When making changes, verify that all affected surfaces stay consistent:
 - **SPEC.md** — Section 7 (Library API) must match public function signatures. Section 10 (File Discovery) must match discovery behavior. Update the spec version when semantics change.
 - **README.md** — Core Concepts and CLI Commands table should reflect current behavior.
-- **site/** — `site/js/playground.js` contains a JavaScript scoring engine for the web playground. If scoring logic, record format, or field names change, update it to match.
+- **site/** — The playground (`site/js/playground.js`) runs the CLI compiled to wasm over `site/examples/*.qual`. Regenerate the examples when the record format changes, and rebuild `site/wasm/` (`scripts/build-wasm.sh`; the output is gitignored) for CLI changes. Keep `site/pages/*.md` in step with the CLI.
 - **Cargo.toml** — Bump the crate version for any user-visible change, in the same commit as the change. Follow semver:
   - **Minor** (`0.X.0`) for new features, new commands/flags, behavior changes, or anything that expands the user-visible surface.
   - **Patch** (`0.X.Y`) only for bug fixes and internal refactors that do not change observable behavior.
