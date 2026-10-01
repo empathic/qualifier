@@ -21,7 +21,7 @@
 //! Backed by [`gix`] in-process — no subprocess spawn per `.qual` file
 //! at the ref.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use clap::Args as ClapArgs;
@@ -159,7 +159,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         .flat_map(|qf| qf.records.iter().cloned())
         .collect();
 
-    let old_records = load_records_at_ref(&repo, effective_oid, &project_root, &new_qual_files)?;
+    let old_records = load_records_at_ref(&repo, effective_oid)?;
 
     let mut diff = compute_diff(&old_records, &new_records, &project_root);
     apply_filters(&mut diff, &args)?;
@@ -301,34 +301,18 @@ fn short_sha(s: &str) -> &str {
     if s.len() >= 7 { &s[..7] } else { s }
 }
 
-/// Paths from the current working tree are unioned with paths at `<ref>` so
-/// that `.qual` files deleted on this branch still surface their old records
-/// (otherwise we'd never see records under Resolved/removed for them).
+/// Read every `.qual` blob in the tree at `commit_oid`. Files deleted on
+/// this branch are still in that tree, which is how their records reach
+/// the Resolved bucket as removed.
 fn load_records_at_ref(
     repo: &gix::Repository,
     commit_oid: gix::ObjectId,
-    project_root: &Path,
-    new_qual_files: &[qual_file::QualFile],
 ) -> crate::Result<Vec<Record>> {
-    // Map relative-path -> blob oid for every .qual entry at <ref>.
     let qual_blobs_at_ref = enumerate_qual_blobs(repo, commit_oid)?;
 
-    let mut paths: HashSet<PathBuf> = HashSet::new();
-    for qf in new_qual_files {
-        if let Ok(rel) = qf.path.strip_prefix(project_root) {
-            paths.insert(rel.to_path_buf());
-        }
-    }
-    for path in qual_blobs_at_ref.keys() {
-        paths.insert(path.clone());
-    }
-
     let mut all = Vec::new();
-    for rel in paths {
-        let Some(blob_oid) = qual_blobs_at_ref.get(&rel) else {
-            continue; // file did not exist at <ref>
-        };
-        let blob = match repo.find_object(*blob_oid) {
+    for (rel, blob_oid) in qual_blobs_at_ref {
+        let blob = match repo.find_object(blob_oid) {
             Ok(o) => o,
             Err(e) => {
                 eprintln!(
@@ -370,7 +354,7 @@ fn load_records_at_ref(
 fn enumerate_qual_blobs(
     repo: &gix::Repository,
     commit_oid: gix::ObjectId,
-) -> crate::Result<HashMap<PathBuf, gix::ObjectId>> {
+) -> crate::Result<BTreeMap<PathBuf, gix::ObjectId>> {
     let commit = repo.find_commit(commit_oid).map_err(|e| {
         crate::Error::Validation(format!("could not read commit {commit_oid}: {e}"))
     })?;
@@ -383,7 +367,7 @@ fn enumerate_qual_blobs(
         .breadthfirst(&mut recorder)
         .map_err(|e| crate::Error::Validation(format!("tree traversal failed: {e}")))?;
 
-    let mut out = HashMap::new();
+    let mut out = BTreeMap::new();
     for entry in recorder.records {
         if !entry.mode.is_blob() {
             continue;
