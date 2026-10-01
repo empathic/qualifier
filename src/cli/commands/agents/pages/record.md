@@ -186,8 +186,10 @@ would ever see the record.
 - All three positional arguments (`<kind>`, `<location>`, `<message>`) are
   required in non-batch mode. Missing any one of them produces a validation
   error rather than a prompt.
-- Issuer defaults come from `QUALIFIER_*` variables, agent-harness
-  detection, then your VCS identity (`qualifier agents concepts`). In CI,
+- The issuer defaults to `QUALIFIER_ISSUER`, then `issuer` in
+  `.qualifier.toml` or the user config, then your VCS identity; agent-harness
+  detection sets only the issuer type and session tag
+  (`qualifier agents concepts`). In CI,
   set `QUALIFIER_ISSUER` in the environment rather than passing `--issuer`
   on each call.
 - Cross-subject supersession is rejected: a new record can only supersede a

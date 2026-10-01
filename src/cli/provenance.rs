@@ -1,7 +1,12 @@
 //! Issuer, issuer-type, and session defaults shared by the write commands.
 //!
-//! Precedence for each value: explicit flag, then `QUALIFIER_*` variable,
-//! then a detected agent harness, then the VCS identity (issuer only).
+//! - Issuer: explicit flag, then `QUALIFIER_ISSUER`, then `issuer` from the
+//!   config files (see [`crate::cli::config`]), then the VCS identity.
+//! - Issuer type and session: explicit flag (issuer type only), then
+//!   `QUALIFIER_ISSUER_TYPE` / `QUALIFIER_SESSION`, then a detected agent
+//!   harness, which sets `ai` and the `session:<harness>:<id>` tag. Harness
+//!   detection never sets the issuer.
+//!
 //! Empty variables count as unset.
 
 use std::sync::OnceLock;
@@ -41,8 +46,9 @@ fn detected_harness() -> Option<&'static Harness> {
         .find(|h| env_nonempty(h.marker.0).as_deref() == Some(h.marker.1))
 }
 
-/// The issuer URI for a new record. VCS detection runs at most once per
-/// process.
+/// The issuer URI for a new record: `explicit`, then `QUALIFIER_ISSUER`,
+/// then the configured issuer, then the VCS identity. VCS detection runs
+/// at most once per process.
 pub fn issuer(explicit: Option<&str>) -> String {
     static DETECTED: OnceLock<String> = OnceLock::new();
     let raw = explicit
