@@ -156,6 +156,68 @@ impl Locator {
         })
     }
 
+    /// Fail when discovery would skip `qual_path` (a path from
+    /// [`Self::write_path`]) because an ignore file hides it: a record
+    /// written there could never be read back. Checks `.gitignore`,
+    /// `.ignore` and `.qualignore` in the project root and in every
+    /// directory down to the file; a deeper file's rules win. The error
+    /// names the rule and the `--no-ignore` escape hatch.
+    pub(crate) fn check_not_ignored(&self, qual_path: &Path) -> crate::Result<()> {
+        use ignore::Match;
+        use ignore::gitignore::GitignoreBuilder;
+
+        let abs = if qual_path.is_absolute() {
+            qual_path.to_path_buf()
+        } else {
+            self.root.join(&self.cwd_rel).join(qual_path)
+        };
+        let Ok(rel) = abs.strip_prefix(&self.root) else {
+            return Ok(());
+        };
+        let rel = PathBuf::from(self.normalize(&rel.to_string_lossy(), Path::new(""))?);
+        let path = self.root.join(&rel);
+
+        let mut dirs = vec![self.root.clone()];
+        if let Some(parent) = rel.parent() {
+            let mut dir = self.root.clone();
+            for component in parent.components() {
+                dir.push(component);
+                dirs.push(dir.clone());
+            }
+        }
+        for dir in dirs.iter().rev() {
+            let mut builder = GitignoreBuilder::new(dir);
+            for name in [".gitignore", ".ignore", ".qualignore"] {
+                let file = dir.join(name);
+                if file.is_file() {
+                    // A malformed line is skipped, as discovery skips it.
+                    let _ = builder.add(file);
+                }
+            }
+            let Ok(matcher) = builder.build() else {
+                continue;
+            };
+            match matcher.matched_path_or_any_parents(&path, false) {
+                Match::Ignore(glob) => {
+                    let from = glob
+                        .from()
+                        .and_then(|f| f.strip_prefix(&self.root).ok())
+                        .map(|f| f.display().to_string())
+                        .unwrap_or_else(|| "an ignore file".into());
+                    return Err(crate::Error::Validation(format!(
+                        "{} is ignored by '{}' in {from}, so no command would read a \
+                         record written there; pass --no-ignore to write it anyway",
+                        rel.display(),
+                        glob.original(),
+                    )));
+                }
+                Match::Whitelist(_) => return Ok(()),
+                Match::None => {}
+            }
+        }
+        Ok(())
+    }
+
     /// The existing `.qual` file holding `subject`'s records, if any: the
     /// 1:1 file, else the directory-level file, under the project root.
     pub(crate) fn existing_qual_file(&self, subject: &str) -> Option<PathBuf> {

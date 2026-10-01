@@ -74,6 +74,11 @@ so the user can review what their agent closed.
 value must be one of these; `resolve` rejects anything else. It is a tag
 convention (§2.12), not a body field.
 
+**`--no-ignore`** writes even when the target `.qual` file is hidden from
+discovery by `.gitignore`, `.ignore` or `.qualignore`. Without it, such a
+write is refused with an error naming the rule, because no read command
+would ever see the record.
+
 ## Gotchas
 
 - `resolve` writes a *new* record with `body.supersedes`; it does not modify
