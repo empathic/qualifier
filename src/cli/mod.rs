@@ -145,8 +145,12 @@ pub fn run() {
         Commands::Diff(args) => commands::diff::run(args),
     };
 
-    if let Err(e) = result {
-        eprintln!("qualifier: {e}");
-        std::process::exit(1);
+    match result {
+        Ok(()) => {}
+        Err(crate::Error::AlreadyReported(code)) => std::process::exit(code),
+        Err(e) => {
+            eprintln!("qualifier: {e}");
+            std::process::exit(1);
+        }
     }
 }

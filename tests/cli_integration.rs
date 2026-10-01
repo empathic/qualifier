@@ -3069,7 +3069,7 @@ fn test_record_stdin_json_errors_are_structured() {
         ],
         input,
     );
-    assert_ne!(code, 0);
+    assert_eq!(code, 1);
 
     // stdout: each line a valid JSONL record.
     for line in stdout.lines() {

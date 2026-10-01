@@ -21,6 +21,11 @@ pub enum Error {
 
     #[error("{0}")]
     Validation(String),
+
+    /// The failure was already reported on stderr. The command-line
+    /// binary exits with this status and prints nothing more.
+    #[error("failure already reported (exit status {0})")]
+    AlreadyReported(i32),
 }
 
 /// Library-wide result type.
