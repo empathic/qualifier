@@ -5,7 +5,21 @@ All notable changes to this project are documented here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (with
 the pre-1.0 caveat that any breaking change bumps the minor version).
 
-## [0.8.0] — unreleased
+## [Unreleased]
+
+### Added
+
+- **Claude Code plugin `qual`** (`plugins/claude-code/`, plugin version
+  0.1.0): lifecycle skills and a SessionStart hook; install with
+  `/plugin marketplace add empathic/qualifier`. The plugin runs the
+  qualifier release it pins (0.8.0), which it downloads, verifies against
+  embedded checksums, and keeps under
+  `~/.local/share/qualifier/plugin/<version>/`; a plugin update that pins
+  a newer release installs it on next use. A `qualifier` on `PATH` is
+  neither used nor modified. `QUALIFIER_BIN` selects a development build;
+  `QUALIFIER_PLUGIN_HOME` relocates the installs.
+
+## [0.8.0] — 2026-09-25
 
 ### Added
 

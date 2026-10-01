@@ -14,6 +14,8 @@
 - `cargo run --bin qualifier -- <args>` — run the CLI locally (e.g., `cargo run --bin qualifier -- score`).
 - `./scripts/dev.sh` — serve the Eleventy site locally; installs pnpm deps on first run.
 - `./scripts/release.sh [--execute] [--allow-dirty]` — dry-run publish by default; `--execute` actually publishes after tests/clippy.
+- `scripts/test-plugin.sh` — offline checks for the Claude Code plugin (manifests, binary wrapper, SessionStart hook, skills, eval cases), including running every skill's qualifier examples against `target/debug/qualifier` or `$QUALIFIER_BIN` (`scripts/check-skill-examples.py`).
+- `scripts/eval-plugin.sh [--with <plugin-dir>] [claude plugin eval options]` — run the plugin's eval suite (calls the model and costs money; `--max-cost-usd 40` unless given). `--with` also loads another plugin, such as superpowers. Results go in the plugin README's Results table before a plugin release.
 
 ## Coding Style & Naming Conventions
 - Rust 2024; prefer small, deterministic functions and explicit error handling via `Result` + `thiserror` types.
@@ -45,6 +47,7 @@ When making changes, verify that all affected surfaces stay consistent:
   - Coordinate with `SPEC.md` version when the spec itself changes.
 - **Tests** — Many test files have local `make_att()`/`make_record()` helpers that construct records by hand. When adding or renaming fields on `Annotation`, `Epoch`, or `DependencyRecord`, update all helpers (~6 locations across `src/` and `tests/`). Run `cargo test --all-features` to catch any you miss.
 - **Golden IDs** — `tests/integration.rs` pins BLAKE3 IDs for annotation, epoch, and dependency records. Any change to canonical form (field order, new envelope fields, MCF rules) will break these. Update the expected hashes after confirming the new values are correct.
+- **plugins/claude-code/** — Skills cite `qualifier agents` topics, CLI flags, and batch line shapes. When renaming or removing any of them, update the skills in the same change. The plugin runs only the release it pins (`PINNED_VERSION` in `plugins/claude-code/scripts/ensure-qualifier.sh`, installed under the plugin's own directory, never from `PATH`). Release steps: tag the qualifier release, then in a plugin release check the skills against it and bump `PINNED_VERSION` and the three `SHA256_*` values (from the release's `.sha256` assets). Keep `plugin.json` and the marketplace entry version in lockstep and bump the plugin version for any skill, hook, or wrapper change. `scripts/test-plugin.sh` enforces the structural parts, runs every skill example against the built binary, and runs in CI.
 
 ## Slash Command Discovery
 - Unrecognized slash commands should be looked up as files under `.claude/commands/` (e.g., `/foo` looks for `.claude/commands/foo.md`).
