@@ -96,14 +96,22 @@ from an eval session carries `"issuer_type":"ai"` and a
 environment), while the fixture's own records carry neither. So each
 positive case's `wrote-record` grader is a regex over the `.qual` file its
 record lands in: `"kind":"alternative"` in `docs/.qual`
-(`design-rejects-option`), `"kind":"resolve"` in `src/.qual`
-(`done-commit`), a `status:needs-decision` tag in `docs/.qual`
+(`design-rejects-option`), a `status:needs-decision` tag in `docs/.qual`
 (`needs-decision`), and any session record in `src/.qual` or `docs/.qual`
 for the review cases. Cases whose skill only reads have a scored check
 on what it did: `edit-annotated-file` runs `threads` on `src/net.rs`
 before its first Edit of that file (`tool_order`), `handoff` runs
-`threads`, and the final reply of `plan-from-threads` and `triage-open`
-names at least two different thread IDs. `tool_used: Skill` graders are
+`threads`, `done-change` runs `review` (closing-the-loop's drift check),
+and the final reply of `plan-from-threads` and `triage-open` names at
+least two different thread IDs.
+
+`git` is unusable inside the eval sandbox on macOS: `/usr/bin/git` is a
+stub that needs Xcode's command-line tools, which the sandbox does not
+let it reach. So no case asks Claude to commit, and no grader depends on
+git inside the session. `done-change` ends the change uncommitted and
+grades the closing-the-loop checklist that runs before "done". The
+scaffold script runs outside the sandbox, so the fixture's own commit is
+unaffected. `tool_used: Skill` graders are
 unscored indicators in a two-arm run, so every case except
 `no-qual-files` has at least one of these scored outcome graders.
 
@@ -177,7 +185,7 @@ of 3; every other case needs at least 2 of 3. Fill this in from an actual
 | Case | Plugin alone | With superpowers | Date | qualifier / plugin version |
 | :- | :- | :- | :- | :- |
 | design-rejects-option | not yet run | not yet run | — | — |
-| done-commit | not yet run | not yet run | — | — |
+| done-change | not yet run | not yet run | — | — |
 | edit-annotated-file | not yet run | not yet run | — | — |
 | handoff | not yet run | not yet run | — | — |
 | needs-decision | not yet run | not yet run | — | — |

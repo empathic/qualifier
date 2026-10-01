@@ -17,7 +17,7 @@ and paths not taken — not chat, not PR comments, not TODO comments.
 | An option is rejected, a risk accepted, or a spec critiqued | `qual:recording-design-decisions` | brainstorming |
 | Writing a plan from a spec or from open threads | `qual:planning-from-threads` | writing-plans |
 | About to modify a file | `qual:consulting-threads` | executing-plans, test-driven-development |
-| A change is complete, before commit or "done" | `qual:closing-the-loop` | verification-before-completion |
+| A change is complete, before commit or "done" (committed or not) | `qual:closing-the-loop` | verification-before-completion |
 | Reviewing code or a design | `qual:reviewing-into-qualifier` | requesting-code-review |
 | Working through existing threads or review feedback | `qual:triaging-threads` | receiving-code-review |
 | A thread needs a human judgment call | `qual:escalating-decisions` | — |

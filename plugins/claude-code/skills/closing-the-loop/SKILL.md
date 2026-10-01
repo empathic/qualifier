@@ -1,16 +1,19 @@
 ---
 name: closing-the-loop
-description: Use when a code change is complete, before committing or claiming the work is done — resolves threads the change fixed, records shortcuts as concerns instead of TODO comments, re-records drifted annotations, and records design decisions settled in conversation
+description: Use when a code change is complete, before committing or reporting it done, including when the user will commit it — resolves threads the change fixed, records shortcuts as concerns instead of TODO comments, re-records drifted annotations, and records design decisions settled in conversation
 allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
 ---
 
 # Closing the loop
 
-Run this checklist before you say the work is done.
+Run this checklist before you say the work is done, whether or not the
+change is committed yet. Steps 2 and 3 never wait for a commit.
 
-1. **Threads this change fixed.** After committing the fix, resolve each
-   one it fixed, citing evidence — a test that now passes, or a command and
-   its output:
+1. **Threads this change fixed.** If the change is not committed yet (the
+   user will commit it), don't resolve: name each thread it fixes, with its
+   ID, in your report, so it can be resolved once the commit exists. After
+   committing the fix, resolve each one it fixed, citing evidence — a test
+   that now passes, or a command and its output:
    `qualifier resolve <id> "<evidence>" --reason fixed --ref git:<sha>`.
    `--ref` takes one value; when more than one commit fixed a finding, pass
    the commit that completed the fix as `--ref` and name the others in the

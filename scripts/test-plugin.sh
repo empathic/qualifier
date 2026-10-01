@@ -1595,7 +1595,7 @@ for case in cases:
 # wrote-record grades what the session wrote, not how it spelled the
 # command: a regex over the .qual file the expected record lands in. The
 # fixture check further down proves each one against the real binary.
-WROTE_CASES = ["design-rejects-option", "done-commit", "needs-decision",
+WROTE_CASES = ["design-rejects-option", "needs-decision",
                "review-branch", "review-spec", "review-subsystems"]
 FILE_GRADERS = ("wrote-record.md", "no-session-records.md")
 assert [c for c in cases if "wrote-record.md" in graders(c)] == WROTE_CASES, (
@@ -1744,9 +1744,24 @@ else:
          bash_call(f'{WRAPPER} exec record concern src/net.rs:1 "threads"'),
          bash_call("grep -rn threads notes.md"),
          bash_call("ls src", "List qualifier threads")])
+    # done-change: closing-the-loop's drift step ran `review`, in either form.
+    # The case can't commit (git is unusable inside the eval sandbox on
+    # macOS), so the checklist's drift check is what it grades.
+    g = values(f"{evals}/done-change/graders/ran-review.md")
+    assert g["type"] == "tool_used" and g["tool"] == "Bash" and "min" not in g and "max" not in g, g
+    check_calls("done-change/ran-review", re.compile(g["input_match"]),
+        [bash_call(Q_SET + '"$Q" exec review src/net.rs'),
+         bash_call(f"{WRAPPER} exec review --format json"),
+         bash_call("qualifier review"),
+         bash_call('cd /tmp/repo\nqualifier review src/net.rs')],
+        DESCRIPTION_ONLY[1:] + [
+         bash_call(Q_SET + '"$Q" exec threads src/net.rs'),
+         bash_call("git diff --stat  # review the change"),
+         bash_call("ls src", "Run qualifier review")])
     print(f"eval graders: Bash graders match only the command, and name `qualifier --help`'s "
           f"subcommands (no-bare-qualifier: {len(no_bare_cases)}, no-record: {len(no_record_cases)} "
-          f"cases); handoff's listed-threads matches only a threads call")
+          f"cases); handoff's listed-threads matches only a threads call, done-change's "
+          f"ran-review only a review call")
 
 # edit-annotated-file: consulting-threads runs `threads` on src/net.rs
 # before the first Edit of it. tool_order passes when the first matching
@@ -1866,10 +1881,6 @@ EXPECTED_WRITES = {
     "design-rejects-option": lambda q, git: q(
         "record", "alternative", "docs/cache-design.md:5", "Per-tenant cache processes",
         "--detail", "One shared process is simpler below 50 tenants", "--tag", "revisit:tenants exceed 50"),
-    # closing-the-loop resolving the fixture's blocker after the fix commit.
-    "done-commit": lambda q, git: q(
-        "resolve", root_of(q, "src/net.rs", "blocker"), "connect uses connect_timeout(5s)",
-        "--reason", "fixed", "--ref", f"git:{git('rev-parse', 'HEAD')}"),
     # escalating-decisions marking the quota suggestion as waiting on a human.
     "needs-decision": lambda q, git: q(
         "reply", root_of(q, "docs/cache-design.md", "suggestion"), "Needs a decision: per-tenant quotas?",

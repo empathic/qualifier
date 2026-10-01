@@ -16,7 +16,7 @@ qualifier threads src/net/tcp.rs:40:80      # just the lines you will change
 ## Act on what you find
 
 - **Open `blocker` on those lines:** either this edit fixes it — then
-  `qual:closing-the-loop` resolves it after you commit — or the edit must
+  `qual:closing-the-loop` handles it when the change is done — or the edit must
   not make it worse. State which in your working notes.
 - **`concern` or `suggestion`:** fold it in if it fits the task; otherwise
   leave it.
@@ -26,4 +26,5 @@ qualifier threads src/net/tcp.rs:40:80      # just the lines you will change
 
 Don't re-run for every edit to the same file within a task.
 
-Next: `qual:closing-the-loop` when the change is done.
+Next: `qual:closing-the-loop` before you report the change done, whether
+or not it is committed.
