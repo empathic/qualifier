@@ -133,21 +133,21 @@ pub fn run(args: Args) -> crate::Result<()> {
     // HEAD with <ref> — this isolates what this branch introduced from
     // anything that landed on <ref> after the branch forked. `--from-tip`
     // opts back into the literal ref.
-    let effective_oid: gix::ObjectId = if args.from_tip {
-        ref_oid
+    let (effective_oid, comparison): (gix::ObjectId, Comparison) = if args.from_tip {
+        (ref_oid, Comparison::Tip)
     } else {
         let head_oid = repo
             .head_id()
             .map_err(|e| crate::Error::Validation(format!("could not resolve HEAD: {e}")))?
             .detach();
         match repo.merge_base(ref_oid, head_oid) {
-            Ok(base) => base.detach(),
+            Ok(base) => (base.detach(), Comparison::MergeBase),
             Err(_) => {
                 eprintln!(
                     "qualifier diff: no merge-base between HEAD and '{}', comparing to ref tip",
                     args.r#ref
                 );
-                ref_oid
+                (ref_oid, Comparison::FallbackTip)
             }
         }
     };
@@ -167,6 +167,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         input_ref: args.r#ref.clone(),
         base: effective_oid.to_string(),
         from_tip: args.from_tip,
+        comparison,
     };
 
     if args.subjects_only {
@@ -235,28 +236,50 @@ fn print_subjects(diff: &Diff) {
     }
 }
 
+/// Which commit `<ref>` was resolved to for the comparison.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Comparison {
+    /// The merge-base of HEAD and `<ref>` (the default).
+    MergeBase,
+    /// The tip of `<ref>`, because `--from-tip` was passed.
+    Tip,
+    /// The tip of `<ref>`, because HEAD and `<ref>` share no merge-base.
+    FallbackTip,
+}
+
+impl Comparison {
+    /// The value of the JSON `comparison` field.
+    fn as_str(self) -> &'static str {
+        match self {
+            Comparison::MergeBase => "merge-base",
+            Comparison::Tip => "tip",
+            Comparison::FallbackTip => "fallback-tip",
+        }
+    }
+}
+
 struct DiffHeader {
     /// The ref the user typed (e.g. "main", "v0.5.0").
     input_ref: String,
-    /// The resolved commit-ish used for comparison — the merge-base sha by
-    /// default, or `input_ref` itself when `--from-tip` is set.
+    /// The full SHA of the commit used for comparison.
     base: String,
     from_tip: bool,
+    comparison: Comparison,
 }
 
 impl DiffHeader {
     fn human(&self) -> String {
-        if self.from_tip {
-            format!("Comparing HEAD against {} (tip)", self.input_ref)
-        } else if self.base == self.input_ref {
-            // No merge-base resolution happened (fallback path).
-            format!("Comparing HEAD against {}", self.input_ref)
-        } else {
-            format!(
+        match self.comparison {
+            Comparison::Tip => format!("Comparing HEAD against {} (tip)", self.input_ref),
+            Comparison::FallbackTip => format!(
+                "Comparing HEAD against {} (tip; no merge-base)",
+                self.input_ref
+            ),
+            Comparison::MergeBase => format!(
                 "Comparing HEAD against merge-base of {} ({})",
                 self.input_ref,
                 short_sha(&self.base),
-            )
+            ),
         }
     }
 }
@@ -720,6 +743,7 @@ fn print_json(header: &DiffHeader, diff: &Diff) {
         "ref": header.input_ref,
         "base": header.base,
         "from_tip": header.from_tip,
+        "comparison": header.comparison.as_str(),
         "added": added,
         "resolved": resolved,
         "drifted": drifted,

@@ -119,13 +119,18 @@ Drifted (1)
 ```json
 {
   "ref": "main",
-  "base": "<full sha of merge-base or ref tip>",
+  "base": "<full SHA of the commit compared against>",
   "from_tip": false,
+  "comparison": "merge-base",
   "added":    [<full record envelopes>],
   "resolved": [{"record": <ref-side record>, "closer": <head-side closer or null>}],
   "drifted":  [{"record": <head-side record>, "expected": "<hash>", "actual": "<hash>"}]
 }
 ```
+
+`comparison` says which commit `base` is: `"merge-base"` (the default),
+`"tip"` (`--from-tip`), or `"fallback-tip"` (no merge-base exists, so the
+tip of `<ref>` was used).
 
 ## Gotchas
 
@@ -134,8 +139,10 @@ Drifted (1)
 - `<ref>` must resolve via `git rev-parse`. A branch name like `main` works;
   an arbitrary commit-ish (`HEAD~10`, `v0.5.0`, a sha) works too.
 - If HEAD and `<ref>` share no common ancestor (orphan branches, fresh
-  init), the merge-base default falls back to the ref tip and prints a
-  one-line hint on stderr.
+  init), the merge-base default falls back to the ref tip, prints a
+  one-line hint on stderr, and says so in the header
+  (`Comparing HEAD against main (tip; no merge-base)`) and in the JSON
+  `comparison` field.
 - A malformed historical line at `<ref>` is reported on stderr and skipped —
   the diff continues. Malformed lines on `HEAD` still abort discovery as
   usual.

@@ -4058,6 +4058,55 @@ fn test_diff_deleted_qual_file_surfaces_as_removed() {
 }
 
 #[test]
+fn test_diff_reports_comparison_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    record_as_ab(dir.path(), &["concern", "a.rs", "on main"]);
+    git_commit_all(dir.path(), "main");
+    git_checkout_new(dir.path(), "feat");
+    record_as_ab(dir.path(), &["concern", "b.rs", "on feat"]);
+    git_commit_all(dir.path(), "feat");
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["comparison"], "merge-base");
+
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &["diff", "main", "--from-tip", "--format", "json"],
+    );
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["comparison"], "tip");
+
+    // An orphan branch shares no history with main: the comparison falls
+    // back to main's tip, and both outputs say so.
+    let status = Command::new("git")
+        .args(["checkout", "-q", "--orphan", "lone"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    git_commit_all(dir.path(), "lone");
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("Comparing HEAD against main (tip; no merge-base)"),
+        "fallback header should say there was no merge-base: {stdout}"
+    );
+    assert!(
+        !stdout.contains("merge-base of"),
+        "fallback must not claim a merge-base comparison: {stdout}"
+    );
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["comparison"], "fallback-tip");
+}
+
+#[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
     let (stdout, _stderr, code) = run_qualifier(dir.path(), &["--help"]);
