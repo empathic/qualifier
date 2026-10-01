@@ -128,7 +128,19 @@ elif [ -z "$BIN" ]; then
     call_line+=" checksum failed; it retries next session). If that persists (e.g. no network"
     call_line+=" access to GitHub releases), ask the user to ${manual_install}"
 else
-    call_line="Run qualifier as \`\"$WRAPPER\" exec <args>\` (pre-approved in every qual skill); the qual skills write \`qualifier\` for short. A \`qualifier\` on your PATH, if any, is not used and may be a different version."
+    # Each qual skill's allowed-tools rule is the plugin root's wrapper path
+    # followed by ` exec`, unquoted, so the call line gives the path
+    # unquoted whenever it needs no shell quoting. A path that does is
+    # quoted, and then no rule matches its text.
+    case "$WRAPPER" in
+        *[!A-Za-z0-9/._+@%=:,-]*)
+            call_line="Run qualifier as \`\"$WRAPPER\" exec <args>\`."
+            ;;
+        *)
+            call_line="Run qualifier as \`$WRAPPER exec <args>\` (the form each qual skill lists in its allowed-tools)."
+            ;;
+    esac
+    call_line+=" The qual skills write \`qualifier\` for short. A \`qualifier\` on your PATH, if any, is not used and may be a different version."
     summary="$(bounded_summary "$BIN")"
 fi
 
