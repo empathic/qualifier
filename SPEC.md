@@ -1784,25 +1784,28 @@ Delegates to the underlying VCS blame/annotate command:
 ### 8.4 Issuer Defaults
 
 Each value resolves in order: explicit flag, `QUALIFIER_*` environment
-variable, detected agent harness, then the fallback below. Empty variables
-count as unset.
+variable, the `issuer` key of the config files (§6.10; issuer only),
+detected agent harness, then the fallback below. Empty variables count as
+unset. Harness detection never sets the issuer.
 
-| value | flag | variable | harness (Claude Code: `CLAUDECODE=1`) | fallback |
-|---|---|---|---|---|
-| issuer | `--issuer` | `QUALIFIER_ISSUER` | — | `git config user.email`, then `hg config ui.username`, then `mailto:$USER@localhost` |
-| issuer type | `--issuer-type` | `QUALIFIER_ISSUER_TYPE` | `ai` | none |
-| session tag | — | `QUALIFIER_SESSION` | `claude-code:$CLAUDE_CODE_SESSION_ID` | none |
+| value | flag | variable | config | harness (Claude Code: `CLAUDECODE=1`) | fallback |
+|---|---|---|---|---|---|
+| issuer | `--issuer` | `QUALIFIER_ISSUER` | `issuer` | — | `git config user.email`, then `hg config ui.username`, then `mailto:$USER@localhost` |
+| issuer type | `--issuer-type` | `QUALIFIER_ISSUER_TYPE` | — | `ai` | none |
+| session tag | — | `QUALIFIER_SESSION` | — | `claude-code:$CLAUDE_CODE_SESSION_ID` | none |
 
 When a session is known, `record`, `reply`, and `resolve` add the tag
 `session:<value>`. `emit` applies the issuer defaults but writes bodies
-verbatim. A human running `qualifier` inside an agent harness is detected
+as given. A human running `qualifier` inside an agent harness is detected
 as the agent; pass `--issuer-type human` to override.
 
 ## 9. Agent Integration
 
 Qualifier is designed to be used by AI coding agents. Key affordances:
 
-- **Structured output:** `--format json` on `show` and `ls` commands.
+- **Structured output:** `--format json` on every read command and on
+  `record`, `reply`, and `resolve`; set `format = "json"` in config or
+  `QUALIFIER_FORMAT=json` to make it the default (§6.10).
 - **Batch annotation:** `qualifier record --stdin` reads JSONL from stdin
   (overrides objects or full records). For non-annotation record types,
   `qualifier emit --stdin` accepts complete records. A batch reply or
@@ -1823,8 +1826,12 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
 - **Threading:** The `references` field enables agents to thread follow-up
   observations to prior signals, creating navigable conversation histories.
 - **Thread queries:** `qualifier threads --format json` lists every open
-  thread with its live replies; `--status needs-decision` lists threads
-  waiting on a human.
+  thread with its live replies and its `state`; `--all` adds closed threads,
+  whose answer is the `closed_by` record; `--status needs-decision` lists
+  threads waiting on a human.
+- **Branch review:** `qualifier diff --format json` lists what a branch
+  added, changed, resolved, and drifted (§6.13); `--fail-on blocker`
+  gates CI.
 - **Provenance:** records written inside a detected agent harness default to
   `issuer_type: ai` and carry a `session:` tag (§8.4).
 - **Conventions:** `qualifier agents conventions` defines the `status:`,
