@@ -152,12 +152,18 @@ qualifier compact src/parser.rs --dry-run
 # Prune superseded annotations
 qualifier compact src/parser.rs
 
-# Collapse everything to a single epoch annotation
+# Collapse the artifact's records to a single epoch record
 qualifier compact src/parser.rs --snapshot
 
 # Compact every .qual file in the repo
 qualifier compact --all
 ```
+
+`compact <artifact>` touches only that artifact's records, in every `.qual`
+file that holds them. Pruning keeps each thread's structure: a resolved
+thread keeps its root, so its replies stay attached. `--snapshot` refuses
+to fold an open `blocker` or `concern` thread into an epoch unless you pass
+`--force`.
 
 ### List artifacts
 
@@ -196,3 +202,14 @@ Qualifier uses layered configuration (highest wins):
 | 3        | Project config    | `.qualifier.toml`                 |
 | 4        | User config       | `~/.config/qualifier/config.toml` |
 | 5        | Built-in defaults |                                   |
+
+Two keys are read: `issuer` (the default issuer for new records) and
+`format` (`human` or `json`, the default `--format` of every command that
+has the flag). The matching variables are `QUALIFIER_ISSUER` and
+`QUALIFIER_FORMAT`.
+
+```toml
+# .qualifier.toml
+issuer = "mailto:me@example.com"
+format = "json"
+```
