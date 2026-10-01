@@ -1761,37 +1761,45 @@ qualifier/
 ├── Cargo.toml
 ├── SPEC.md                    # This document
 ├── METABOX.md                 # Metabox envelope specification
+├── AGENTS-CLI.md              # AGENTS-CLI protocol (qualifier agents)
 └── src/
-    ├── lib.rs                 # Public library API
-    ├── annotation.rs         # Record types, body structs, Kind, IssuerType, validation
+    ├── lib.rs                 # Public library API (§7)
+    ├── annotation.rs          # Record types, body structs, Kind, IssuerType, IDs, validation
     ├── content_hash.rs        # Span content hashing and freshness checking
     ├── qual_file.rs           # .qual file parsing, appending, discovery
     ├── compact.rs             # Compaction: prune and snapshot, supersession filtering
+    ├── threads.rs             # Thread assembly, thread state, thread rendering
     ├── bin/
     │   └── qualifier.rs       # Binary entry point
-    └── cli/                   # CLI module (behind "cli" feature)
-        ├── mod.rs
-        ├── config.rs
-        ├── output.rs
-        ├── span_context.rs
+    └── cli/                   # CLI module (behind "cli" feature; not library API)
+        ├── mod.rs             # Argument parsing, grouped --help, dispatch
+        ├── config.rs          # .qualifier.toml / user config / QUALIFIER_* (§6.10)
+        ├── output.rs          # --format human|json
+        ├── provenance.rs      # Issuer, issuer type, and session defaults (§8.4)
+        ├── span_context.rs    # Source context around spans
+        ├── targets.rs         # Location and ID-prefix resolution, write paths
         └── commands/
             ├── mod.rs
+            ├── init.rs           # qualifier init
+            ├── agents/           # qualifier agents (mod.rs + pages/*.md topics)
             ├── record.rs         # qualifier record (unified annotation write)
             ├── reply.rs          # qualifier reply (id-prefix or location)
             ├── resolve.rs        # qualifier resolve (id-prefix or location)
             ├── emit.rs           # qualifier emit (raw record write)
-            ├── freshness.rs      # qualifier review (freshness checking)
             ├── show.rs
+            ├── threads.rs
             ├── ls.rs
-            ├── compact.rs
             ├── praise.rs         # qualifier praise (alias: blame)
+            ├── freshness.rs      # qualifier review (freshness checking)
+            ├── diff.rs           # qualifier diff
+            ├── compact.rs
             └── haiku.rs
 ```
 
 ```toml
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:comfy-table", "dep:figment"]
+cli = ["dep:clap", "dep:comfy-table", "dep:figment", "dep:gix", "dep:globset", "dep:rand", "dep:terminal_size"]
 ```
 
 ## 12. Future Considerations (Out of Scope)
