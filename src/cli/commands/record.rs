@@ -163,22 +163,6 @@ pub fn run(args: Args) -> crate::Result<()> {
     let issuer_type = provenance::issuer_type(args.issuer_type.as_deref())?;
     let tags = resolve::checked_reason_tags(&kind, args.tags)?;
 
-    let (supersedes, references) = if args.supersedes.is_some() || args.references.is_some() {
-        let qual_files = targets::discover_project(true)?;
-        let check = |flag: &str, value: &Option<String>| -> crate::Result<Option<String>> {
-            value
-                .as_deref()
-                .map(|v| targets::require_live_id(flag, v, &qual_files))
-                .transpose()
-        };
-        (
-            check("--supersedes", &args.supersedes)?,
-            check("--references", &args.references)?,
-        )
-    } else {
-        (None, None)
-    };
-
     let qual_path = locator.write_path(&subject, args.file.as_deref().map(Path::new))?;
 
     let att = annotation::finalize(Annotation {
@@ -193,11 +177,11 @@ pub fn run(args: Args) -> crate::Result<()> {
             detail: args.detail,
             kind,
             r#ref: args.r#ref,
-            references,
+            references: args.references,
             span,
             suggested_fix: args.suggested_fix,
             summary: message,
-            supersedes,
+            supersedes: args.supersedes,
             tags: provenance::with_session_tag(tags),
             extra: Default::default(),
         },
@@ -209,8 +193,8 @@ pub fn run(args: Args) -> crate::Result<()> {
     }
 
     let record = Record::Annotation(Box::new(att.clone()));
-    if record.supersedes().is_some() {
-        targets::preflight_supersession(&qual_path, &record)?;
+    if record.supersedes().is_some() || record.references().is_some() {
+        targets::check_pointers(&record, &targets::discover_project(true)?, "--")?;
     }
 
     targets::append(&qual_path, &record)?;
@@ -264,13 +248,6 @@ impl BatchView {
 
     fn files(&self) -> &[QualFile] {
         &self.files
-    }
-
-    fn all_records(&self) -> Vec<Record> {
-        self.files
-            .iter()
-            .flat_map(|qf| qf.records.iter().cloned())
-            .collect()
     }
 }
 
@@ -399,14 +376,12 @@ fn plan_one(
             .stored_subject(r.subject())
             .map_err(|e| e.to_string())?;
         set_subject(&mut r, subject);
-        let r = annotation::finalize_record(r);
-        targets::check_pointers(&r, view.files()).map_err(|e| e.to_string())?;
-        r
+        annotation::finalize_record(r)
     } else {
         let obj = value
             .as_object()
             .ok_or_else(|| "stdin line must be a JSON object".to_string())?;
-        build_record_from_overrides(obj, view.files(), locator).map_err(|e| e.to_string())?
+        build_record_from_overrides(obj, locator).map_err(|e| e.to_string())?
     };
 
     if let Some(att) = record.as_annotation() {
@@ -420,9 +395,7 @@ fn plan_one(
         .write_path(record.subject(), None)
         .map_err(|e| e.to_string())?;
 
-    if record.supersedes().is_some() {
-        targets::check_supersession(view.all_records(), &record).map_err(|e| e.to_string())?;
-    }
+    targets::check_pointers(&record, view.files(), "").map_err(|e| e.to_string())?;
     Ok((record, qual_path))
 }
 
@@ -540,7 +513,6 @@ fn emit_batch_line(record: &Record, format: &str, dry_run: bool) -> crate::Resul
 
 fn build_record_from_overrides(
     obj: &Map<String, Value>,
-    files: &[QualFile],
     locator: &targets::Locator,
 ) -> crate::Result<Record> {
     let kind_str = obj
@@ -575,12 +547,8 @@ fn build_record_from_overrides(
     let detail = str_field(obj, "detail");
     let suggested_fix = str_field(obj, "suggested_fix");
     let r#ref = str_field(obj, "ref");
-    let supersedes = str_field(obj, "supersedes")
-        .map(|v| targets::require_live_id("supersedes", &v, files))
-        .transpose()?;
-    let references = str_field(obj, "references")
-        .map(|v| targets::require_live_id("references", &v, files))
-        .transpose()?;
+    let supersedes = str_field(obj, "supersedes");
+    let references = str_field(obj, "references");
     let tags = resolve::checked_reason_tags(&kind, tags_field(obj))?;
 
     let att = annotation::finalize(Annotation {

@@ -108,12 +108,6 @@ pub fn run(args: Args) -> crate::Result<()> {
     let locator = targets::Locator::from_cwd()?;
     let qual_files = targets::discover_project(true)?;
     let target = targets::resolve_target(&args.target, &qual_files, &locator)?;
-    let supersedes = args
-        .supersedes
-        .as_deref()
-        .map(|v| targets::require_live_id("--supersedes", v, &qual_files))
-        .transpose()?;
-
     let att = build_reply(
         &target,
         ReplyInput {
@@ -125,15 +119,13 @@ pub fn run(args: Args) -> crate::Result<()> {
             issuer: args.issuer,
             issuer_type: args.issuer_type,
             r#ref: args.r#ref,
-            supersedes,
+            supersedes: args.supersedes,
         },
     )?;
 
     let qual_path = locator.write_path(&att.subject, args.file.as_deref().map(Path::new))?;
     let record = Record::Annotation(Box::new(att.clone()));
-    if record.supersedes().is_some() {
-        targets::preflight_supersession(&qual_path, &record)?;
-    }
+    targets::check_pointers(&record, &qual_files, "--")?;
     targets::append(&qual_path, &record)?;
 
     if args.format == "json" {
