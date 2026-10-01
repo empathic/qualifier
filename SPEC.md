@@ -1712,31 +1712,46 @@ The project root is determined by searching upward for VCS markers (`.git`,
 
 ### 10.1 Ignore Rules
 
-By default, qualifier respects ignore rules from two sources during file
-discovery:
+By default, qualifier respects ignore rules from three sources during file
+discovery, under every VCS (§10), not only in git repositories:
 
 1. **`.gitignore`** — Standard Git ignore files, including:
    - `.gitignore` files at any level of the tree
-   - `.git/info/exclude` (per-repo excludes)
+   - `.git/info/exclude` (per-repo excludes, in git repositories)
    - The global gitignore file (e.g., `~/.config/git/ignore`)
    - `.gitignore` files in parent directories above the project root
      (matching Git's own behavior in monorepos)
 
-2. **`.qualignore`** — A qualifier-specific ignore file using the same
+2. **`.ignore`** — Generic ignore files in `.gitignore` syntax, as read by
+   tools such as ripgrep.
+
+3. **`.qualignore`** — A qualifier-specific ignore file using the same
    syntax as `.gitignore`. Place a `.qualignore` file anywhere in the tree
    to exclude paths from qualifier's discovery walk. Useful for ignoring
    vendored code, generated files, or example directories that have `.qual`
    files you want qualifier to skip without affecting Git.
 
-Paths matched by either source are excluded from all discovery commands:
-`show`, `ls`, `compact`, `review`, and `praise`/`blame`.
+Paths matched by any source are excluded from every command that discovers
+`.qual` files: `show`, `threads`, `ls`, `praise`/`blame`, `review`, `diff`
+(on both sides of the comparison), `compact`, and the ID-prefix and
+`--supersedes`/`--references` lookups of the write commands.
+
+Writes are checked against the same rules: `record`, `reply`, `resolve`,
+and `emit` refuse to write into a `.qual` file that discovery would skip,
+naming the rule that hides it, since no command would read the record.
+Pass `--no-ignore` to write it anyway.
+
+Discovery reads each `.qual` file leniently: a line that is not a valid
+record is skipped with a `warning: skipping <file>:<line>: <reason>` on
+stderr, and the other records still load. `compact` re-reads the files it
+rewrites strictly and fails on such a line rather than drop it.
 
 ### 10.2 `--no-ignore`
 
 Pass `--no-ignore` to any discovery command to bypass all ignore rules.
 This forces qualifier to walk every directory except VCS metadata
 directories (§10.3) and discover all `.qual` files regardless of
-`.gitignore` or `.qualignore` entries.
+`.gitignore`, `.ignore`, or `.qualignore` entries.
 
 ### 10.3 Hidden Directories
 

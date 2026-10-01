@@ -128,8 +128,9 @@ records or collapses history into epoch records.
 
 `.qual` files can sit per-directory (`src/.qual` — recommended), per-file
 (`src/parser.rs.qual`), or per-project (`.qual` at the root). All layouts
-coexist. Discovery respects `.gitignore` and `.qualignore`; pass
-`--no-ignore` to bypass.
+coexist. Every command that discovers `.qual` files respects `.gitignore`,
+`.ignore`, and `.qualignore` (under any VCS, not only git), and writes into
+an ignored `.qual` file are refused; pass `--no-ignore` to bypass.
 
 For collaborative repos, configure your VCS to use union merges on `.qual`
 files (e.g. `*.qual merge=union` in `.gitattributes` for git) so concurrent
