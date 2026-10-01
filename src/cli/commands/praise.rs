@@ -147,7 +147,7 @@ fn record_to_json(record: &Record) -> Option<serde_json::Value> {
             "kind": att.body.kind.to_string(),
             "summary": att.body.summary,
             "issuer": att.issuer,
-            "created_at": att.created_at.to_rfc3339(),
+            "created_at": att.created_at.as_str(),
         });
         if let Some(ref at) = att.issuer_type {
             entry["issuer_type"] = serde_json::json!(at.to_string());
@@ -168,7 +168,7 @@ fn record_to_json(record: &Record) -> Option<serde_json::Value> {
             "type": "epoch",
             "summary": epoch.body.summary,
             "issuer": epoch.issuer,
-            "created_at": epoch.created_at.to_rfc3339(),
+            "created_at": epoch.created_at.as_str(),
         });
         if let Some(ref at) = epoch.issuer_type {
             entry["issuer_type"] = serde_json::json!(at.to_string());

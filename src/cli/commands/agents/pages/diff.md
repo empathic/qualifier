@@ -209,7 +209,7 @@ tip of `<ref>` was used).
   (`Comparing HEAD against main (tip; no merge-base)`) and in the JSON
   `comparison` field.
 - A malformed historical line at `<ref>` is reported on stderr and skipped —
-  the diff continues. Malformed lines on `HEAD` still abort discovery as
-  usual.
+  the diff continues. Malformed lines on `HEAD` are skipped the same way,
+  with a `file:line` warning on stderr.
 - Drift checking reads files from disk. If the working tree is dirty, drift
   reflects that — not the contents of `HEAD`.
