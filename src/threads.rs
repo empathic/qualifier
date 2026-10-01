@@ -387,6 +387,38 @@ pub fn threads_touching<'a>(records: &'a [Record], subject: &str, all: bool) -> 
     selected
 }
 
+// ─── Kind filters ───────────────────────────────────────────────────────────
+
+/// Warnings for kind filters (`--kind`, `--fail-on`) that can never match:
+/// one `<command>: warning: kind 'X' matches no known kind` per requested
+/// kind that is neither a built-in [`Kind`] nor the kind of any record in
+/// `records`. Custom kinds stay legal; this catches typos such as
+/// `blockers` that would otherwise match nothing silently.
+pub fn unknown_kind_warnings<'r>(
+    command: &str,
+    requested: &[Kind],
+    records: impl IntoIterator<Item = &'r Record>,
+) -> Vec<String> {
+    let custom: Vec<&Kind> = requested
+        .iter()
+        .filter(|k| matches!(k, Kind::Custom(_)))
+        .collect();
+    if custom.is_empty() {
+        return Vec::new();
+    }
+    let used: Vec<&Kind> = records.into_iter().filter_map(|r| r.kind()).collect();
+    let mut unknown: Vec<&Kind> = Vec::new();
+    for k in custom {
+        if !used.contains(&k) && !unknown.contains(&k) {
+            unknown.push(k);
+        }
+    }
+    unknown
+        .into_iter()
+        .map(|k| format!("{command}: warning: kind '{k}' matches no known kind"))
+        .collect()
+}
+
 // ─── Rendering ──────────────────────────────────────────────────────────────
 
 /// The first eight characters of a record ID.

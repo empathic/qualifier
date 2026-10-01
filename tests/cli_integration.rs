@@ -7135,3 +7135,30 @@ fn test_malformed_sibling_qual_warns_on_read_and_blocks_rewrite() {
     let after = std::fs::read_to_string(dir.path().join("other/.qual")).unwrap();
     assert_eq!(after, format!("{bad}\n"));
 }
+
+#[test]
+fn test_threads_kind_warns_on_kind_matching_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(dir.path(), &["record", "blocker", "a.rs", "broken"]);
+    write_id(dir.path(), &["record", "nit", "a.rs", "custom kind"]);
+
+    let (stdout, stderr, code) =
+        run_qualifier(dir.path(), &["threads", "--kind", "blockers,nit,concern"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stderr.contains("qualifier threads: warning: kind 'blockers' matches no known kind"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("'nit'"),
+        "a custom kind in use is fine: {stderr}"
+    );
+    assert!(
+        !stderr.contains("'concern'"),
+        "built-in kinds never warn: {stderr}"
+    );
+    assert!(stdout.contains("custom kind"), "{stdout}");
+
+    let (_, stderr, _) = run_qualifier(dir.path(), &["threads", "--kind", "blocker"]);
+    assert!(!stderr.contains("warning"), "{stderr}");
+}

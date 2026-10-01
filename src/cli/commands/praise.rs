@@ -48,7 +48,7 @@ fn run_records(args: Args) -> crate::Result<()> {
 
     // No records is an answer, not an error: JSON output carries empty
     // arrays, human output says so.
-    if args.format != "json" && !records.iter().any(|r| r.subject() == subject) {
+    if args.format != Format::Json && !records.iter().any(|r| r.subject() == subject) {
         println!("No records found for '{subject}'.");
         return Ok(());
     }

@@ -74,6 +74,11 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     let locator = targets::Locator::from_cwd()?;
     let mut filter = Filter::from_args(&args, &locator)?;
+    if let Some(kinds) = &filter.kinds {
+        for warning in threads::unknown_kind_warnings("qualifier threads", kinds, &records) {
+            eprintln!("{warning}");
+        }
+    }
     if let Some(base) = args.changed_since.as_deref() {
         filter.changed = Some(changed_files(&repo_root()?, base)?);
     }
@@ -117,7 +122,9 @@ impl Filter {
             .collect::<crate::Result<Vec<_>>>()?;
         let kinds = args.kind.as_deref().map(|s| {
             s.split(',')
-                .map(|k| k.trim().parse::<Kind>().unwrap())
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .map(|k| k.parse::<Kind>().unwrap())
                 .collect()
         });
         let issuer_type = args
