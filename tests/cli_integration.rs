@@ -5540,6 +5540,27 @@ fn test_batch_dry_run_creates_no_directories() {
 // --- write path: envelopes, pointers, containment ---
 
 #[test]
+fn test_format_typo_is_rejected_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &["record", "comment", "a.rs", "x", "--format", "jsn"],
+    );
+    assert_eq!(code, 2, "clap usage error: {stderr}");
+    assert!(stderr.contains("jsn"), "{stderr}");
+    assert!(!dir.path().join(".qual").exists(), "nothing written");
+    for cmd in ["show", "threads", "ls", "praise", "review"] {
+        let mut args = vec![cmd];
+        if matches!(cmd, "show" | "praise") {
+            args.push("a.rs");
+        }
+        args.extend(["--format", "jsn"]);
+        let (_, stderr, code) = run_qualifier(dir.path(), &args);
+        assert_eq!(code, 2, "{cmd}: {stderr}");
+    }
+}
+
+#[test]
 fn test_extensionless_root_files_are_location_targets() {
     let dir = tempfile::tempdir().unwrap();
     write_id(dir.path(), &["record", "concern", "Makefile", "mk"]);

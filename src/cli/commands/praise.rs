@@ -1,5 +1,6 @@
 use clap::Args as ClapArgs;
 
+use crate::cli::output::Format;
 use crate::cli::targets;
 use crate::compact::filter_superseded;
 use crate::qual_file;
@@ -10,8 +11,8 @@ pub struct Args {
     pub artifact: String,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Use VCS blame/annotate on the .qual file instead of record-based output
     #[cfg(not(target_os = "emscripten"))]
@@ -49,7 +50,7 @@ fn run_records(args: Args) -> crate::Result<()> {
     let owned: Vec<crate::annotation::Record> = records.iter().map(|r| (*r).clone()).collect();
     let active = filter_superseded(&owned);
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         let entries: Vec<serde_json::Value> =
             active.iter().filter_map(|r| record_to_json(r)).collect();
         let output = serde_json::json!({

@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record};
 use crate::cli::commands::resolve;
+use crate::cli::output::Format;
 use crate::cli::provenance;
 use crate::cli::targets;
 
@@ -108,8 +109,8 @@ pub struct Args {
     pub no_ignore: bool,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
@@ -139,7 +140,7 @@ pub fn run(args: Args) -> crate::Result<()> {
     targets::check_pointers(&record, &qual_files, "--")?;
     targets::append(&qual_path, &record)?;
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         println!("{}", serde_json::to_string(&record)?);
     } else {
         println!("{} {} {}", att.body.kind, att.subject, att.body.summary);

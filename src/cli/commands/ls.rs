@@ -1,6 +1,7 @@
 use clap::Args as ClapArgs;
 use std::collections::BTreeMap;
 
+use crate::cli::output::Format;
 use crate::cli::targets;
 
 #[derive(ClapArgs)]
@@ -14,8 +15,8 @@ pub struct Args {
     pub unqualified: bool,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Disable .gitignore and .qualignore filtering
     #[arg(long)]
@@ -56,7 +57,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             .collect()
     };
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         let entries: Vec<serde_json::Value> = rows
             .iter()
             .map(|(subject, kinds)| {

@@ -1,5 +1,6 @@
 use clap::Args as ClapArgs;
 
+use crate::cli::output::Format;
 use crate::compact::filter_superseded;
 use crate::content_hash::{self, FreshnessStatus};
 use crate::qual_file::{self, find_project_root};
@@ -10,8 +11,8 @@ pub struct Args {
     pub subject: Option<String>,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Ignore .gitignore and .qualignore rules
     #[arg(long)]
@@ -33,7 +34,7 @@ pub fn run(args: Args) -> crate::Result<()> {
     let qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
 
     if qual_files.is_empty() {
-        if args.format == "json" {
+        if args.format == Format::Json {
             println!("[]");
         } else {
             println!("No .qual files found.");
@@ -99,7 +100,7 @@ pub fn run(args: Args) -> crate::Result<()> {
         });
     }
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         print_json(&results);
     } else {
         print_human(&results);
