@@ -99,7 +99,8 @@ A case's `scaffold_script` must name a file inside its own case directory,
 so each case that uses the shared fixture has its own `scaffold.sh`, a
 copy of `evals/_fixture/scaffold.sh`. Edit `_fixture/scaffold.sh`, then
 copy it over each case's `scaffold.sh` (every case except `no-qual-files`,
-which has its own).
+which has its own). `scripts/test-plugin.sh` compares every copy with
+`_fixture/scaffold.sh` and fails, naming the case, on any difference.
 
 Graders check outcomes, not how a command was spelled. A record written
 from an eval session carries `"issuer_type":"ai"` and a
