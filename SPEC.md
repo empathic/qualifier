@@ -1115,14 +1115,14 @@ field.
 qualifier emit <type> <subject> --body '<JSON>'
 ```
 
-A raw, script-oriented write for novel or uncommon record types. The body
-is passed through unchanged into the record's `body` field. For unknown
-types the record round-trips via `Record::Unknown` (preserving the body
-verbatim). For `--type annotation`, the body is validated against
-`AnnotationBody`.
+A raw, script-oriented write for novel or uncommon record types. The
+body's fields and values are kept as given in the record's `body` field,
+serialized in canonical key order (§2.8.1). For unknown types the record
+round-trips via `Record::Unknown`. When `<type>` is `annotation`, the body
+is validated against `AnnotationBody`.
 
 ```
-qualifier emit license src/lib.rs --body '{"spdx":"MIT"}' \
+qualifier emit license src/lib.rs --body '{"spdx_id":"MIT"}' \
   --issuer "https://ci.example.com"
 
 qualifier emit https://example.com/lint/v1 src/parser.rs \

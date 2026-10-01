@@ -16,6 +16,13 @@ cargo install qualifier
 
 ## Commands
 
+**Initialize and orient:**
+
+```
+qualifier init                             Bootstrap a project: VCS merge config and agent directives
+qualifier agents   [topic]                 Self-contained guide for AI coding agents
+```
+
 **Write records:**
 
 ```
@@ -28,15 +35,18 @@ qualifier emit     <type> <subject> --body JSON  Emit a raw record of any type
 `<kind>` accepts the built-in kinds (`pass`, `fail`, `blocker`, `concern`,
 `comment`, `praise`, `suggestion`, `waiver`, `resolve`) or any custom string.
 `<location>` is a path with an optional span (e.g., `src/auth.rs:42`).
-`<target>` is an id-prefix (≥4 chars) or a `<location>`.
+`<target>` is an ID prefix (4 or more lowercase hex characters) or a
+`<location>`.
 
 **Inspect:**
 
 ```
 qualifier show     <artifact>              Show annotations for an artifact
+qualifier threads  [location...]           List conversation threads across the project
 qualifier ls       [--kind K]              List artifacts (optionally by kind)
 qualifier praise   <artifact>              Show who annotated and why (alias: blame)
 qualifier review   [subject]               Check freshness of span-bound annotations
+qualifier diff     [ref]                   Show records added, changed, resolved, or drifted since a git ref
 ```
 
 **Maintain:**
@@ -45,7 +55,9 @@ qualifier review   [subject]               Check freshness of span-bound annotat
 qualifier compact  <artifact> [options]    Compact a .qual file
 ```
 
-All commands that produce output accept `--format json` for machine-readable output.
+The read commands (`show`, `threads`, `ls`, `praise`, `review`, `diff`)
+and `record`, `reply`, and `resolve` accept `--format json` for
+machine-readable output.
 
 <svg class="topo topo-wide" viewBox="0 0 900 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <line x1="0" y1="20" x2="900" y2="20" stroke="#818cf8" stroke-width="0.5" opacity="0.1"/>
@@ -119,16 +131,17 @@ readable, `content_hash` is auto-computed.
 
 ```bash
 # A SPDX license record
-qualifier emit license src/lib.rs --body '{"spdx":"MIT"}'
+qualifier emit license src/lib.rs --body '{"spdx_id":"MIT"}'
 
 # A custom URI-typed record (round-trips via Record::Unknown)
 qualifier emit https://example.com/lint/v1 src/parser.rs \
   --body '{"rule":"no-panic","matches":3}'
 ```
 
-`emit` is a low-level passthrough: the body is preserved verbatim. For
-`--type annotation`, the body is validated against the annotation schema;
-other types are not validated.
+`emit` is a low-level passthrough: the body's fields and values are kept
+as given (written with keys in canonical order). When `<type>` is
+`annotation`, the body is validated against the annotation schema; other
+types are not validated.
 
 ### Compact old annotations
 
@@ -149,8 +162,8 @@ qualifier compact --all
 ### List artifacts
 
 ```bash
-qualifier ls --kind blocker
-qualifier ls --unqualified   # artifacts with no annotations
+qualifier ls                 # every artifact with live records, and their counts
+qualifier ls --kind blocker  # only artifacts with a live blocker
 ```
 
 ### Batch annotation (for agents)
