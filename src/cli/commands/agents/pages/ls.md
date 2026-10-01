@@ -44,9 +44,11 @@ standard and custom kind strings stored in `body.kind` are matched; envelope
 per artifact).
 
 **`--format json`** emits a JSON array where each element has `subject`,
-`annotation_count`, and `kinds` (an array of all kind strings recorded for
-that artifact, including duplicates). This is useful for scripts that need
-to walk every annotated artifact or count by kind.
+`annotation_count`, and `kinds` (an array of the kind strings of the
+artifact's live records, including duplicates). With `--kind`,
+`annotation_count` counts only the records of that kind, while `kinds`
+still lists every live kind. This is useful for scripts that need to walk
+every annotated artifact or count by kind.
 
 **`--no-ignore`** bypasses `.gitignore` and `.qualignore` filtering when
 discovering `.qual` files. Use this if you suspect an artifact is being
@@ -55,10 +57,11 @@ hidden by an ignore rule.
 ## Gotchas
 
 - `ls` operates on `.qual` files discovered from the project root. It does
-  not scan source files for artifacts that lack annotations — the
-  `--unqualified` flag exists as a placeholder but is not yet implemented.
-- Counts include all records in the `.qual` file, not just active ones.
-  An artifact that was annotated and then fully resolved will still appear
-  in `ls` output with a non-zero count.
+  not scan source files, so it cannot list artifacts that lack annotations.
+  To find those, compare `git ls-files` against the subjects `qualifier ls`
+  prints.
+- Counts cover live records only: superseded records and `resolve` records
+  are left out, so an artifact whose only annotation was resolved drops out
+  of `ls`. With `--kind`, the count is the number of records of that kind.
 - The output is sorted alphabetically by subject. There is no sort-by-count
   option; pipe through your shell's `sort` if needed.
