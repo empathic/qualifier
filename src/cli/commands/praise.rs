@@ -44,10 +44,11 @@ fn run_records(args: Args) -> crate::Result<()> {
         .flat_map(|qf| qf.records)
         .collect();
 
-    if !records.iter().any(|r| r.subject() == subject) {
-        return Err(crate::Error::Validation(format!(
-            "No records found for '{subject}'"
-        )));
+    // No records is an answer, not an error: JSON output carries empty
+    // arrays, human output says so.
+    if args.format != "json" && !records.iter().any(|r| r.subject() == subject) {
+        println!("No records found for '{subject}'.");
+        return Ok(());
     }
 
     // Annotations are attributed thread by thread: each thread's root, live

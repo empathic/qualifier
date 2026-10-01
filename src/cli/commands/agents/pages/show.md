@@ -79,8 +79,11 @@ artifacts).
 
 ## Gotchas
 
-- `show` exits with an error if no records are found for the artifact. An
-  empty result is not silent — test the exit code when scripting.
+- An artifact with no records is not an error: `show` exits 0, printing
+  `No records found for '<subject>'.` in human output, or empty `records`
+  and `threads` arrays in JSON. To fail on empty in a script, check
+  `.records | length` in the JSON. A non-zero exit means a real error (bad
+  arguments, unreadable `.qual` files).
 - Dependency records are hidden in human output (they are graph metadata, not
   quality signals) but appear in `--format json` output.
 - A closed thread shows only its root and the resolve that closed it, so a

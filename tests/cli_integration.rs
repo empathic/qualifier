@@ -143,16 +143,40 @@ fn test_show_json_output() {
 // --- qualifier show nonexistent artifact ---
 
 #[test]
-fn test_show_nonexistent_artifact() {
+fn test_show_and_praise_succeed_on_artifact_without_records() {
     let dir = tempfile::tempdir().unwrap();
-
-    let (_, stderr, code) = run_qualifier(dir.path(), &["show", "nonexistent.rs"]);
-
-    assert_ne!(code, 0, "show nonexistent artifact should fail");
-    assert!(
-        stderr.contains("No .qual file") || stderr.contains("nonexistent"),
-        "error should mention missing qual file: {stderr}"
+    // Another artifact has records; this one has none.
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "a.rs",
+            "x",
+            "--issuer",
+            "mailto:t@x.com",
+        ],
     );
+
+    for cmd in ["show", "praise"] {
+        let (stdout, stderr, code) = run_qualifier(dir.path(), &[cmd, "nonexistent.rs"]);
+        assert_eq!(code, 0, "{cmd}: an empty result is not an error: {stderr}");
+        assert!(stderr.is_empty(), "{cmd}: {stderr}");
+        assert!(
+            stdout.contains("No records found for 'nonexistent.rs'"),
+            "{cmd}: {stdout}"
+        );
+
+        let (stdout, stderr, code) =
+            run_qualifier(dir.path(), &[cmd, "nonexistent.rs", "--format", "json"]);
+        assert_eq!(code, 0, "{cmd}: {stderr}");
+        let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"subject": "nonexistent.rs", "records": [], "threads": []}),
+            "{cmd}"
+        );
+    }
 }
 
 // --- flexible .qual file layout ---
