@@ -399,6 +399,23 @@ fn test_cross_artifact_supersession_rejected() {
     assert!(result.unwrap_err().to_string().contains("cross-subject"));
 }
 
+#[test]
+fn test_supersession_of_unknown_target_rejected() {
+    let a = make_record("foo.rs", Kind::Concern, "issue in foo");
+    let b = Record::Annotation(Box::new(annotation::finalize(Annotation {
+        body: AnnotationBody {
+            supersedes: Some("f".repeat(64)),
+            ..make_att("foo.rs", Kind::Pass, "fixed").body
+        },
+        ..make_att("foo.rs", Kind::Pass, "fixed")
+    })));
+
+    let err = annotation::validate_supersession_targets(&[a, b]).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("ffffffff"), "{msg}");
+    assert!(msg.contains("not found"), "{msg}");
+}
+
 // --- Kind typo detection ---
 
 #[test]

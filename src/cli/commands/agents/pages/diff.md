@@ -38,14 +38,32 @@ Four sections:
    `<ref>`. Each row shows the new root and, under it, what it was at
    `<ref>`. These records appear here instead of under Added and Resolved.
 3. **Resolved** — records active at `<ref>` that are no longer active on
-   `HEAD`. Each row names every closer record (each new annotation whose
-   `supersedes` points at it; more than one after merging branches that
-   each closed it), or marks the record as *removed* if no successor was
-   authored.
+   `HEAD`. When the record's thread is closed on `HEAD`, the row names the
+   `resolve` that closed it, even when that resolve targets a later edit
+   rather than the record itself. It also names every other record whose
+   `supersedes` points at it (an edit, or a second resolve after merging
+   branches that each closed it), or marks the record as *removed* if no
+   successor was authored.
 4. **Drifted** — records present at *both* refs whose `body.span.content_hash`
    no longer matches the file's current content. Drift on records that are
    freshly added on this branch is suppressed (you just authored them; their
    span IS the current code).
+
+## Thread state
+
+Rows carry their thread's state on `HEAD`, from the same thread model and
+wording as `qualifier threads`, `show`, and `praise`, so a closed thread
+never appears without the record that closed it:
+
+- A reply (Added, Resolved, or Drifted) gets `on thread <root ID>, <state>`,
+  for example `on thread 31ef1c78, closed (wontfix): Won't change b()
+  (9c04aa12)`.
+- A thread's root gets its state when there is something to say:
+  `needs decision`, `needs decision from <issuer>`, `decided`, or
+  `closed (<reason>): <closer summary>  (<closer ID>)`. The root of an
+  open thread with no decision pending gets no state line.
+- A thread that closed while its latest `status:*` tag was still
+  `status:needs-decision` ends in `— question still pending`.
 
 ## Comparison point
 
@@ -109,25 +127,29 @@ build log shows exactly which record triggered the failure.
 Captured with `COLUMNS=80`:
 
 ```
-Comparing HEAD against merge-base of main (3476ded)
+Comparing HEAD against merge-base of main (1849719)
 
-Added on this branch (2)
-  + concern    src/auth.rs:5:7  login() ignores the user argument  (567f5707)
-  + suggestion src/parser.rs:2  (3de024f6)
+Added on this branch (3)
+  + concern    src/auth.rs:5:7  login() ignores the user argument  (8d78d25b)
+  + comment    src/config.rs  (a96ca4bd)
+      Fall back to defaults, or fail with a clear message?
+      on thread a14f47cb, needs decision
+  + suggestion src/parser.rs:2  (bfc40981)
       split on ',' allocates; return an iterator
 
 Changed on this branch (1)
-  * blocker    src/config.rs:2  (15f8e94d)
+  * blocker    src/config.rs:2  (a14f47cb)
       unwrap on a missing config file panics at startup
-      was concern src/config.rs:2 (345f1275): "unwrap on a missing config file …
+      needs decision
+      was concern src/config.rs:2 (f7113f7b)
 
 Resolved on this branch (1)
-  - concern    src/auth.rs:2  (aa2a64d2)
+  - concern    src/auth.rs:2  (60077cb4)
       Token comparison is not constant-time
-      resolved by 2340089c: "constant-time compare landed in PR #142"
+      closed (fixed): constant-time compare landed in PR #142  (8fcfb3a0)
 
 Drifted (1)
-  ~ concern    src/parser.rs:5:7  (1b125cee)
+  ~ concern    src/parser.rs:5:7  (4713c174)
       depth() counts bytes, not nesting
         src/parser.rs:
           2 |     input.split(",").collect()
@@ -141,8 +163,8 @@ Drifted (1)
 A row fits on one line (`marker KIND LOCATION  SUMMARY  (ID)`) only when
 it has nothing else to show and fits the width. Otherwise the header
 keeps the kind, location, and ID, and the summary and any further detail
-(the `was ...` line under Changed, each `resolved by` / `superseded by`
-closer under Resolved, the current code under Drifted) follow as
+(the thread state, the `was ...` line under Changed, each `resolved by` /
+`superseded by` record under Resolved, the current code under Drifted) follow as
 indented lines, each cut to the width with `…`. The width is `$COLUMNS`
 when exported, else the terminal width, else 80.
 
@@ -157,9 +179,19 @@ when exported, else the terminal width, else 80.
   "added":    [<full record envelopes>],
   "changed":  [{"record": <head-side root>, "previous": <ref-side root>}],
   "resolved": [{"record": <ref-side record>, "closer": <newest head-side closer or null>, "closers": [<every head-side closer, oldest first>]}],
-  "drifted":  [{"record": <head-side record>, "expected": "<hash>", "actual": "<hash>"}]
+  "drifted":  [{"record": <head-side record>, "expected": "<hash>", "actual": "<hash>"}],
+  "threads":  [{"origin": "<id>", "root": "<id>", "state": {...}, "closed_by": "<id>"|null, "records": ["<id>", ...]}]
 }
 ```
+
+`threads` has one entry per `HEAD` thread that holds a listed record:
+`origin`, `root`, `state`, and `closed_by` as in `qualifier show --format
+json` (`state` as in `qualifier threads --format json`), plus `records`,
+the IDs of the records listed above that belong to the thread (for
+Changed, both `record` and `previous`). A record removed on this branch
+has no thread on `HEAD` and appears in no entry. `closer` and `closers`
+under `resolved` are the records whose `supersedes` points at that
+record; the thread's `closed_by` is the resolve that closed the thread.
 
 `comparison` says which commit `base` is: `"merge-base"` (the default),
 `"tip"` (`--from-tip`), or `"fallback-tip"` (no merge-base exists, so the
@@ -177,7 +209,7 @@ tip of `<ref>` was used).
   (`Comparing HEAD against main (tip; no merge-base)`) and in the JSON
   `comparison` field.
 - A malformed historical line at `<ref>` is reported on stderr and skipped —
-  the diff continues. Malformed lines on `HEAD` still abort discovery as
-  usual.
+  the diff continues. Malformed lines on `HEAD` are skipped the same way,
+  with a `file:line` warning on stderr.
 - Drift checking reads files from disk. If the working tree is dirty, drift
   reflects that — not the contents of `HEAD`.

@@ -120,13 +120,7 @@ impl Filter {
             .iter()
             .map(|l| LocationFilter::parse(l, locator))
             .collect::<crate::Result<Vec<_>>>()?;
-        let kinds = args.kind.as_deref().map(|s| {
-            s.split(',')
-                .map(str::trim)
-                .filter(|k| !k.is_empty())
-                .map(|k| k.parse::<Kind>().unwrap())
-                .collect()
-        });
+        let kinds = args.kind.as_deref().map(threads::parse_kind_list);
         let issuer_type = args
             .issuer_type
             .as_deref()

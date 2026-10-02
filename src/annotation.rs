@@ -1062,24 +1062,36 @@ pub fn check_supersession_cycles(records: &[Record]) -> crate::Result<()> {
     Ok(())
 }
 
-/// Validate that supersession references target the same subject.
+/// Validate that every supersession reference targets a record in `records`
+/// with the same subject.
 ///
-/// Returns an error if any cross-subject supersession is found.
+/// Returns an error if a `supersedes` target is not in `records`, or if a
+/// record supersedes one with a different subject.
 pub fn validate_supersession_targets(records: &[Record]) -> crate::Result<()> {
     let by_id: std::collections::HashMap<&str, &Record> =
         records.iter().map(|r| (r.id(), r)).collect();
 
     for record in records {
-        if let Some(target_id) = record.supersedes()
-            && let Some(target) = by_id.get(target_id)
-            && record.subject() != target.subject()
-        {
+        let Some(target_id) = record.supersedes() else {
+            continue;
+        };
+        let short_id = &record.id()[..8.min(record.id().len())];
+        let short_target = &target_id[..target_id.len().min(8)];
+        let Some(target) = by_id.get(target_id) else {
+            return Err(crate::Error::Validation(format!(
+                "record {} (subject '{}') supersedes {}, which was not found",
+                short_id,
+                record.subject(),
+                short_target
+            )));
+        };
+        if record.subject() != target.subject() {
             return Err(crate::Error::Validation(format!(
                 "record {} (subject '{}') supersedes {} (subject '{}') \
                  — cross-subject supersession is not allowed",
-                &record.id()[..8.min(record.id().len())],
+                short_id,
                 record.subject(),
-                &target_id[..target_id.len().min(8)],
+                short_target,
                 target.subject()
             )));
         }
