@@ -4215,6 +4215,352 @@ fn test_diff_json_includes_base_and_from_tip() {
     assert!(v["added"].is_array());
 }
 
+/// Create and switch to a new branch in `dir`.
+fn git_checkout_new(dir: &Path, branch: &str) {
+    let status = Command::new("git")
+        .args(["checkout", "-q", "-b", branch])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Record an annotation as `mailto:a@b.com`, asserting success, and return
+/// the new record's ID.
+fn record_as_ab(dir: &Path, args: &[&str]) -> String {
+    let mut full = vec!["record"];
+    full.extend_from_slice(args);
+    full.extend_from_slice(&["--issuer", "mailto:a@b.com", "--format", "json"]);
+    let (stdout, stderr, code) = run_qualifier(dir, &full);
+    assert_eq!(code, 0, "record {args:?} failed: {stderr}");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("record json");
+    v["id"].as_str().expect("id").to_string()
+}
+
+#[test]
+fn test_diff_deleted_qual_file_surfaces_as_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("gone")).unwrap();
+    record_as_ab(dir.path(), &["concern", "gone/x.rs", "old finding"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    std::fs::remove_file(dir.path().join("gone/.qual")).unwrap();
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("Resolved on this branch (1)") && stdout.contains("removed (no successor)"),
+        "records in a .qual file deleted on the branch should be removed: {stdout}"
+    );
+}
+
+#[test]
+fn test_diff_reports_comparison_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    record_as_ab(dir.path(), &["concern", "a.rs", "on main"]);
+    git_commit_all(dir.path(), "main");
+    git_checkout_new(dir.path(), "feat");
+    record_as_ab(dir.path(), &["concern", "b.rs", "on feat"]);
+    git_commit_all(dir.path(), "feat");
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["comparison"], "merge-base");
+
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &["diff", "main", "--from-tip", "--format", "json"],
+    );
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["comparison"], "tip");
+
+    // An orphan branch shares no history with main: the comparison falls
+    // back to main's tip, and both outputs say so.
+    let status = Command::new("git")
+        .args(["checkout", "-q", "--orphan", "lone"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    git_commit_all(dir.path(), "lone");
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("Comparing HEAD against main (tip; no merge-base)"),
+        "fallback header should say there was no merge-base: {stdout}"
+    );
+    assert!(
+        !stdout.contains("merge-base of"),
+        "fallback must not claim a merge-base comparison: {stdout}"
+    );
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["comparison"], "fallback-tip");
+}
+
+#[test]
+fn test_diff_ref_side_honors_qualignore() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("vendor/lib")).unwrap();
+    record_as_ab(
+        dir.path(),
+        &["concern", "vendor/lib/x.rs", "vendored finding"],
+    );
+    record_as_ab(dir.path(), &["concern", "src.rs", "kept finding"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    std::fs::write(dir.path().join(".qualignore"), "vendor/\n").unwrap();
+    git_commit_all(dir.path(), "ignore vendor");
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("no annotation changes"),
+        "an ignored path must be ignored on both sides, not reported as removed: {stdout}"
+    );
+
+    // --no-ignore reads ignored files on both sides, so still no change.
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--no-ignore"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("no annotation changes"),
+        "--no-ignore applies to both sides: {stdout}"
+    );
+}
+
+#[test]
+fn test_diff_lists_every_closer_of_a_resolved_record() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let old = record_as_ab(dir.path(), &["concern", "a.rs", "needs work"]);
+    std::fs::write(dir.path().join(".gitattributes"), "*.qual merge=union\n").unwrap();
+    git_commit_all(dir.path(), "baseline");
+    // Two branches each resolve the record; merging them leaves two closers.
+    for (branch, summary) in [
+        ("feat", "fixed on branch one"),
+        ("other", "fixed on branch two"),
+    ] {
+        let status = Command::new("git")
+            .args(["checkout", "-q", "-b", branch, "main"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let (_, stderr, code) = run_qualifier(
+            dir.path(),
+            &["resolve", &old, summary, "--issuer", "mailto:a@b.com"],
+        );
+        assert_eq!(code, 0, "{stderr}");
+        git_commit_all(dir.path(), summary);
+    }
+    let run_git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    };
+    run_git(&["checkout", "-q", "feat"]);
+    run_git(&["merge", "-q", "--no-edit", "other"]);
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("fixed on branch one") && stdout.contains("fixed on branch two"),
+        "both closers should be listed: {stdout}"
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let closers = v["resolved"][0]["closers"]
+        .as_array()
+        .expect("closers array");
+    assert_eq!(closers.len(), 2, "{stdout}");
+    assert!(v["resolved"][0]["closer"].is_object(), "{stdout}");
+}
+
+/// A repo whose `main` has a `kind` record on `a.rs:3`; on branch `feat`
+/// that record is superseded by a `new_kind` record on `a.rs:4`.
+fn diff_changed_setup(dir: &Path, kind: &str, new_kind: &str) -> (String, String) {
+    git_init(dir);
+    std::fs::write(dir.join("a.rs"), "one\ntwo\nthree\nfour\n").unwrap();
+    let old = record_as_ab(dir, &[kind, "a.rs:3", "same problem"]);
+    git_commit_all(dir, "baseline");
+    git_checkout_new(dir, "feat");
+    let new = record_as_ab(
+        dir,
+        &[
+            new_kind,
+            "a.rs:4",
+            "same problem, moved",
+            "--supersedes",
+            &old,
+        ],
+    );
+    (old, new)
+}
+
+#[test]
+fn test_diff_reports_reanchored_record_as_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (old, new) = diff_changed_setup(dir.path(), "blocker", "blocker");
+
+    let (stdout, stderr, code) =
+        run_qualifier(dir.path(), &["diff", "main", "--fail-on", "blocker"]);
+    assert_eq!(
+        code, 0,
+        "re-anchoring an existing blocker must not trip --fail-on: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("Changed on this branch (1)"),
+        "edit should be listed under Changed: {stdout}"
+    );
+    assert!(!stdout.contains("Added on this branch"), "{stdout}");
+    assert!(!stdout.contains("Resolved on this branch"), "{stdout}");
+    assert!(
+        stdout.contains(&new[..8]) && stdout.contains(&old[..8]),
+        "{stdout}"
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["added"].as_array().unwrap().len(), 0, "{stdout}");
+    assert_eq!(v["resolved"].as_array().unwrap().len(), 0, "{stdout}");
+    let changed = v["changed"].as_array().expect("changed array");
+    assert_eq!(changed.len(), 1, "{stdout}");
+    assert_eq!(changed[0]["record"]["id"], new.as_str());
+    assert_eq!(changed[0]["previous"]["id"], old.as_str());
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["diff", "main", "--subjects-only"]);
+    assert_eq!(stdout.trim(), "a.rs");
+}
+
+#[test]
+fn test_diff_fail_on_trips_when_changed_record_escalates() {
+    let dir = tempfile::tempdir().unwrap();
+    diff_changed_setup(dir.path(), "concern", "blocker");
+
+    let (stdout, stderr, code) =
+        run_qualifier(dir.path(), &["diff", "main", "--fail-on", "blocker"]);
+    assert_ne!(code, 0, "concern -> blocker must trip --fail-on blocker");
+    assert!(stdout.contains("Changed on this branch (1)"), "{stdout}");
+    assert!(stderr.contains("--fail-on"), "{stderr}");
+
+    // Shown by --kind when either side matches.
+    let (stdout, _, _) = run_qualifier(dir.path(), &["diff", "main", "--kind", "concern"]);
+    assert!(stdout.contains("Changed on this branch (1)"), "{stdout}");
+}
+
+#[test]
+fn test_diff_warns_on_kinds_that_match_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    record_as_ab(dir.path(), &["concern", "a.rs", "base"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    record_as_ab(dir.path(), &["perf-regression", "a.rs", "custom kind"]);
+
+    let (_, stderr, _) = run_qualifier(
+        dir.path(),
+        &["diff", "main", "--fail-on", "blockers", "--kind", "Concern"],
+    );
+    assert!(
+        stderr.contains("qualifier diff: warning: kind 'blockers' matches no known kind"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("qualifier diff: warning: kind 'Concern' matches no known kind"),
+        "{stderr}"
+    );
+
+    // Built-in kinds and custom kinds present on a record are known.
+    let (_, stderr, _) = run_qualifier(
+        dir.path(),
+        &[
+            "diff",
+            "main",
+            "--fail-on",
+            "waiver,perf-regression",
+            "--kind",
+            "concern",
+        ],
+    );
+    assert!(!stderr.contains("warning"), "{stderr}");
+}
+
+#[test]
+fn test_diff_width_without_columns_or_tty_is_80() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    git_commit_all_allow_empty(dir.path());
+    git_checkout_new(dir.path(), "feat");
+    let long = "word ".repeat(40);
+    record_as_ab(dir.path(), &["concern", "a.rs", long.trim()]);
+
+    // Piped stdout is not a terminal, so with COLUMNS unset the width is 80.
+    let output = qualifier_cmd()
+        .args(["diff", "main"])
+        .env_remove("COLUMNS")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let widest = stdout.lines().map(|l| l.chars().count()).max().unwrap();
+    assert_eq!(widest, 80, "{stdout}");
+}
+
+fn git_commit_all_allow_empty(dir: &Path) {
+    let status = Command::new("git")
+        .args(["commit", "-q", "--allow-empty", "-m", "init"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// The human example on the `diff` agents page keeps the layout
+/// `print_record_row` produces: row headers end in the ID, closers and
+/// other detail sit on continuation lines, and nothing exceeds 80 columns.
+#[test]
+fn test_diff_agents_page_example_matches_row_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _, code) = run_qualifier(dir.path(), &["agents", "diff"]);
+    assert_eq!(code, 0);
+    let section = stdout
+        .split("## Output shape (human)")
+        .nth(1)
+        .expect("human output section");
+    let example = section.split("```").nth(1).expect("fenced example");
+    let mut rows = 0;
+    for line in example.lines() {
+        assert!(line.chars().count() <= 80, "wider than 80: {line:?}");
+        assert!(!line.contains("original:"), "never printed: {line:?}");
+        let marker = line.strip_prefix("  ").and_then(|l| l.chars().next());
+        if matches!(marker, Some('+' | '-' | '*' | '~')) && line.chars().nth(3) == Some(' ') {
+            rows += 1;
+            let id = line.rsplit_once('(').map(|(_, id)| id).unwrap_or("");
+            assert!(
+                id.len() == 9 && id.ends_with(')'),
+                "row header must end with the 8-char ID: {line:?}"
+            );
+        }
+    }
+    assert!(
+        rows >= 4,
+        "example should show a row per section: {example}"
+    );
+}
+
 #[test]
 fn test_top_level_help_shows_agents_group() {
     let dir = tempfile::tempdir().unwrap();
