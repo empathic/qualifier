@@ -2055,6 +2055,30 @@ fn test_emit_unknown_type_roundtrips() {
         content.contains("\"foo\":\"bar\""),
         "should preserve body verbatim: {content}"
     );
+
+    // Envelope fields are in Metabox order and the ID is a real BLAKE3 hash.
+    let line = content.lines().next().unwrap();
+    let keys: Vec<&str> = [
+        "\"metabox\"",
+        "\"type\"",
+        "\"subject\"",
+        "\"issuer\"",
+        "\"created_at\"",
+        "\"id\"",
+        "\"body\"",
+    ]
+    .into_iter()
+    .collect();
+    let positions: Vec<usize> = keys.iter().map(|k| line.find(k).unwrap()).collect();
+    assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "envelope out of order: {line}"
+    );
+    let v: serde_json::Value = serde_json::from_str(line).unwrap();
+    let id = v["id"].as_str().unwrap();
+    assert_eq!(id.len(), 64, "{line}");
+    let canonical = line.replacen(&format!("\"id\":\"{id}\""), "\"id\":\"\"", 1);
+    assert_eq!(id, blake3::hash(canonical.as_bytes()).to_hex().to_string());
 }
 
 #[test]
@@ -6006,4 +6030,281 @@ fn test_show_marks_non_human_issuer_type() {
     assert!(line("from an agent").contains("test (ai)"), "{stdout}");
     assert!(!line("from a person").contains('('), "{stdout}");
     assert!(!line("unspecified").contains('('), "{stdout}");
+}
+
+// --- Custom body fields ---
+
+#[test]
+fn test_compact_keeps_custom_body_fields_and_their_id() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "fn x() {}\n").unwrap();
+    let custom: qualifier::annotation::Record = serde_json::from_str(
+        r#"{"metabox":"1","type":"annotation","subject":"x.rs","issuer":"mailto:t@t.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-20,"summary":"custom field"}}"#,
+    )
+    .unwrap();
+    let custom = qualifier::annotation::finalize_record(custom);
+    let custom_line = serde_json::to_string(&custom).unwrap();
+    assert!(custom_line.contains(r#""score":-20"#), "{custom_line}");
+    std::fs::write(dir.path().join("x.rs.qual"), format!("{custom_line}\n")).unwrap();
+
+    // Give compact a superseded record to prune so it rewrites the file.
+    let first = write_id(dir.path(), &["record", "comment", "x.rs", "first"]);
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "x.rs",
+            "second",
+            "--supersedes",
+            &first,
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "x.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("pruned"), "{stdout}");
+
+    let after = std::fs::read_to_string(dir.path().join("x.rs.qual")).unwrap();
+    assert!(
+        after.lines().any(|l| l == custom_line),
+        "custom record must survive byte-for-byte:\n{after}"
+    );
+}
+
+#[test]
+fn test_compact_keeps_created_at_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "fn x() {}\n").unwrap();
+    let foreign: qualifier::annotation::Record = serde_json::from_str(
+        r#"{"metabox":"1","type":"annotation","subject":"x.rs","issuer":"mailto:t@t.com","created_at":"2026-02-24T10:00:00.5+00:00","id":"","body":{"kind":"concern","summary":"other tool"}}"#,
+    )
+    .unwrap();
+    let foreign_line =
+        serde_json::to_string(&qualifier::annotation::finalize_record(foreign)).unwrap();
+    std::fs::write(dir.path().join("x.rs.qual"), format!("{foreign_line}\n")).unwrap();
+    let first = write_id(dir.path(), &["record", "comment", "x.rs", "first"]);
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "x.rs",
+            "second",
+            "--supersedes",
+            &first,
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "x.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let after = std::fs::read_to_string(dir.path().join("x.rs.qual")).unwrap();
+    assert!(
+        after.lines().any(|l| l == foreign_line),
+        "created_at must not be re-encoded:\n{after}"
+    );
+    // Records qualifier writes use the canonical form.
+    let written = after.lines().last().unwrap();
+    let v: serde_json::Value = serde_json::from_str(written).unwrap();
+    let ts = v["created_at"].as_str().unwrap();
+    assert!(ts.ends_with('Z') && !ts.contains('+'), "{ts}");
+}
+
+// --- compact scope and thread structure ---
+
+/// Threads built from every `.qual` file under `dir`.
+fn open_thread_summaries(dir: &Path) -> Vec<String> {
+    let files = qualifier::qual_file::discover(dir, false).unwrap();
+    let records: Vec<_> = files.into_iter().flat_map(|qf| qf.records).collect();
+    qualifier::threads::build_threads(&records)
+        .into_iter()
+        .filter(|t| t.open)
+        .map(|t| t.root.as_annotation().unwrap().body.summary.clone())
+        .collect()
+}
+
+#[test]
+fn test_compact_keeps_resolved_thread_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "a\nb\nc\n").unwrap();
+    let c = write_id(dir.path(), &["record", "concern", "x.rs:2", "a concern"]);
+    write_id(dir.path(), &["reply", &c, "a reply comment"]);
+    write_id(dir.path(), &["resolve", &c, "fixed"]);
+    assert!(open_thread_summaries(dir.path()).is_empty());
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "x.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(
+        open_thread_summaries(dir.path()).is_empty(),
+        "compact must not reopen the resolved thread"
+    );
+}
+
+/// `src/a.rs` (a praise and its edit) and `src/b.rs` (an open blocker),
+/// both in the directory-level `src/.qual`.
+fn shared_dir_project(dir: &Path) -> String {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(dir.join("src/b.rs"), "fn b() {}\n").unwrap();
+    let first = write_id(dir, &["record", "praise", "src/a.rs", "tidy"]);
+    write_id(
+        dir,
+        &[
+            "record",
+            "praise",
+            "src/a.rs",
+            "tidy and fast",
+            "--supersedes",
+            &first,
+        ],
+    );
+    write_id(dir, &["record", "blocker", "src/b.rs", "b is broken"])
+}
+
+#[test]
+fn test_compact_artifact_snapshot_leaves_other_subjects() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = shared_dir_project(dir.path());
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "src/a.rs", "--snapshot"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("3 -> 2 records (1 epoch)"), "{stdout}");
+
+    let qual = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+    assert!(
+        qual.contains(&blocker),
+        "b.rs blocker must survive:\n{qual}"
+    );
+    assert_eq!(open_thread_summaries(dir.path()), vec!["b is broken"]);
+    let records = qualifier::qual_file::parse_str(&qual).unwrap();
+    let epoch = records.iter().find_map(|r| r.as_epoch()).unwrap();
+    assert_eq!(epoch.subject, "src/a.rs");
+    assert_eq!(
+        epoch.body.refs.len(),
+        1,
+        "superseded records are pruned first"
+    );
+}
+
+#[test]
+fn test_compact_artifact_prune_leaves_other_subjects() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_dir_project(dir.path());
+    let old = write_id(dir.path(), &["record", "concern", "src/b.rs", "old"]);
+    write_id(
+        dir.path(),
+        &["record", "concern", "src/b.rs", "new", "--supersedes", &old],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "src/a.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("(1 superseded, pruned)"), "{stdout}");
+    let qual = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+    assert!(qual.contains(&format!("\"id\":\"{old}\"")), "{qual}");
+}
+
+#[test]
+fn test_compact_snapshot_refuses_to_fold_open_blocker_without_force() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_dir_project(dir.path());
+    let before = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["compact", "src/b.rs", "--snapshot"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("b is broken"), "{stderr}");
+    assert!(stderr.contains("--force"), "{stderr}");
+    let (_, stderr, code) = run_qualifier(dir.path(), &["compact", "--all", "--snapshot"]);
+    assert_ne!(code, 0, "{stderr}");
+    let after = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+    assert_eq!(before, after, "a refused snapshot writes nothing");
+
+    let (stdout, stderr, code) = run_qualifier(
+        dir.path(),
+        &["compact", "src/b.rs", "--snapshot", "--force"],
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(open_thread_summaries(dir.path()), vec!["tidy and fast"]);
+}
+
+#[test]
+fn test_compact_artifact_covers_every_qual_file_holding_it() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_dir_project(dir.path());
+    let old = write_id(
+        dir.path(),
+        &[
+            "record",
+            "praise",
+            "src/a.rs",
+            "1:1 old",
+            "--file",
+            "src/a.rs.qual",
+        ],
+    );
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "praise",
+            "src/a.rs",
+            "1:1 new",
+            "--supersedes",
+            &old,
+            "--file",
+            "src/a.rs.qual",
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "src/a.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(
+        stdout.matches("(1 superseded, pruned)").count(),
+        2,
+        "both files compacted: {stdout}"
+    );
+}
+
+#[test]
+fn test_record_reversed_span_is_an_error_not_a_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "1\n2\n3\n4\n5\n6\n").unwrap();
+    for location in ["x.rs:5:2", "x.rs"] {
+        let mut args = vec!["record", "concern", location, "reversed"];
+        if location == "x.rs" {
+            args.extend(["--span", "3.9:3.4"]);
+        }
+        let (_, stderr, code) = run_qualifier(dir.path(), &args);
+        assert_eq!(code, 1, "{location}: {stderr}");
+        assert!(stderr.contains("must not precede"), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    }
+    assert!(!dir.path().join(".qual").exists());
+}
+
+#[test]
+fn test_malformed_sibling_qual_warns_on_read_and_blocks_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "fn x() {}\n").unwrap();
+    write_id(dir.path(), &["record", "concern", "x.rs", "still visible"]);
+    std::fs::create_dir_all(dir.path().join("other")).unwrap();
+    let bad = r#"{"metabox":"1","type":"annotation","subject":"other/y.rs","issuer":"mailto:t@t.com","created_at":"2026-01-01T00:00:00Z","id":"","body":{"kind":"concern"}}"#;
+    std::fs::write(dir.path().join("other/.qual"), format!("{bad}\n")).unwrap();
+
+    for args in [&["threads", "x.rs"][..], &["show", "x.rs"][..], &["ls"][..]] {
+        let (stdout, stderr, code) = run_qualifier(dir.path(), args);
+        assert_eq!(code, 0, "{args:?}: {stdout}{stderr}");
+        assert!(
+            stderr.contains("other/.qual:1:") && stderr.contains("summary"),
+            "{args:?} should name the bad line: {stderr}"
+        );
+    }
+    let (stdout, _, _) = run_qualifier(dir.path(), &["show", "x.rs"]);
+    assert!(stdout.contains("still visible"), "{stdout}");
+
+    // A rewrite of the malformed file must fail rather than drop the line.
+    let (_, stderr, code) = run_qualifier(dir.path(), &["compact", "--all"]);
+    assert_ne!(code, 0, "{stderr}");
+    assert!(stderr.contains("other/.qual:1:"), "{stderr}");
+    let after = std::fs::read_to_string(dir.path().join("other/.qual")).unwrap();
+    assert_eq!(after, format!("{bad}\n"));
 }

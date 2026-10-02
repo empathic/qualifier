@@ -253,7 +253,7 @@ fn latest_status<'a>(t: &Thread<'a>) -> Option<&'a str> {
                 .tags
                 .iter()
                 .find_map(|tag| tag.strip_prefix("status:"))
-                .map(|s| (a.created_at, s))
+                .map(|s| (*a.created_at, s))
         })
         .max_by_key(|(at, _)| *at)
         .map(|(_, s)| s.split(':').next().unwrap_or(s))

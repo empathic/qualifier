@@ -206,7 +206,7 @@ fn origin_of<'a>(r: &'a Record, by_id: &HashMap<&'a str, &'a Record>) -> &'a str
 
 fn created_at(r: &Record) -> DateTime<Utc> {
     r.as_annotation()
-        .map(|a| a.created_at)
+        .map(|a| *a.created_at)
         .unwrap_or(DateTime::<Utc>::MIN_UTC)
 }
 

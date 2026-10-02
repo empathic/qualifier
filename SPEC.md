@@ -414,8 +414,10 @@ obey the following rules:
    `body`. Optional envelope fields (`issuer_type`) are omitted when absent.
 
 3. **Body field order.** Body fields MUST appear in lexicographic
-   (alphabetical) order. Nested objects (like `span`) also have their fields
-   in lexicographic order.
+   (alphabetical) order. Custom body fields that the record type does not
+   define (see §4) are part of the body: they are sorted together with the
+   defined fields, never appended after them. Nested objects (like `span`)
+   also have their fields in lexicographic order.
 
 4. **Absent optional fields.** Optional fields whose value is absent (null,
    None, etc.) MUST be omitted entirely. `tags` MUST be omitted when the
@@ -432,6 +434,16 @@ obey the following rules:
 
 8. **Number encoding.** Integers serialize as bare decimal with no leading
    zeros, no decimal point, no exponent. Negative values use a leading `-`.
+
+9. **Timestamps.** `created_at` is hashed exactly as it is written in the
+   record. Implementations MUST NOT re-encode it (normalize the offset,
+   add or drop fractional digits) when hashing or rewriting a record, so a
+   record keeps its ID wherever it is copied. Any valid RFC 3339 timestamp
+   is accepted. Records an implementation creates SHOULD use the
+   **canonical timestamp form**: UTC with a `Z` suffix and 0, 3, 6 or 9
+   fractional-second digits, the fewest that represent the instant exactly
+   (`2026-02-24T10:00:00Z`, `2026-02-24T10:00:00.500Z`,
+   `2026-02-24T10:00:00.123456Z`). Qualifier writes only this form.
 
 See the [Metabox specification](METABOX.md) for the full MCF definition.
 
@@ -616,10 +628,22 @@ reclaiming space.
 
 A compaction rewrites a `.qual` file by:
 
-1. **Pruning** all superseded records. If record B supersedes A, only B is
-   retained. The entire chain collapses to its tip.
-2. **Optionally snapshotting.** When `--snapshot` is passed, all surviving
-   records for each subject are replaced by a single epoch record.
+1. **Pruning** superseded records. If record B supersedes A, only B is
+   retained, and the entire chain collapses to its tip. A superseded record
+   is kept when a retained record names it in `references`; every record
+   that supersedes a kept record is then kept too. Pruning therefore never
+   changes how the remaining records group into threads (§2.11): a
+   resolved thread with replies keeps its root, and its replies do not
+   become threads of their own.
+2. **Optionally snapshotting.** When `--snapshot` is passed, superseded
+   records are pruned and the surviving annotation and epoch records for
+   each subject are replaced by a single epoch record whose `refs` lists
+   those surviving records. A subject whose only record is already an
+   epoch is left unchanged.
+
+Compacting one subject (`qualifier compact <artifact>`) rewrites only that
+subject's records, in every `.qual` file that holds them; records of other
+subjects in the same file are written back unchanged.
 
 #### 3.3.1 Compaction Rules
 
@@ -629,6 +653,8 @@ A compaction rewrites a `.qual` file by:
 - After compaction, the file is a valid `.qual` file. No special reader
   support is needed.
 - `qualifier compact --dry-run` MUST be supported.
+- A snapshot that would fold an open `blocker` or `concern` thread into an
+  epoch MUST be refused unless the user forces it (`--force`).
 
 ### 3.4 Dependency (`type: "dependency"`)
 
@@ -1270,8 +1296,14 @@ ends with `(project-wide)`.
 ## 7. Library API
 
 The `qualifier` crate exposes its library API from `src/lib.rs`. Library
-consumers add `qualifier = { version = "0.4", default-features = false }` to
-avoid pulling in CLI dependencies.
+consumers add `qualifier = { version = "0.9", default-features = false }` to
+avoid pulling in CLI dependencies (keep the version at the current minor
+release; pre-1.0, each minor release may change this API).
+
+This section lists the **complete supported library surface**. Items not
+listed here, including the `qualifier::cli` module (the binary's
+implementation, built with the default `cli` feature), are not part of the
+API and may change in any release.
 
 ```rust
 // qualifier::annotation — record types and core logic
@@ -1281,7 +1313,7 @@ pub enum Record {
     Annotation(Box<Annotation>),
     Epoch(Epoch),
     Dependency(DependencyRecord),
-    Unknown(serde_json::Value),  // forward compatibility
+    Unknown(serde_json::Value),  // forward compatibility; serialized in envelope order
 }
 
 impl Record {
@@ -1293,7 +1325,10 @@ impl Record {
     pub fn issuer_type(&self) -> Option<&IssuerType>;
     pub fn as_annotation(&self) -> Option<&Annotation>;
     pub fn as_epoch(&self) -> Option<&Epoch>;
+    pub fn record_type(&self) -> &str;          // envelope `type`; "" if absent
 }
+// Record, Annotation, Epoch, DependencyRecord and the body types implement
+// Serialize/Deserialize; a .qual line is `serde_json::from_str::<Record>`.
 
 pub struct Annotation {
     pub metabox: String,                    // always "1"
@@ -1301,7 +1336,7 @@ pub struct Annotation {
     pub subject: String,
     pub issuer: String,
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,              // hashed as written (§2.8.1 rule 9)
     pub id: String,
     pub body: AnnotationBody,
 }
@@ -1316,7 +1351,11 @@ pub struct AnnotationBody {
     pub summary: String,
     pub supersedes: Option<String>,
     pub tags: Vec<String>,
+    pub extra: ExtraFields,             // custom body fields, preserved and hashed
 }
+
+/// Body fields a record type does not define, keyed by name.
+pub type ExtraFields = BTreeMap<String, serde_json::Value>;
 
 pub struct Epoch {
     pub metabox: String,                    // always "1"
@@ -1324,7 +1363,7 @@ pub struct Epoch {
     pub subject: String,
     pub issuer: String,
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub id: String,
     pub body: EpochBody,
 }
@@ -1333,6 +1372,7 @@ pub struct EpochBody {
     pub refs: Vec<String>,
     pub span: Option<Span>,
     pub summary: String,
+    pub extra: ExtraFields,
 }
 
 pub struct DependencyRecord {
@@ -1341,20 +1381,39 @@ pub struct DependencyRecord {
     pub subject: String,
     pub issuer: String,
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub id: String,
     pub body: DependencyBody,
 }
 
 pub struct DependencyBody {
     pub depends_on: Vec<String>,
+    pub extra: ExtraFields,
 }
+
+/// RFC 3339 timestamp that keeps the text it was read from. Derefs to
+/// DateTime<Utc>; ordered by instant, then text.
+pub struct Timestamp { /* private */ }
+impl Timestamp {
+    pub fn now() -> Timestamp;                         // canonical form
+    pub fn parse(text: &str) -> Result<Timestamp, chrono::ParseError>;
+    pub fn canonical(instant: DateTime<Utc>) -> String; // UTC, Z, 0/3/6/9 digits
+    pub fn as_str(&self) -> &str;                       // as written
+    pub fn instant(&self) -> DateTime<Utc>;
+}
+impl From<DateTime<Utc>> for Timestamp;                // canonical form
 
 pub struct Span {
     pub start: Position,
     pub end: Option<Position>,          // normalized to Some(start) before hashing
     pub content_hash: Option<String>,   // BLAKE3 of spanned lines
 }
+impl Span {
+    pub fn end_or_start(&self) -> &Position;
+    pub fn normalize(&mut self);        // materialize end = start
+}
+/// Parse CLI span syntax: "42", "42:58", "42.5:58.80".
+pub fn parse_span(s: &str) -> Result<Span, String>;
 
 pub struct Position {
     pub line: u32,               // 1-indexed
@@ -1362,33 +1421,50 @@ pub struct Position {
 }
 
 pub enum Kind { Pass, Fail, Blocker, Concern, Comment, Resolve, Praise, Suggestion, Waiver, Custom(String) }
+impl Kind { pub const BUILT_IN: &'static [Kind]; }   // every variant but Custom
 pub enum IssuerType { Human, Ai, Tool, Unknown }
+// Kind and IssuerType implement Display and FromStr (snake_case names).
 
 pub fn generate_id(annotation: &Annotation) -> String;
 pub fn generate_epoch_id(epoch: &Epoch) -> String;
 pub fn generate_dependency_id(dep: &DependencyRecord) -> String;
+pub fn generate_unknown_id(value: &serde_json::Value) -> String; // custom record types
 pub fn generate_record_id(record: &Record) -> String;
 pub fn validate(annotation: &Annotation) -> Vec<String>;
+pub fn check_supersession_cycles(records: &[Record]) -> Result<()>;      // Err(Error::Cycle)
+pub fn validate_supersession_targets(records: &[Record]) -> Result<()>;  // cross-subject
 pub fn finalize(annotation: Annotation) -> Annotation;
 pub fn finalize_epoch(epoch: Epoch) -> Epoch;
 pub fn finalize_record(record: Record) -> Record;
 
 // qualifier::qual_file
 pub struct QualFile { pub path: PathBuf, pub subject: String, pub records: Vec<Record> }
-pub fn parse(path: &Path) -> Result<QualFile>;
+pub fn parse(path: &Path) -> Result<QualFile>;                     // strict: first bad line is an error
+pub fn parse_lenient(path: &Path) -> Result<(QualFile, Vec<ParseIssue>)>; // skips bad lines
+pub struct ParseIssue { pub path: PathBuf, pub line: usize, pub message: String }
+pub fn parse_str(content: &str) -> Result<Vec<Record>>;            // strict, in memory
 pub fn append(path: &Path, record: &Record) -> Result<()>;
-pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>;
+pub fn write_all(path: &Path, records: &[Record]) -> Result<()>;    // rewrite a whole file
+pub fn find_project_root(start: &Path) -> Option<PathBuf>;          // nearest VCS root
+pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>; // lenient; warns on stderr
 
 // qualifier::content_hash — span freshness checking
-pub fn compute_span_hash(file_path: &Path, span: &Span) -> Option<String>;
+pub fn compute_span_hash(file_path: &Path, span: &Span) -> Result<String, SpanHashError>;
+pub enum SpanHashError { NotFound, Io(String), NotUtf8, OutOfRange { start, end, lines }, Reversed { start, end } }
 pub enum FreshnessStatus { Fresh, Drifted { expected, actual }, Missing { reason }, NoHash }
 pub fn check_freshness(file_path: &Path, span: &Span) -> FreshnessStatus;
 
 // qualifier::compact
-pub struct CompactResult { pub before: usize, pub after: usize, pub pruned: usize }
+pub struct CompactResult { pub before: usize, pub after: usize, pub pruned: usize, pub epochs: usize }
 pub fn filter_superseded(records: &[Record]) -> Vec<&Record>;
 pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult);
+pub fn prune_subject(qual_file: &QualFile, subject: &str) -> (QualFile, CompactResult);
 pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult);
+pub fn snapshot_subject(qual_file: &QualFile, subject: &str) -> (QualFile, CompactResult);
+
+// qualifier (crate root)
+pub enum Error { Io(std::io::Error), Json(serde_json::Error), Cycle { context: String, detail: String }, Validation(String) }
+pub type Result<T> = std::result::Result<T, Error>;
 
 // qualifier::threads — group annotations into conversations
 pub struct Thread<'a> {
@@ -1597,7 +1673,7 @@ cli = ["dep:clap", "dep:comfy-table", "dep:figment"]
 
 ## 12. Future Considerations (Out of Scope)
 
-These are explicitly **not** part of v0.3 but are anticipated:
+These are explicitly **not** part of the current release but are anticipated:
 
 - **First-class scoring layer:** A built-in implementation of the example
   scoring model in §4 (`qualifier score`, `qualifier check`, dependency
