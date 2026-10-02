@@ -16,6 +16,13 @@ cargo install qualifier
 
 ## Commands
 
+**Initialize and orient:**
+
+```
+qualifier init                             Bootstrap a project: VCS merge config and agent directives
+qualifier agents   [topic]                 Self-contained guide for AI coding agents
+```
+
 **Write records:**
 
 ```
@@ -28,15 +35,18 @@ qualifier emit     <type> <subject> --body JSON  Emit a raw record of any type
 `<kind>` accepts the built-in kinds (`pass`, `fail`, `blocker`, `concern`,
 `comment`, `praise`, `suggestion`, `waiver`, `resolve`) or any custom string.
 `<location>` is a path with an optional span (e.g., `src/auth.rs:42`).
-`<target>` is an id-prefix (≥4 chars) or a `<location>`.
+`<target>` is an ID prefix (4 or more lowercase hex characters) or a
+`<location>`.
 
 **Inspect:**
 
 ```
 qualifier show     <artifact>              Show annotations for an artifact
+qualifier threads  [location...]           List conversation threads across the project
 qualifier ls       [--kind K]              List artifacts (optionally by kind)
 qualifier praise   <artifact>              Show who annotated and why (alias: blame)
 qualifier review   [subject]               Check freshness of span-bound annotations
+qualifier diff     [ref]                   Show records added, changed, resolved, or drifted since a git ref
 ```
 
 **Maintain:**
@@ -45,7 +55,9 @@ qualifier review   [subject]               Check freshness of span-bound annotat
 qualifier compact  <artifact> [options]    Compact a .qual file
 ```
 
-All commands that produce output accept `--format json` for machine-readable output.
+The read commands (`show`, `threads`, `ls`, `praise`, `review`, `diff`)
+and `record`, `reply`, and `resolve` accept `--format json` for
+machine-readable output.
 
 <svg class="topo topo-wide" viewBox="0 0 900 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <line x1="0" y1="20" x2="900" y2="20" stroke="#818cf8" stroke-width="0.5" opacity="0.1"/>
@@ -83,29 +95,24 @@ qualifier show src/parser.rs
 
   src/parser.rs
 
-  Records (4):
-    concern  L42 "Panics on malformed input"          alice  2026-03-01  a1b2c3d4
-    ├── comment  "Good catch, fixed in latest commit" bob    2026-03-01  b2c3d4e5
-    └── resolve  "Resolved"                           alice  2026-03-01  c3d4e5f6
-    praise       "Excellent property-based test coverage"  bob  2026-02-24  e5f6a7b8
+  Open threads (2):
+    [c1acc3f5] praise     src/parser.rs  Excellent property test coverage  (bob, 2026-10-01)
+
+    [e5daa3cd] suggestion src/parser.rs:10:12  Consider fuzzing  (alice, ai, 2026-10-01) — needs decision
+        [f9156cb5] comment    Worth it for parse()  (carol, 2026-10-01)
+
+  Closed threads (1):
+    [274357ca] concern    src/parser.rs:42  Panics on malformed input  (alice, 2026-10-01) — closed (fixed) by alice: Resolved
 ```
 
-Replies and resolves are threaded under their parent with tree-drawing characters.
+Replies are indented under the record they answer. A closed thread is one
+line that carries its closing `resolve`: the reason, who closed it, and
+the resolve's summary.
 
-### Show details for one artifact
-
-```bash
-qualifier show src/parser.rs
-
-  src/parser.rs
-
-  Records (3):
-    concern     L42–58 "Panics on malformed UTF-8 input"  alice  2026-02-24  a1b2c3d4
-    praise      "Excellent property-based test coverage"   bob    2026-02-24  e5f6a7b8
-    suggestion  "Consider adding fuzzing targets"          carol  2026-02-24  f1f2f3f4
-```
-
-Use `--all` to include resolved/superseded records. Use `--pretty` to force colored output.
+Use `--all` to include edit history and superseded records. Use `--pretty`
+to print the source lines around each span (with `--format json`, it adds a
+`context` field). `--type <TYPE>` keeps only records of one envelope type.
+An artifact with no records prints `No records found` and exits 0.
 
 ### Record a quality concern with full options
 
@@ -124,16 +131,17 @@ readable, `content_hash` is auto-computed.
 
 ```bash
 # A SPDX license record
-qualifier emit license src/lib.rs --body '{"spdx":"MIT"}'
+qualifier emit license src/lib.rs --body '{"spdx_id":"MIT"}'
 
 # A custom URI-typed record (round-trips via Record::Unknown)
 qualifier emit https://example.com/lint/v1 src/parser.rs \
   --body '{"rule":"no-panic","matches":3}'
 ```
 
-`emit` is a low-level passthrough: the body is preserved verbatim. For
-`--type annotation`, the body is validated against the annotation schema;
-other types are not validated.
+`emit` is a low-level passthrough: the body's fields and values are kept
+as given (written with keys in canonical order). When `<type>` is
+`annotation`, the body is validated against the annotation schema; other
+types are not validated.
 
 ### Compact old annotations
 
@@ -144,18 +152,24 @@ qualifier compact src/parser.rs --dry-run
 # Prune superseded annotations
 qualifier compact src/parser.rs
 
-# Collapse everything to a single epoch annotation
+# Collapse the artifact's records to a single epoch record
 qualifier compact src/parser.rs --snapshot
 
 # Compact every .qual file in the repo
 qualifier compact --all
 ```
 
+`compact <artifact>` touches only that artifact's records, in every `.qual`
+file that holds them. Pruning keeps each thread's structure: a resolved
+thread keeps its root, so its replies stay attached. `--snapshot` refuses
+to fold an open `blocker` or `concern` thread into an epoch unless you pass
+`--force`.
+
 ### List artifacts
 
 ```bash
-qualifier ls --kind blocker
-qualifier ls --unqualified   # artifacts with no annotations
+qualifier ls                 # every artifact with live records, and their counts
+qualifier ls --kind blocker  # only artifacts with a live blocker
 ```
 
 ### Batch annotation (for agents)
@@ -188,3 +202,14 @@ Qualifier uses layered configuration (highest wins):
 | 3        | Project config    | `.qualifier.toml`                 |
 | 4        | User config       | `~/.config/qualifier/config.toml` |
 | 5        | Built-in defaults |                                   |
+
+Two keys are read: `issuer` (the default issuer for new records) and
+`format` (`human` or `json`, the default `--format` of every command that
+has the flag). The matching variables are `QUALIFIER_ISSUER` and
+`QUALIFIER_FORMAT`.
+
+```toml
+# .qualifier.toml
+issuer = "mailto:me@example.com"
+format = "json"
+```
