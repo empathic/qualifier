@@ -50,6 +50,49 @@ if [ "${1:-}" = "--print-resolved-bin" ]; then
     exit 0
 fi
 
+# --check-version-bump <base-ref> [<repo>]: fails when the commits since the
+# merge base of <base-ref> and HEAD change a file under the plugin outside
+# evals/ (other than a .qual file) without changing plugin.json's version.
+# AGENTS.md requires that bump: an installed plugin stays on its version
+# until the version changes, so a change without one never reaches users.
+# CI runs this mode on pull requests; the suite below checks it against a
+# scratch repository.
+if [ "${1:-}" = "--check-version-bump" ]; then
+    [ -n "${2:-}" ] || fail "--check-version-bump needs a base ref"
+    python3 - "$2" "${3:-.}" "$PLUGIN" <<'PY' || exit 1
+import json, os, subprocess, sys
+
+base_ref, repo, plugin = sys.argv[1:4]
+manifest = f"{plugin}/.claude-plugin/plugin.json"
+
+def git(*args, check=True):
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=check)
+
+base = git("merge-base", base_ref, "HEAD").stdout.strip()
+changed = [
+    path for path in git("diff", "--name-only", base, "HEAD", "--", plugin).stdout.splitlines()
+    if not path.startswith(f"{plugin}/evals/") and not os.path.basename(path).endswith(".qual")
+]
+if not changed:
+    print(f"ok: no plugin change since {base_ref}; no version bump needed")
+    sys.exit(0)
+
+def version_at(rev):
+    shown = git("show", f"{rev}:{manifest}", check=False)
+    return json.loads(shown.stdout)["version"] if shown.returncode == 0 else None
+
+before, after = version_at(base), version_at("HEAD")
+if before is not None and before == after:
+    print(f"FAIL: {len(changed)} plugin file(s) changed since {base_ref}, but {manifest} is still "
+          f"version {after}. AGENTS.md (Keeping Things in Sync) requires a plugin version bump for "
+          f"any skill, hook, or wrapper change: installed plugins stay on their version until it "
+          f"changes. Changed: {', '.join(changed)}", file=sys.stderr)
+    sys.exit(1)
+print(f"ok: the plugin changed since {base_ref} and its version moved from {before} to {after}")
+PY
+    exit 0
+fi
+
 # --- manifests -------------------------------------------------------------
 
 python3 - "$PLUGIN" <<'PY' || fail "manifest checks"
@@ -70,6 +113,38 @@ assert entry["version"] == plugin["version"], (
 assert plugin["name"] == "qual", "plugin must be named 'qual' (skills are /qual:*)"
 PY
 ok "manifests parse and agree (plugin 'qual', versions match)"
+
+# --check-version-bump against a scratch repository: changes to evals/ and
+# .qual files alone pass, an unbumped skill change fails, a bump passes.
+BUMP_REPO="$(mktemp -d)"
+SELF_BUMP="$PWD/scripts/test-plugin.sh"
+bump_git() { git -C "$BUMP_REPO" -c user.email=test@example.com -c user.name=test -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
+mkdir -p "$BUMP_REPO/$PLUGIN/.claude-plugin" "$BUMP_REPO/$PLUGIN/skills/x" "$BUMP_REPO/$PLUGIN/evals/c"
+echo '{"name": "qual", "version": "0.1.0"}' >"$BUMP_REPO/$PLUGIN/.claude-plugin/plugin.json"
+echo a >"$BUMP_REPO/$PLUGIN/skills/x/SKILL.md"
+echo a >"$BUMP_REPO/$PLUGIN/evals/c/case.yaml"
+bump_git init -q
+bump_git checkout -q -b base
+bump_git add -A
+bump_git commit -qm base
+bump_git checkout -q -b change
+echo b >"$BUMP_REPO/$PLUGIN/evals/c/case.yaml"
+echo '{}' >"$BUMP_REPO/$PLUGIN/skills/x/.qual"
+bump_git add -A
+bump_git commit -qm evals-and-qual
+"$BASH" "$SELF_BUMP" --check-version-bump base "$BUMP_REPO" >/dev/null \
+    || fail "--check-version-bump must pass when only evals/ and .qual files changed"
+echo b >"$BUMP_REPO/$PLUGIN/skills/x/SKILL.md"
+bump_git commit -qam skill
+if "$BASH" "$SELF_BUMP" --check-version-bump base "$BUMP_REPO" >/dev/null 2>&1; then
+    fail "--check-version-bump must fail on a skill change without a plugin version bump"
+fi
+echo '{"name": "qual", "version": "0.1.1"}' >"$BUMP_REPO/$PLUGIN/.claude-plugin/plugin.json"
+bump_git commit -qam bump
+"$BASH" "$SELF_BUMP" --check-version-bump base "$BUMP_REPO" >/dev/null \
+    || fail "--check-version-bump must pass once plugin.json's version changed"
+rm -rf "$BUMP_REPO"
+ok "--check-version-bump fails a plugin change without a version bump, ignoring evals/ and .qual files"
 
 "$BASH" -n "$ENSURE" || fail "ensure-qualifier.sh does not parse"
 "$BASH" -n "$HOOK" || fail "session-start does not parse"
@@ -100,7 +175,7 @@ SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX/home"
 mkdir -p "$HOME"
-unset QUALIFIER_BIN QUALIFIER_PLUGIN_HOME XDG_DATA_HOME
+unset QUALIFIER_BIN QUALIFIER_PLUGIN_HOME XDG_DATA_HOME CLAUDE_PLUGIN_DATA
 
 # --- QUALIFIER_BIN resolution: against the caller's cwd, not this script's -
 # A relative $QUALIFIER_BIN must resolve against the directory the script
@@ -213,7 +288,10 @@ chmod +x "$UNAME_SHIM/uname"
 
 # W1. pinned-version resolves nothing: it works with an empty PATH.
 out="$(env -i PATH= HOME="$HOME" "$BASH" "$ENSURE" pinned-version)" || fail "pinned-version failed with an empty PATH"
-[ "$out" = "0.8.0" ] || fail "pinned-version: expected 0.8.0, got $out"
+expected_pin="$(sed -n 's/^PINNED_VERSION="\(.*\)"$/\1/p' "$ENSURE")"
+if [ -z "$expected_pin" ] || [ "$out" != "$expected_pin" ]; then
+    fail "pinned-version: expected PINNED_VERSION ($expected_pin), got $out"
+fi
 ok "pinned-version reports PINNED_VERSION with an empty PATH"
 
 # W2. The min-version mode is gone.
@@ -804,6 +882,22 @@ case "$err" in *"cargo install qualifier --version 9.9.9"*) ;; *) fail "expected
 [ "$(entries_of "$PH_FAIL")" = "9.9.8" ] || fail "failed download changed the plugin home: $(entries_of "$PH_FAIL")"
 ok "a failed download installs nothing and removes nothing"
 
+# D11. A verified download whose binary cannot run here (a glibc build on a
+#      musl system, say) falls back to cargo, installs nothing, and removes
+#      nothing. The fixture's binary is bytes no system can exec.
+NORUN="$SANDBOX/payload-norun"
+mkdir -p "$NORUN" "$FIXTURE_DIR/v9.9.6"
+printf '\177ELF not a real binary\n' >"$NORUN/qualifier"
+chmod +x "$NORUN/qualifier"
+tar -C "$NORUN" -czf "$FIXTURE_DIR/v9.9.6/qualifier-$TARGET.tar.gz" qualifier
+pinned_copy "$SANDBOX/ensure-norun.sh" 9.9.6 "$(sha256_file "$FIXTURE_DIR/v9.9.6/qualifier-$TARGET.tar.gz")"
+err="$(QUALIFIER_PLUGIN_HOME="$PH_FAIL" PATH="$SAFE_PATH" "$SANDBOX/ensure-norun.sh" 2>&1 >/dev/null)" \
+    && fail "a binary that cannot run must not install"
+case "$err" in *"does not run on this system"*) ;; *) fail "expected 'does not run on this system', got: $err" ;; esac
+case "$err" in *"cargo install qualifier --version 9.9.6"*) ;; *) fail "expected the cargo fallback, got: $err" ;; esac
+[ "$(entries_of "$PH_FAIL")" = "9.9.8" ] || fail "a binary that cannot run changed the plugin home: $(entries_of "$PH_FAIL")"
+ok "a downloaded binary that cannot run here falls back to cargo and installs nothing"
+
 fi # host download tests
 
 # --- SessionStart hook -----------------------------------------------------
@@ -843,8 +937,13 @@ pids_gone() {
     return 1
 }
 
-# The call line every hook context with a binary must give.
-CALL_FORM="Run qualifier as \`\"$PWD/$PLUGIN/scripts/ensure-qualifier.sh\" exec <args>\`"
+# The call line every hook context with a binary must give: the wrapper
+# path unquoted, as the skills' allowed-tools rule spells it, unless the
+# path needs shell quoting.
+case "$PWD/$PLUGIN/scripts/ensure-qualifier.sh" in
+    *[!A-Za-z0-9/._+@%=:,-]*) CALL_FORM="Run qualifier as \`\"$PWD/$PLUGIN/scripts/ensure-qualifier.sh\" exec <args>\`" ;;
+    *) CALL_FORM="Run qualifier as \`$PWD/$PLUGIN/scripts/ensure-qualifier.sh exec <args>\`" ;;
+esac
 
 HOOK_PATH="$NOACCESS:$INTERP:/usr/bin:/bin"
 
@@ -981,6 +1080,44 @@ case "$ctx" in *"$CALL_FORM"*) ;; *) fail "context must give the wrapper call li
 case "$ctx" in *'Call it as `qualifier`'*) fail "context must not route calls to the qualifier on PATH: $ctx" ;; esac
 ok "hook ignores a qualifier on PATH and gives the wrapper call line"
 
+# H7b. The call line the hook prints is approved by every skill's
+#      allowed-tools rule: with ${CLAUDE_PLUGIN_ROOT} replaced by the plugin
+#      root (Claude Code substitutes it in Bash rules), the rule's prefix
+#      (the text before `:*`) starts the printed command. The context says
+#      the skills list the form only when that holds.
+PLAIN_ROOT="$SANDBOX/plainroot/claude-code"
+mkdir -p "$PLAIN_ROOT"
+cp -R "$PLUGIN/hooks" "$PLUGIN/scripts" "$PLUGIN/skills" "$PLUGIN/.claude-plugin" "$PLAIN_ROOT/"
+SPACED_ROOT="$SANDBOX/spaced root/claude-code"
+mkdir -p "$SPACED_ROOT"
+cp -R "$PLUGIN/hooks" "$PLUGIN/scripts" "$PLUGIN/skills" "$PLUGIN/.claude-plugin" "$SPACED_ROOT/"
+for root in "$PLAIN_ROOT" "$SPACED_ROOT"; do
+    out="$(cd "$WITHQUAL" && env CLAUDE_PROJECT_DIR="$WITHQUAL" CLAUDE_PLUGIN_ROOT="$root" \
+        QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH" "$root/hooks/session-start" </dev/null)"
+    # ${CLAUDE_PLUGIN_ROOT} is the literal rule text, not a shell expansion.
+    # shellcheck disable=SC2016
+    printf '%s' "$out" | context_of | python3 -c '
+import glob, re, sys
+root, ctx = sys.argv[1], sys.stdin.read()
+m = re.search(r"Run qualifier as `(.*?) exec <args>`", ctx)
+assert m, f"no call line in: {ctx}"
+called, approved = m.group(1) + " exec", []
+for path in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
+    tools = re.search(r"^allowed-tools: (.*)$", open(path).read(), re.M).group(1)
+    rules = re.findall(r"Bash\(([^)]*ensure-qualifier\.sh exec):\*\)", tools)
+    assert rules, f"{path}: no wrapper rule"
+    approved.append(any(called.startswith(r.replace("${CLAUDE_PLUGIN_ROOT}", root)) for r in rules))
+claims = "allowed-tools" in ctx
+if " " in root:
+    assert called.startswith(chr(34)), f"a path with a space must be quoted: {called}"
+    assert not any(approved) and not claims, "a quoted call line must not claim the allowed-tools form"
+else:
+    assert all(approved), f"{called} is not approved by every skill rule"
+    assert claims, "an unquoted call line names the allowed-tools form"
+' "$root" || fail "the hook's call line and the skills' allowed-tools rule disagree (root $root)"
+done
+ok "the hook's call line matches every skill's allowed-tools rule, and a path needing quotes claims nothing"
+
 # H8. A slow summary is dropped instead of delaying the session, and
 #     everything it started is killed. The fixture would run for a minute;
 #     the hook's budget is two seconds, and the bound asserted here is
@@ -1053,6 +1190,101 @@ ctx="$(printf '%s' "$out" | context_of)" || fail "control characters in the summ
 case "$ctx" in *"1 blocker"*) ;; *) fail "context lost the summary text: $ctx" ;; esac
 ok "hook strips control characters that would break the JSON"
 
+# --- SessionStart hook: Getting started --------------------------------------
+# Shown to the user (systemMessage) in the first session of each plugin
+# version, in any directory; the version shown is recorded in
+# $CLAUDE_PLUGIN_DATA. Every run exits 0.
+
+system_message_of() {
+    python3 -c 'import json,sys; print(json.load(sys.stdin).get("systemMessage", ""))'
+}
+PLUGIN_VERSION="$(python3 -c "import json; print(json.load(open('$PLUGIN/.claude-plugin/plugin.json'))['version'])")"
+GS_DATA="$SANDBOX/gs-data/plugin-data"
+
+# GS1. First session after install, in a repository without .qual files:
+#      the message, and nothing for the model; the version is recorded.
+out="$(run_hook "$NOQUAL" CLAUDE_PLUGIN_DATA="$GS_DATA" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")" \
+    || fail "hook must exit 0 when showing Getting started"
+msg="$(printf '%s' "$out" | system_message_of)" || fail "Getting started output is not valid JSON: $out"
+case "$out" in *hookSpecificOutput*) fail "a repository without .qual files must get no model context: $out" ;; esac
+for want in "qual $PLUGIN_VERSION: getting started" ".qual files next to the code, not in chat" \
+    "Things to try:" "Triage the open qualifier threads" \
+    "downloads qualifier $PINNED, checks it against the checksum" \
+    "A qualifier on your PATH is not used." \
+    "Getting started section of the plugin README" "plugins/claude-code#getting-started"; do
+    case "$msg" in *"$want"*) ;; *) fail "Getting started lacks '$want': $msg" ;; esac
+done
+[ "$(cat "$GS_DATA/getting-started-shown")" = "$PLUGIN_VERSION" ] \
+    || fail "Getting started must record the plugin version shown in \$CLAUDE_PLUGIN_DATA"
+grep -q '^## Getting started$' "$PLUGIN/README.md" || fail "the README must have the Getting started section the message points to"
+ok "the first session of a plugin version shows Getting started, even without .qual files"
+
+# GS2. A second session of the same version is silent again.
+out="$(run_hook "$NOQUAL" CLAUDE_PLUGIN_DATA="$GS_DATA" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")" \
+    || fail "hook must exit 0 after Getting started was shown"
+[ -z "$out" ] || fail "a repository without .qual files must be silent once Getting started was shown: $out"
+ok "Getting started is shown once per plugin version"
+
+# GS3. In a repository with .qual files the context is unchanged and carries
+#      no Getting started once it was shown; with a fresh data directory it
+#      carries both.
+out="$(run_hook "$WITHQUAL" CLAUDE_PLUGIN_DATA="$GS_DATA" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
+[ -z "$(printf '%s' "$out" | system_message_of)" ] || fail "Getting started must not repeat in a .qual repository: $out"
+case "$(printf '%s' "$out" | context_of)" in *"$CALL_FORM"*) ;; *) fail "the .qual context must stay: $out" ;; esac
+out="$(run_hook "$WITHQUAL" CLAUDE_PLUGIN_DATA="$SANDBOX/gs-data-qual" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")"
+case "$(printf '%s' "$out" | system_message_of)" in *"getting started"*) ;; *) fail "first session in a .qual repository must show Getting started: $out" ;; esac
+case "$(printf '%s' "$out" | context_of)" in *"$CALL_FORM"*) ;; *) fail "the .qual context must stay alongside Getting started: $out" ;; esac
+ok "in a .qual repository Getting started rides alongside the usual context"
+
+# GS4. A plugin upgrade (another version in plugin.json, the same data
+#      directory) shows it again, once.
+GS_ROOT="$SANDBOX/gs-upgrade/claude-code"
+mkdir -p "$GS_ROOT"
+cp -R "$PLUGIN/hooks" "$PLUGIN/scripts" "$PLUGIN/skills" "$PLUGIN/.claude-plugin" "$GS_ROOT/"
+sed -e "s/\"version\": \"$PLUGIN_VERSION\"/\"version\": \"99.0.0\"/" "$PLUGIN/.claude-plugin/plugin.json" \
+    >"$GS_ROOT/.claude-plugin/plugin.json"
+grep -q '"version": "99.0.0"' "$GS_ROOT/.claude-plugin/plugin.json" || fail "could not set the upgraded plugin version"
+run_upgraded() {
+    (cd "$NOQUAL" && env CLAUDE_PROJECT_DIR="$NOQUAL" CLAUDE_PLUGIN_ROOT="$GS_ROOT" CLAUDE_PLUGIN_DATA="$GS_DATA" \
+        QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH" "$GS_ROOT/hooks/session-start" </dev/null)
+}
+out="$(run_upgraded)" || fail "hook must exit 0 after an upgrade"
+case "$(printf '%s' "$out" | system_message_of)" in *"qual 99.0.0: getting started"*) ;; *) fail "an upgrade must show Getting started again: $out" ;; esac
+[ "$(cat "$GS_DATA/getting-started-shown")" = "99.0.0" ] || fail "the upgrade must record the new version"
+out="$(run_upgraded)"
+[ -z "$out" ] || fail "the upgraded version must show Getting started only once: $out"
+ok "a plugin version change shows Getting started again"
+
+# GS5. With no usable data directory (unwritable, under a file, relative, or
+#      unset) the hook exits 0, shows nothing it cannot record, and the
+#      .qual context is unaffected.
+mkdir -p "$SANDBOX/gs-readonly"
+chmod 555 "$SANDBOX/gs-readonly"
+touch "$SANDBOX/gs-file"
+for data in "$SANDBOX/gs-readonly/data" "$SANDBOX/gs-file/data" "relative/data" ""; do
+    out="$(run_hook "$NOQUAL" CLAUDE_PLUGIN_DATA="$data" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")" \
+        || fail "hook must exit 0 with data directory '$data'"
+    if [ -w "$SANDBOX/gs-readonly" ] && [ "$data" = "$SANDBOX/gs-readonly/data" ]; then
+        continue # running as root: the directory is writable after all
+    fi
+    [ -z "$out" ] || fail "with data directory '$data' nothing can be recorded, so nothing is shown: $out"
+    out="$(run_hook "$WITHQUAL" CLAUDE_PLUGIN_DATA="$data" QUALIFIER_BIN="$OVERRIDE/qualifier" PATH="$HOOK_PATH")" \
+        || fail "hook must exit 0 in a .qual repository with data directory '$data'"
+    case "$(printf '%s' "$out" | context_of)" in *"$CALL_FORM"*) ;; *) fail "the .qual context must survive data directory '$data': $out" ;; esac
+done
+chmod 755 "$SANDBOX/gs-readonly"
+ok "an unusable plugin data directory never fails the hook or the .qual context"
+
+# GS6. On a platform with no prebuilt release, the message gives the source
+#      route instead of the download.
+out="$(run_hook "$NOQUAL" CLAUDE_PLUGIN_DATA="$SANDBOX/gs-data-unsupported" \
+    FAKE_UNAME_S=Darwin FAKE_UNAME_M=x86_64 PATH="$UNAME_SHIM:$HOOK_PATH")" \
+    || fail "hook must exit 0 on an unsupported platform"
+msg="$(printf '%s' "$out" | system_message_of)"
+case "$msg" in *"no prebuilt qualifier for this platform"*"QUALIFIER_BIN"*) ;; *) fail "unsupported platform: expected the source route: $msg" ;; esac
+case "$msg" in *"downloads qualifier"*) fail "unsupported platform: must not promise a download: $msg" ;; esac
+ok "Getting started on a platform without a prebuilt release gives the source route"
+
 # --- hooks.json: SessionStart matcher sources -------------------------------
 
 python3 -c "
@@ -1092,8 +1324,11 @@ for name in sorted(expected):
     assert fields.get("name") == name, f"{path}: name must be {name!r}"
     assert fields.get("description", "").startswith("Use "), f"{path}: description must start with 'Use '"
     tools = fields.get("allowed-tools", "")
-    for rule in ("Bash(qualifier:*)", "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)"):
-        assert rule in tools, f"{path}: allowed-tools must include {rule}"
+    rule = "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)"
+    assert rule in tools, f"{path}: allowed-tools must include {rule}"
+    # A bare `qualifier` would run whatever is on PATH, which the plugin
+    # never uses; it must prompt rather than be pre-approved.
+    assert not re.search(r"Bash\(qualifier\b", tools), f"{path}: allowed-tools must not pre-approve a bare qualifier on PATH"
     for topic in re.findall(r"qualifier agents ([a-z_-]+)", body):
         assert topic in topics, f"{path}: cites missing agents topic {topic!r}"
     for ref in re.findall(r"qual:([a-z-]+)", body):
@@ -1201,6 +1436,29 @@ ok "every *-prompt.md is mapped to its dispatching skill; placeholders documente
 # Every qualifier command and record line in the skills and subagent briefs
 # runs against a real qualifier in a fixture repository, so no example can
 # use a flag, key, line shape, or subcommand the CLI rejects.
+#
+# That binary is the checkout's build. The shipped plugin runs only
+# PINNED_VERSION, so the pin must be the newest qualifier release: a pin
+# older than the newest `v*` tag means users run skills against a CLI the
+# plugin has not caught up to, and a pin newer than every tag names a
+# release that does not exist. Between a crate version bump and the
+# release that ships it, the checkout is ahead of the pin; that is
+# expected and passes. CI fetches tags (fetch-depth: 0); without any
+# `v*` tag the check fails under CI and is skipped locally.
+newest_tag="$(git tag --list 'v[0-9]*' 2>/dev/null | sed 's/^v//' | sort -V | tail -n 1)"
+if [ -z "$newest_tag" ]; then
+    if [ -n "${CI:-}" ]; then
+        fail "no v* release tags in this checkout, so PINNED_VERSION ($PINNED) cannot be checked against the newest release; fetch tags (actions/checkout fetch-depth: 0)"
+    else
+        echo "skip: no v* release tags in this checkout; PINNED_VERSION ($PINNED) not checked against the newest release"
+    fi
+elif [ "$PINNED" = "$newest_tag" ]; then
+    ok "PINNED_VERSION ($PINNED) is the newest qualifier release"
+elif [ "$(printf '%s\n%s\n' "$PINNED" "$newest_tag" | sort -V | tail -n 1)" = "$newest_tag" ]; then
+    fail "PINNED_VERSION ($PINNED, $PLUGIN/scripts/ensure-qualifier.sh) is older than the newest qualifier release (v$newest_tag): pin v$newest_tag and its SHA256_* values in a plugin release"
+else
+    fail "PINNED_VERSION ($PINNED, $PLUGIN/scripts/ensure-qualifier.sh) is newer than every qualifier release (newest: v$newest_tag): pin a released version"
+fi
 status=0
 QUALIFIER_BIN="$EXAMPLES_BIN" python3 scripts/check-skill-examples.py || status=$?
 case "$status" in
@@ -1320,6 +1578,26 @@ else
         || fail "scaffold.sh wrote something in an unreadable directory it refused: $(ls -A "$GUARD_UNREADABLE")"
     ok "scaffold.sh refuses in an unreadable directory, writing nothing"
 fi
+
+# --- eval cases: per-case scaffold copies -----------------------------------
+# A case's scaffold_script must live in its own directory, so each case
+# that uses the shared fixture carries a copy of _fixture/scaffold.sh. The
+# checks below run _fixture/scaffold.sh itself, so a copy that drifted would
+# seed its eval with a fixture nothing here validates. no-qual-files has a
+# scaffold of its own, by design.
+copies=0
+for case_dir in "$PLUGIN"/evals/*/; do
+    case_name="$(basename "$case_dir")"
+    case "$case_name" in _fixture|no-qual-files) continue ;; esac
+    [ -f "$case_dir/case.yaml" ] || continue
+    grep -Eq '^[[:space:]]*scaffold_script:[[:space:]]*scaffold\.sh[[:space:]]*$' "$case_dir/case.yaml" || continue
+    [ -f "$case_dir/scaffold.sh" ] || fail "evals/$case_name: case.yaml names scaffold.sh, but the case has none"
+    cmp -s "$case_dir/scaffold.sh" "$SCAFFOLD" \
+        || fail "evals/$case_name/scaffold.sh differs from evals/_fixture/scaffold.sh; copy _fixture/scaffold.sh over it"
+    copies=$((copies + 1))
+done
+[ "$copies" -gt 0 ] || fail "no eval case uses the shared fixture's scaffold.sh"
+ok "every case's scaffold.sh is identical to evals/_fixture/scaffold.sh ($copies cases)"
 
 # --- eval cases: structure and graders ----------------------------------------
 # Every case under evals/ (except the shared _fixture) must load in
@@ -1702,6 +1980,7 @@ else:
             bash_call("/opt/bin/qualifier threads"),
             bash_call(f"cd /tmp/repo\n{WRAPPER} exec record blocker src/net.rs:1 \"msg\""),
             bash_call("cd /tmp/repo\nls qualifier-notes"),
+            bash_call("/plugin/scripts/ensure-qualifier.sh exec threads --format json"),
         ])
     # The wrapper is often held in a variable (`Q=".../ensure-qualifier.sh";
     # "$Q" exec record ...`), so no-record keys on `exec <sub>` rather than
@@ -1721,6 +2000,7 @@ else:
             bash_call('cd x && "$Q" exec resolve 1a2b3c4d "fixed" --reason fixed'),
             bash_call(Q_SET + '\n"$Q" exec reply 1a2b3c4d "ok"'),
             bash_call('"$Q" exec record --stdin --dry-run < /tmp/x/batch.jsonl'),
+            bash_call('/plugin/scripts/ensure-qualifier.sh exec record concern src/net.rs:1 "m"'),
         ],
         DESCRIPTION_ONLY + [
             bash_call(f"{WRAPPER} exec threads --format json", "Record qualifier reply targets"),

@@ -1,7 +1,7 @@
 ---
 name: handing-off-threads
 description: Use before ending a session or handing work to another agent or person — checks that open qualifier threads are self-sufficient and that nothing decided in this session lives only in chat
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
 ---
 
 # Handing off threads

@@ -1,7 +1,7 @@
 ---
 name: escalating-decisions
 description: Use when a qualifier thread needs a human judgment call — design trade-offs, won't-fix calls, or conflicting findings — to mark it as waiting on a decision, walk the human through the options, and record their answer under their own identity
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
 ---
 
 # Escalating decisions
@@ -17,7 +17,11 @@ qualifier reply <id> "Needs a decision: <question>" \
 ```
 
 Address a specific person with `--tag status:needs-decision:<their issuer>`.
-Pending decisions: `qualifier threads --status needs-decision`.
+Pending decisions: `qualifier threads --status needs-decision --format json`
+(the JSON is the complete view; the human output can leave parts of a
+thread out). A thread that is already closed is not pending, whatever its
+replies ask: its answer is the closing resolve in `closed_by` (seen with
+`--all`).
 
 ## Walk
 

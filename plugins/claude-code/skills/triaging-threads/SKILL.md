@@ -1,7 +1,7 @@
 ---
 name: triaging-threads
 description: Use when working through existing qualifier threads or review feedback — checks each claim against the current code, proposes closes with reasons as one batch for the human to approve, and replies with concrete resolutions for the rest
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*), Bash(git:*)
 ---
 
 # Triaging threads
@@ -9,7 +9,12 @@ allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qual
 ## Input
 
 `qualifier threads --format json` scoped as asked (path, glob, `--kind`,
-`--tag`). Reply to or resolve `root.id`, never `origin`.
+`--tag`). Reply to or resolve `root.id`, never `origin`. Work from the
+JSON, not the human output, which can leave parts of a thread out. With
+`--all`, a thread whose `open` is `false` is already answered: its answer
+is the closing resolve in `closed_by`, whatever its last reply asked.
+Report it as closed with that resolve's summary, never as an open
+question.
 
 ## For each thread, one outcome
 

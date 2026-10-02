@@ -1,7 +1,7 @@
 ---
 name: using-qualifier
 description: Use in any repository that contains .qual files — maps which qualifier skill applies at each point in design, planning, implementation, review, and handoff, and sets the bar for what is worth recording
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)
 ---
 
 # Using qualifier
@@ -71,6 +71,12 @@ this session saw.
 
 ## Mechanics
 
+- Read threads as JSON (`qualifier threads <path> --format json`, with
+  `--all` for closed ones): it is the complete view, and the human output
+  can leave parts of a thread out. A closed thread (`"open": false`) was
+  answered by its closing resolve, `closed_by` (its `summary`, `detail`,
+  and `reason:` tag), not by its last reply: a question in a reply is
+  settled once the thread is closed.
 - Target the live record. `reply` and `resolve` refuse superseded or closed
   targets and name the live record, or the `resolve` that closed it —
   retarget to it. `--supersedes` and `--references` (on `record`, `reply`,
