@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 pub mod commands;
 pub mod config;
@@ -11,7 +11,8 @@ pub mod targets;
 // parent --help, so we render the Commands block ourselves via a custom
 // help_template. If you add, rename, or remove a subcommand, update
 // HELP_TEMPLATE to match — the Commands enum below is still the source
-// of truth for parsing.
+// of truth for parsing, and `help_template_lists_every_subcommand` fails
+// when the two disagree.
 const HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
@@ -106,7 +107,13 @@ pub fn run() {
     // Detect if the user typed "blame" so we can print a hint
     let used_blame_alias = std::env::args().nth(1).is_some_and(|arg| arg == "blame");
 
-    let cli = Cli::parse();
+    // Load config before parsing: it supplies the `--format` default. A
+    // load error is reported after parsing, so `--help` still works.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let project_root = crate::qual_file::find_project_root(&cwd).unwrap_or(cwd);
+    let loaded = config::load(Some(&project_root));
+    let format_default = loaded.as_ref().map_or(output::Format::Human, |c| c.format);
+    let cli = parse_with_format_default(format_default);
 
     if used_blame_alias {
         eprintln!(
@@ -114,15 +121,14 @@ pub fn run() {
         );
     }
 
-    // Validate config eagerly so a malformed .qualifier.toml or
-    // ~/.config/qualifier/config.toml fails before the command runs. The
-    // result is discarded for now — no command consumes Config yet — but
-    // surfacing the parse error here is the contract callers expect.
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let project_root = crate::qual_file::find_project_root(&cwd);
-    if let Err(e) = config::load(project_root.as_deref()) {
-        eprintln!("qualifier: {e}");
-        std::process::exit(1);
+    // A malformed .qualifier.toml, user config, or QUALIFIER_FORMAT fails
+    // before the command runs.
+    match loaded {
+        Ok(cfg) => config::init(cfg),
+        Err(e) => {
+            eprintln!("qualifier: {e}");
+            std::process::exit(1);
+        }
     }
 
     let result: crate::Result<()> = match cli.command {
@@ -145,8 +151,66 @@ pub fn run() {
         Commands::Diff(args) => commands::diff::run(args),
     };
 
-    if let Err(e) = result {
-        eprintln!("qualifier: {e}");
-        std::process::exit(1);
+    match result {
+        Ok(()) => {}
+        Err(crate::Error::AlreadyReported(code)) => std::process::exit(code),
+        Err(e) => {
+            eprintln!("qualifier: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Parse the command line with `format` as the default of every
+/// subcommand's `--format` flag (flags still win).
+fn parse_with_format_default(format: output::Format) -> Cli {
+    let mut cmd = Cli::command();
+    if format != output::Format::Human {
+        let value = match format {
+            output::Format::Human => "human",
+            output::Format::Json => "json",
+        };
+        let names: Vec<String> = cmd
+            .get_subcommands()
+            .filter(|sc| sc.get_arguments().any(|a| a.get_id() == "format"))
+            .map(|sc| sc.get_name().to_string())
+            .collect();
+        for name in names {
+            cmd = cmd.mut_subcommand(name, |sc| sc.mut_arg("format", |a| a.default_value(value)));
+        }
+    }
+    let matches = cmd.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// Command names listed in HELP_TEMPLATE: the first word of every line
+    /// indented by exactly two spaces.
+    fn template_commands() -> BTreeSet<String> {
+        HELP_TEMPLATE
+            .lines()
+            .filter_map(|line| line.strip_prefix("  "))
+            .filter(|rest| !rest.starts_with(' '))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .map(String::from)
+            .collect()
+    }
+
+    #[test]
+    fn help_template_lists_every_subcommand() {
+        let mut defined: BTreeSet<String> = Cli::command()
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .collect();
+        defined.insert("help".into());
+        assert_eq!(
+            template_commands(),
+            defined,
+            "HELP_TEMPLATE and the Commands enum list different subcommands"
+        );
     }
 }

@@ -53,6 +53,11 @@ you can narrow it. The location form resolves to the most-recent active record
 at that location; if multiple records share the newest timestamp, the command
 also fails with a disambiguation list.
 
+A target is an id-prefix only when it is all lowercase hex; anything else
+(`Makefile`, `LICENSE`) is a location. An all-hex target that matches no
+record ID is tried as a location too; write `./cafe` to force the location
+reading of a hex-named file.
+
 **`--kind <KIND>`** overrides the default kind of `comment`. Any standard
 kind (`concern`, `suggestion`, `waiver`, etc.) or custom string is accepted.
 This lets a reply carry semantic weight — for example, a `waiver` reply is
@@ -67,6 +72,11 @@ Get full IDs from `qualifier threads --format json` (`root.id`,
 **`--format json`** prints the emitted record as JSON on stdout, which is
 useful when you need to capture the new record's ID for a subsequent
 `resolve` or `reply`.
+
+**`--no-ignore`** writes even when the target `.qual` file is hidden from
+discovery by `.gitignore`, `.ignore` or `.qualignore`. Without it, such a
+write is refused with an error naming the rule, because no read command
+would ever see the record.
 
 ## Gotchas
 

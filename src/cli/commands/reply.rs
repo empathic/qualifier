@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record};
 use crate::cli::commands::resolve;
+use crate::cli::output::Format;
 use crate::cli::provenance;
 use crate::cli::targets;
 
@@ -55,9 +56,11 @@ pub(crate) fn build_reply(target: &Record, input: ReplyInput) -> crate::Result<A
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Target — either an id-prefix (≥4 chars) or a `<location>`
-    /// (e.g., `src/auth.rs:42`). A location resolves to the most-recent
-    /// active record there; ambiguity is reported with a candidate list.
+    /// Target — either an id-prefix (≥4 lowercase hex chars) or a
+    /// `<location>` (e.g., `src/auth.rs:42`, `Makefile`). A location
+    /// resolves to the most-recent active record there; ambiguity is
+    /// reported with a candidate list. A hex target that matches no ID is
+    /// tried as a location.
     pub target: String,
 
     /// One-line reply message
@@ -79,7 +82,8 @@ pub struct Args {
     #[arg(long = "tag")]
     pub tags: Vec<String>,
 
-    /// Issuer identity URI (defaults to QUALIFIER_ISSUER, then detected agent harness, then VCS user email)
+    /// Issuer identity URI (defaults to QUALIFIER_ISSUER, then `issuer` in
+    /// .qualifier.toml or the user config, then the VCS user email).
     #[arg(long)]
     pub issuer: Option<String>,
 
@@ -99,21 +103,21 @@ pub struct Args {
     #[arg(long)]
     pub file: Option<String>,
 
+    /// Write even when the target `.qual` file is hidden by `.gitignore`,
+    /// `.ignore` or `.qualignore` (read commands will skip it), and see
+    /// ignored files when resolving the target.
+    #[arg(long)]
+    pub no_ignore: bool,
+
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
     let locator = targets::Locator::from_cwd()?;
-    let qual_files = targets::discover_project(true)?;
+    let qual_files = targets::discover_project(!args.no_ignore)?;
     let target = targets::resolve_target(&args.target, &qual_files, &locator)?;
-    let supersedes = args
-        .supersedes
-        .as_deref()
-        .map(|v| targets::require_live_id("--supersedes", v, &qual_files))
-        .transpose()?;
-
     let att = build_reply(
         &target,
         ReplyInput {
@@ -125,18 +129,19 @@ pub fn run(args: Args) -> crate::Result<()> {
             issuer: args.issuer,
             issuer_type: args.issuer_type,
             r#ref: args.r#ref,
-            supersedes,
+            supersedes: args.supersedes,
         },
     )?;
 
-    let qual_path = locator.write_path(&att.subject, args.file.as_deref().map(Path::new));
-    let record = Record::Annotation(Box::new(att.clone()));
-    if record.supersedes().is_some() {
-        targets::preflight_supersession(&qual_path, &record)?;
+    let qual_path = locator.write_path(&att.subject, args.file.as_deref().map(Path::new))?;
+    if !args.no_ignore {
+        locator.check_not_ignored(&qual_path)?;
     }
+    let record = Record::Annotation(Box::new(att.clone()));
+    targets::check_pointers(&record, &qual_files, "--")?;
     targets::append(&qual_path, &record)?;
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         println!("{}", serde_json::to_string(&record)?);
     } else {
         println!("{} {} {}", att.body.kind, att.subject, att.body.summary);

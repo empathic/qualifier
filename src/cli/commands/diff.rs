@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use clap::Args as ClapArgs;
 
 use crate::annotation::{Kind, Record};
+use crate::cli::output::Format;
 use crate::cli::span_context;
 use crate::compact::filter_superseded;
 use crate::content_hash::{self, FreshnessStatus};
@@ -39,8 +40,8 @@ pub struct Args {
     pub r#ref: String,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Compare against the tip of `<ref>` rather than its merge-base with HEAD.
     /// The default (merge-base) matches what a PR introduces — records that
@@ -171,7 +172,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     if args.subjects_only {
         print_subjects(&diff);
-    } else if args.format == "json" {
+    } else if args.format == Format::Json {
         print_json(&header, &diff);
     } else {
         print_human(&header, &diff, &project_root);

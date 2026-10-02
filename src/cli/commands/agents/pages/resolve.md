@@ -49,7 +49,8 @@ qualifier resolve a1b2c3d4 "Done" --format json
 ## Flags worth knowing
 
 **`<target>`** follows the same resolution rules as `reply`: an id-prefix (4+
-chars) or a location string. Locations are relative to the current
+lowercase hex chars) or a location string (anything else, such as
+`Makefile`). Locations are relative to the current
 directory; subjects are stored relative to the project root. A location
 never resolves to a `resolve` record. An id-prefix that matches more than one record,
 or a location with multiple tied active records, surfaces a disambiguation
@@ -73,6 +74,11 @@ so the user can review what their agent closed.
 `reason:<value>`. A resolve carries at most one `reason:*` tag, and its
 value must be one of these; `resolve` rejects anything else. It is a tag
 convention (§2.12), not a body field.
+
+**`--no-ignore`** writes even when the target `.qual` file is hidden from
+discovery by `.gitignore`, `.ignore` or `.qualignore`. Without it, such a
+write is refused with an error naming the rule, because no read command
+would ever see the record.
 
 ## Gotchas
 
