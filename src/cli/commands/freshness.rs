@@ -1,17 +1,20 @@
 use clap::Args as ClapArgs;
 
+use crate::cli::output::Format;
+
+use crate::cli::targets;
 use crate::compact::filter_superseded;
 use crate::content_hash::{self, FreshnessStatus};
-use crate::qual_file::{self, find_project_root};
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Only check annotations for this subject
+    /// Only check annotations on this file, or on anything under this
+    /// directory, relative to the current directory
     pub subject: Option<String>,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Ignore .gitignore and .qualignore rules
     #[arg(long)]
@@ -27,13 +30,16 @@ struct CheckResult {
 }
 
 pub fn run(args: Args) -> crate::Result<()> {
-    let cwd = std::env::current_dir()?;
-    let project_root = find_project_root(&cwd);
-    let discover_root = project_root.as_deref().unwrap_or(cwd.as_path());
-    let qual_files = qual_file::discover(discover_root, !args.no_ignore)?;
+    let locator = targets::Locator::from_cwd()?;
+    let subject_filter = args
+        .subject
+        .as_deref()
+        .map(|s| locator.subject(s))
+        .transpose()?;
+    let qual_files = targets::discover_project(!args.no_ignore)?;
 
     if qual_files.is_empty() {
-        if args.format == "json" {
+        if args.format == Format::Json {
             println!("[]");
         } else {
             println!("No .qual files found.");
@@ -59,8 +65,8 @@ pub fn run(args: Args) -> crate::Result<()> {
             continue;
         }
 
-        if let Some(subject_filter) = &args.subject
-            && record.subject() != subject_filter
+        if let Some(filter) = &subject_filter
+            && !in_subtree(record.subject(), filter)
         {
             continue;
         }
@@ -87,7 +93,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             format!("{}:{}{}", att.subject, span.start.line, end)
         };
 
-        let subject_path = discover_root.join(&att.subject);
+        let subject_path = locator.file(&att.subject);
         let status = content_hash::check_freshness(&subject_path, span);
 
         results.push(CheckResult {
@@ -99,13 +105,24 @@ pub fn run(args: Args) -> crate::Result<()> {
         });
     }
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         print_json(&results);
     } else {
         print_human(&results);
     }
 
     Ok(())
+}
+
+/// True when `subject` is `filter` or lies under it; `.` (the project
+/// root) contains every subject.
+fn in_subtree(subject: &str, filter: &str) -> bool {
+    let subject = subject.trim_end_matches('/');
+    filter == "."
+        || subject == filter
+        || subject
+            .strip_prefix(filter)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn print_human(results: &[CheckResult]) {

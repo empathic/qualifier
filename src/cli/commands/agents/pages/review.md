@@ -39,9 +39,13 @@ qualifier review --format json
 
 ## Flags worth knowing
 
-**`[subject]`** is optional. When supplied, only annotations whose subject
-matches the given string are checked. Useful in a pre-commit or CI step to
-limit the check to files that were actually changed (e.g., iterate over
+**`[subject]`** is optional. When supplied, only annotations on that file,
+or on anything under that directory, are checked. Like other commands'
+locations it is relative to the current directory (subjects are stored
+relative to the project root): from `src/`, `qualifier review auth.rs`
+checks `src/auth.rs` and `qualifier review .` checks everything under
+`src/`. Useful in a pre-commit or CI step to limit the check to files that
+were actually changed (e.g., run from the repository root, iterate over
 `git diff --name-only` and call `qualifier review <file>` per path).
 
 **`--format json`** emits a JSON array. Each element has `subject`,

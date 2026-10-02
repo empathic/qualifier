@@ -22,6 +22,7 @@ const PROVENANCE_ENV: &[&str] = &[
     "QUALIFIER_ISSUER",
     "QUALIFIER_ISSUER_TYPE",
     "QUALIFIER_SESSION",
+    "QUALIFIER_FORMAT",
     "CLAUDECODE",
     "CLAUDE_CODE_SESSION_ID",
 ];
@@ -143,16 +144,40 @@ fn test_show_json_output() {
 // --- qualifier show nonexistent artifact ---
 
 #[test]
-fn test_show_nonexistent_artifact() {
+fn test_show_and_praise_succeed_on_artifact_without_records() {
     let dir = tempfile::tempdir().unwrap();
-
-    let (_, stderr, code) = run_qualifier(dir.path(), &["show", "nonexistent.rs"]);
-
-    assert_ne!(code, 0, "show nonexistent artifact should fail");
-    assert!(
-        stderr.contains("No .qual file") || stderr.contains("nonexistent"),
-        "error should mention missing qual file: {stderr}"
+    // Another artifact has records; this one has none.
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "a.rs",
+            "x",
+            "--issuer",
+            "mailto:t@x.com",
+        ],
     );
+
+    for cmd in ["show", "praise"] {
+        let (stdout, stderr, code) = run_qualifier(dir.path(), &[cmd, "nonexistent.rs"]);
+        assert_eq!(code, 0, "{cmd}: an empty result is not an error: {stderr}");
+        assert!(stderr.is_empty(), "{cmd}: {stderr}");
+        assert!(
+            stdout.contains("No records found for 'nonexistent.rs'"),
+            "{cmd}: {stdout}"
+        );
+
+        let (stdout, stderr, code) =
+            run_qualifier(dir.path(), &[cmd, "nonexistent.rs", "--format", "json"]);
+        assert_eq!(code, 0, "{cmd}: {stderr}");
+        let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"subject": "nonexistent.rs", "records": [], "threads": []}),
+            "{cmd}"
+        );
+    }
 }
 
 // --- flexible .qual file layout ---
@@ -413,6 +438,71 @@ fn test_ls_kind_filter() {
     assert!(!stdout.contains("b.rs"), "kind filter should hide praise");
 }
 
+#[test]
+fn test_ls_counts_live_records_and_kind_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let rec = |args: &[&str]| {
+        let mut full = vec!["record"];
+        full.extend_from_slice(args);
+        full.extend_from_slice(&["--issuer", "mailto:t@x.com"]);
+        let (stdout, _, code) = run_qualifier(dir.path(), &full);
+        assert_eq!(code, 0, "{stdout}");
+        stdout
+            .lines()
+            .find_map(|l| l.split("id:").nth(1))
+            .map(|s| s.trim().to_string())
+            .unwrap()
+    };
+    // a.rs: one concern, two comments.
+    rec(&["concern", "a.rs", "c1"]);
+    rec(&["comment", "a.rs", "n1"]);
+    rec(&["comment", "a.rs", "n2"]);
+    // b.rs: a concern that was resolved, plus one live comment.
+    let resolved = rec(&["concern", "b.rs", "old"]);
+    run_qualifier(
+        dir.path(),
+        &["resolve", &resolved, "done", "--issuer", "mailto:t@x.com"],
+    );
+    rec(&["comment", "b.rs", "still here"]);
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["ls"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("a.rs  (3 annotations)"), "{stdout}");
+    assert!(stdout.contains("b.rs  (1 annotation)"), "{stdout}");
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["ls", "--kind", "concern"]);
+    assert!(stdout.contains("a.rs  (1 annotation)"), "{stdout}");
+    assert!(
+        !stdout.contains("b.rs"),
+        "resolved concern still listed: {stdout}"
+    );
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["ls", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let b = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["subject"] == "b.rs")
+        .unwrap();
+    assert_eq!(b["annotation_count"], 1, "{stdout}");
+    assert_eq!(b["kinds"], serde_json::json!(["comment"]), "{stdout}");
+
+    let (stdout, _, _) =
+        run_qualifier(dir.path(), &["ls", "--kind", "concern", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v[0]["subject"], "a.rs", "{stdout}");
+    assert_eq!(v[0]["annotation_count"], 1, "{stdout}");
+}
+
+#[test]
+fn test_ls_unqualified_flag_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier(dir.path(), &["ls", "--unqualified"]);
+    assert_eq!(code, 2, "clap rejects the removed flag: {stderr}");
+    assert!(stderr.contains("--unqualified"), "{stderr}");
+}
+
 // --- qualifier praise ---
 
 #[test]
@@ -450,16 +540,20 @@ fn test_praise_shows_records() {
         "should show artifact name: {stdout}"
     );
     assert!(
-        stdout.contains("2 records"),
-        "should show record count: {stdout}"
+        stdout.contains("2 threads (2 open)"),
+        "should show thread count: {stdout}"
     );
     assert!(
-        stdout.contains("alice@example.com"),
-        "should show issuer: {stdout}"
+        stdout.contains("(alice, "),
+        "should show issuer short name: {stdout}"
     );
     assert!(
-        stdout.contains("bob@example.com"),
-        "should show second issuer: {stdout}"
+        stdout.contains("(bob, "),
+        "should show second issuer short name: {stdout}"
+    );
+    assert!(
+        !stdout.contains("mailto:"),
+        "human output shortens issuer URIs: {stdout}"
     );
     assert!(
         stdout.contains("Well structured code"),
@@ -903,6 +997,56 @@ fn test_show_pretty_json() {
     let span_line = lines.iter().find(|l| l["in_span"] == true);
     assert!(span_line.is_some(), "should have an in_span line: {stdout}");
     assert_eq!(span_line.unwrap()["line"], 3);
+}
+
+#[test]
+fn test_show_pretty_prints_root_relative_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/a.rs"), "one\ntwo\nthree\n").unwrap();
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "src/a.rs:2",
+            "look here",
+            "--issuer",
+            "mailto:t@x.com",
+        ],
+    );
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "src/gone.rs:2",
+            "missing file",
+            "--issuer",
+            "mailto:t@x.com",
+        ],
+    );
+    let abs = dir.path().display().to_string();
+
+    let (stdout, _, code) = run_qualifier(&dir.path().join("src"), &["show", "a.rs", "--pretty"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(stdout.contains("  src/a.rs:\n"), "{stdout}");
+    assert!(!stdout.contains(&abs), "absolute path leaked: {stdout}");
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["show", "src/gone.rs", "--pretty"]);
+    assert!(
+        stdout.contains("could not read file: src/gone.rs"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains(&abs), "absolute path leaked: {stdout}");
+
+    let (stdout, _, _) = run_qualifier(
+        dir.path(),
+        &["show", "src/a.rs", "--format", "json", "--pretty"],
+    );
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["records"][0]["context"]["path"], "src/a.rs", "{stdout}");
 }
 
 #[test]
@@ -1457,11 +1601,12 @@ fn test_show_threads_replies_under_parent() {
         "reply should be threaded between first ({first}) and second ({second}), got reply at {reply}: {stdout}"
     );
 
-    // Reply line should have a tree-drawing character
-    let reply_line_text = lines[reply];
-    assert!(
-        reply_line_text.contains('\u{2514}') || reply_line_text.contains('\u{251c}'),
-        "reply should have tree branch character: {reply_line_text}"
+    // The reply is indented one step deeper than its root.
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    assert_eq!(
+        indent(lines[reply]),
+        indent(lines[first]) + 4,
+        "reply should be indented under its root: {stdout}"
     );
 }
 
@@ -1514,33 +1659,20 @@ fn test_resolve_basic() {
         "output should show supersedes line: {stdout2}"
     );
 
-    // Show should hide both the original (superseded) and the tombstone by default
+    // Show renders the closed thread as one line that carries its answer.
     let (show_stdout, _, show_code) = run_qualifier(dir.path(), &["show", "lib.rs"]);
     assert_eq!(show_code, 0);
     assert!(
-        !show_stdout.contains("needs improvement"),
-        "superseded record should be hidden from show: {show_stdout}"
+        show_stdout.contains("Closed threads (1)") && !show_stdout.contains("Open threads"),
+        "{show_stdout}"
     );
+    let line = show_stdout
+        .lines()
+        .find(|l| l.contains("needs improvement"))
+        .unwrap_or_else(|| panic!("closed thread line missing: {show_stdout}"));
     assert!(
-        !show_stdout.contains("fixed in PR #42"),
-        "resolve tombstone should be hidden by default: {show_stdout}"
-    );
-    assert!(
-        show_stdout.contains("Records (0)"),
-        "no active records should remain: {show_stdout}"
-    );
-
-    // Show --all should display the tombstone
-    let (show_all_stdout, _, show_all_code) =
-        run_qualifier(dir.path(), &["show", "lib.rs", "--all"]);
-    assert_eq!(show_all_code, 0);
-    assert!(
-        show_all_stdout.contains("resolve"),
-        "tombstone should appear with --all: {show_all_stdout}"
-    );
-    assert!(
-        show_all_stdout.contains("needs improvement"),
-        "superseded record should appear with --all: {show_all_stdout}"
+        line.contains("— closed by test: fixed in PR #42"),
+        "closed thread line carries the resolve: {show_stdout}"
     );
 }
 
@@ -1987,6 +2119,43 @@ fn test_review_finds_annotations_from_subdirectory() {
     );
 }
 
+#[test]
+fn test_review_subject_is_cwd_relative_and_matches_subtree() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("src/net")).unwrap();
+    std::fs::write(dir.path().join("src/a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(dir.path().join("src/net/tcp.rs"), "fn t() {}\n").unwrap();
+    std::fs::write(dir.path().join("top.rs"), "fn top() {}\n").unwrap();
+    for loc in ["src/a.rs:1", "src/net/tcp.rs:1", "top.rs:1"] {
+        let (_, stderr, rc) = run_qualifier(
+            dir.path(),
+            &["record", "concern", loc, "x", "--issuer", "mailto:t@x.com"],
+        );
+        assert_eq!(rc, 0, "{stderr}");
+    }
+    let src = dir.path().join("src");
+
+    // From src/, `a.rs` names src/a.rs.
+    let (stdout, _, code) = run_qualifier(&src, &["review", "a.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("FRESH"), "{stdout}");
+    assert!(stdout.contains("src/a.rs:1"), "{stdout}");
+    assert!(stdout.contains("1 annotations checked"), "{stdout}");
+
+    // A directory selects every subject beneath it.
+    let (stdout, _, _) = run_qualifier(&src, &["review", "."]);
+    assert!(stdout.contains("2 annotations checked"), "{stdout}");
+    assert!(!stdout.contains("top.rs"), "{stdout}");
+    let (stdout, _, _) = run_qualifier(dir.path(), &["review", "src/net"]);
+    assert!(stdout.contains("src/net/tcp.rs:1"), "{stdout}");
+    assert!(stdout.contains("1 annotations checked"), "{stdout}");
+
+    // A path outside the project root is an error, not an empty success.
+    let (_, stderr, code) = run_qualifier(&src, &["review", "../../elsewhere.rs"]);
+    assert_ne!(code, 0, "{stderr}");
+}
+
 // --- qualifier emit (raw record write) ---
 
 #[test]
@@ -2055,6 +2224,30 @@ fn test_emit_unknown_type_roundtrips() {
         content.contains("\"foo\":\"bar\""),
         "should preserve body verbatim: {content}"
     );
+
+    // Envelope fields are in Metabox order and the ID is a real BLAKE3 hash.
+    let line = content.lines().next().unwrap();
+    let keys: Vec<&str> = [
+        "\"metabox\"",
+        "\"type\"",
+        "\"subject\"",
+        "\"issuer\"",
+        "\"created_at\"",
+        "\"id\"",
+        "\"body\"",
+    ]
+    .into_iter()
+    .collect();
+    let positions: Vec<usize> = keys.iter().map(|k| line.find(k).unwrap()).collect();
+    assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "envelope out of order: {line}"
+    );
+    let v: serde_json::Value = serde_json::from_str(line).unwrap();
+    let id = v["id"].as_str().unwrap();
+    assert_eq!(id.len(), 64, "{line}");
+    let canonical = line.replacen(&format!("\"id\":\"{id}\""), "\"id\":\"\"", 1);
+    assert_eq!(id, blake3::hash(canonical.as_bytes()).to_hex().to_string());
 }
 
 #[test]
@@ -2457,16 +2650,21 @@ fn test_agents_unknown_topic_returns_error() {
     let dir = tempfile::tempdir().unwrap();
     let (_stdout, stderr, code) = run_qualifier(dir.path(), &["agents", "bogus-topic"]);
     assert_eq!(
-        code, 1,
-        "unknown topic should exit 1 like other validation errors: stderr={stderr}"
+        code, 2,
+        "AGENTS-CLI rule 4: unknown topic exits 2: stderr={stderr}"
     );
     assert!(
-        stderr.starts_with("qualifier:"),
-        "stderr should use the standard top-level error prefix: {stderr}"
+        stderr.starts_with("qualifier agents: no such topic 'bogus-topic'. Available: "),
+        "AGENTS-CLI rule 4 message: {stderr}"
+    );
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "one line, no extra prefix: {stderr}"
     );
     assert!(
-        stderr.contains("no such topic"),
-        "stderr should explain: {stderr}"
+        stderr.contains("concepts") && stderr.contains("record"),
+        "lists available topics: {stderr}"
     );
     assert!(
         stderr.contains("bogus-topic"),
@@ -3069,7 +3267,7 @@ fn test_record_stdin_json_errors_are_structured() {
         ],
         input,
     );
-    assert_ne!(code, 0);
+    assert_eq!(code, 1);
 
     // stdout: each line a valid JSONL record.
     for line in stdout.lines() {
@@ -3176,8 +3374,8 @@ fn test_record_stdin_reply_and_resolve_keys_are_not_line_shapes() {
     let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &input);
     assert_ne!(code, 0);
     assert!(
-        stderr.contains("stdin line 1: stdin object missing 'kind'")
-            && stderr.contains("stdin line 2: stdin object missing 'kind'"),
+        stderr.contains("stdin line 1: key 'reply': unknown field")
+            && stderr.contains("stdin line 2: key 'reason': unknown field"),
         "{stderr}"
     );
     let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
@@ -3831,8 +4029,8 @@ fn test_diff_resolved_inlines_closer_summary() {
     let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main"]);
     assert_eq!(code, 0);
     assert!(
-        stdout.contains("resolved by"),
-        "should mention closer: {stdout}"
+        stdout.contains("closed: fixed in PR #42"),
+        "should name the closer: {stdout}"
     );
     assert!(
         stdout.contains("fixed in PR #42"),
@@ -4015,6 +4213,496 @@ fn test_diff_json_includes_base_and_from_tip() {
     let base = v["base"].as_str().expect("base should be a sha string");
     assert_eq!(base.len(), 40, "base should be a full sha: {base}");
     assert!(v["added"].is_array());
+}
+
+/// Create and switch to a new branch in `dir`.
+fn git_checkout_new(dir: &Path, branch: &str) {
+    let status = Command::new("git")
+        .args(["checkout", "-q", "-b", branch])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Record an annotation as `mailto:a@b.com`, asserting success, and return
+/// the new record's ID.
+fn record_as_ab(dir: &Path, args: &[&str]) -> String {
+    let mut full = vec!["record"];
+    full.extend_from_slice(args);
+    full.extend_from_slice(&["--issuer", "mailto:a@b.com", "--format", "json"]);
+    let (stdout, stderr, code) = run_qualifier(dir, &full);
+    assert_eq!(code, 0, "record {args:?} failed: {stderr}");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("record json");
+    v["id"].as_str().expect("id").to_string()
+}
+
+#[test]
+fn test_diff_deleted_qual_file_surfaces_as_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("gone")).unwrap();
+    record_as_ab(dir.path(), &["concern", "gone/x.rs", "old finding"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    std::fs::remove_file(dir.path().join("gone/.qual")).unwrap();
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("Resolved on this branch (1)") && stdout.contains("removed (no successor)"),
+        "records in a .qual file deleted on the branch should be removed: {stdout}"
+    );
+}
+
+#[test]
+fn test_diff_reports_comparison_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    record_as_ab(dir.path(), &["concern", "a.rs", "on main"]);
+    git_commit_all(dir.path(), "main");
+    git_checkout_new(dir.path(), "feat");
+    record_as_ab(dir.path(), &["concern", "b.rs", "on feat"]);
+    git_commit_all(dir.path(), "feat");
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["comparison"], "merge-base");
+
+    let (stdout, _, code) = run_qualifier(
+        dir.path(),
+        &["diff", "main", "--from-tip", "--format", "json"],
+    );
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["comparison"], "tip");
+
+    // An orphan branch shares no history with main: the comparison falls
+    // back to main's tip, and both outputs say so.
+    let status = Command::new("git")
+        .args(["checkout", "-q", "--orphan", "lone"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    git_commit_all(dir.path(), "lone");
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("Comparing HEAD against main (tip; no merge-base)"),
+        "fallback header should say there was no merge-base: {stdout}"
+    );
+    assert!(
+        !stdout.contains("merge-base of"),
+        "fallback must not claim a merge-base comparison: {stdout}"
+    );
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["comparison"], "fallback-tip");
+}
+
+#[test]
+fn test_diff_ref_side_honors_qualignore() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("vendor/lib")).unwrap();
+    record_as_ab(
+        dir.path(),
+        &["concern", "vendor/lib/x.rs", "vendored finding"],
+    );
+    record_as_ab(dir.path(), &["concern", "src.rs", "kept finding"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    std::fs::write(dir.path().join(".qualignore"), "vendor/\n").unwrap();
+    git_commit_all(dir.path(), "ignore vendor");
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("no annotation changes"),
+        "an ignored path must be ignored on both sides, not reported as removed: {stdout}"
+    );
+
+    // --no-ignore reads ignored files on both sides, so still no change.
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--no-ignore"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("no annotation changes"),
+        "--no-ignore applies to both sides: {stdout}"
+    );
+}
+
+#[test]
+fn test_diff_lists_every_closer_of_a_resolved_record() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let old = record_as_ab(dir.path(), &["concern", "a.rs", "needs work"]);
+    std::fs::write(dir.path().join(".gitattributes"), "*.qual merge=union\n").unwrap();
+    git_commit_all(dir.path(), "baseline");
+    // Two branches each resolve the record; merging them leaves two closers.
+    for (branch, summary) in [
+        ("feat", "fixed on branch one"),
+        ("other", "fixed on branch two"),
+    ] {
+        let status = Command::new("git")
+            .args(["checkout", "-q", "-b", branch, "main"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let (_, stderr, code) = run_qualifier(
+            dir.path(),
+            &["resolve", &old, summary, "--issuer", "mailto:a@b.com"],
+        );
+        assert_eq!(code, 0, "{stderr}");
+        git_commit_all(dir.path(), summary);
+    }
+    let run_git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    };
+    run_git(&["checkout", "-q", "feat"]);
+    run_git(&["merge", "-q", "--no-edit", "other"]);
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("fixed on branch one") && stdout.contains("fixed on branch two"),
+        "both closers should be listed: {stdout}"
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let closers = v["resolved"][0]["closers"]
+        .as_array()
+        .expect("closers array");
+    assert_eq!(closers.len(), 2, "{stdout}");
+    assert!(v["resolved"][0]["closer"].is_object(), "{stdout}");
+}
+
+/// A repo whose `main` has a `kind` record on `a.rs:3`; on branch `feat`
+/// that record is superseded by a `new_kind` record on `a.rs:4`.
+fn diff_changed_setup(dir: &Path, kind: &str, new_kind: &str) -> (String, String) {
+    git_init(dir);
+    std::fs::write(dir.join("a.rs"), "one\ntwo\nthree\nfour\n").unwrap();
+    let old = record_as_ab(dir, &[kind, "a.rs:3", "same problem"]);
+    git_commit_all(dir, "baseline");
+    git_checkout_new(dir, "feat");
+    let new = record_as_ab(
+        dir,
+        &[
+            new_kind,
+            "a.rs:4",
+            "same problem, moved",
+            "--supersedes",
+            &old,
+        ],
+    );
+    (old, new)
+}
+
+#[test]
+fn test_diff_reports_reanchored_record_as_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (old, new) = diff_changed_setup(dir.path(), "blocker", "blocker");
+
+    let (stdout, stderr, code) =
+        run_qualifier(dir.path(), &["diff", "main", "--fail-on", "blocker"]);
+    assert_eq!(
+        code, 0,
+        "re-anchoring an existing blocker must not trip --fail-on: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("Changed on this branch (1)"),
+        "edit should be listed under Changed: {stdout}"
+    );
+    assert!(!stdout.contains("Added on this branch"), "{stdout}");
+    assert!(!stdout.contains("Resolved on this branch"), "{stdout}");
+    assert!(
+        stdout.contains(&new[..8]) && stdout.contains(&old[..8]),
+        "{stdout}"
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["added"].as_array().unwrap().len(), 0, "{stdout}");
+    assert_eq!(v["resolved"].as_array().unwrap().len(), 0, "{stdout}");
+    let changed = v["changed"].as_array().expect("changed array");
+    assert_eq!(changed.len(), 1, "{stdout}");
+    assert_eq!(changed[0]["record"]["id"], new.as_str());
+    assert_eq!(changed[0]["previous"]["id"], old.as_str());
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["diff", "main", "--subjects-only"]);
+    assert_eq!(stdout.trim(), "a.rs");
+}
+
+#[test]
+fn test_diff_fail_on_trips_when_changed_record_escalates() {
+    let dir = tempfile::tempdir().unwrap();
+    diff_changed_setup(dir.path(), "concern", "blocker");
+
+    let (stdout, stderr, code) =
+        run_qualifier(dir.path(), &["diff", "main", "--fail-on", "blocker"]);
+    assert_ne!(code, 0, "concern -> blocker must trip --fail-on blocker");
+    assert!(stdout.contains("Changed on this branch (1)"), "{stdout}");
+    assert!(stderr.contains("--fail-on"), "{stderr}");
+
+    // Shown by --kind when either side matches.
+    let (stdout, _, _) = run_qualifier(dir.path(), &["diff", "main", "--kind", "concern"]);
+    assert!(stdout.contains("Changed on this branch (1)"), "{stdout}");
+}
+
+/// Run a write command (`reply`, `resolve`) as `mailto:a@b.com` with JSON
+/// output, asserting success, and return the new record's ID.
+fn write_as_ab(dir: &Path, args: &[&str]) -> String {
+    let mut full = args.to_vec();
+    full.extend_from_slice(&["--issuer", "mailto:a@b.com", "--format", "json"]);
+    let (stdout, stderr, code) = run_qualifier(dir, &full);
+    assert_eq!(code, 0, "{args:?} failed: {stderr}");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("record json");
+    v["id"].as_str().expect("id").to_string()
+}
+
+/// The lines of one human `diff` section, from its heading to the next
+/// blank line.
+fn diff_section(stdout: &str, heading: &str) -> String {
+    stdout
+        .lines()
+        .skip_while(|l| !l.starts_with(heading))
+        .take_while(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn test_diff_shows_the_closer_of_a_thread_closed_on_the_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let root = record_as_ab(dir.path(), &["concern", "lib.rs", "a() rounds wrong"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    let question = write_as_ab(
+        dir.path(),
+        &[
+            "reply",
+            &root,
+            "Open question: also change b()?",
+            "--tag",
+            "status:needs-decision",
+        ],
+    );
+    let closer = write_as_ab(
+        dir.path(),
+        &["resolve", &root, "Won't change b()", "--reason", "wontfix"],
+    );
+
+    let (stdout, stderr, code) = run_qualifier_with_columns(dir.path(), &["diff", "main"], 200);
+    assert_eq!(code, 0, "{stderr}");
+    // The question added on the branch carries its thread's answer.
+    let added = diff_section(&stdout, "Added on this branch");
+    assert!(added.contains(&question[..8]), "{stdout}");
+    assert!(
+        added.contains(&format!(
+            "on thread {}, closed (wontfix): Won't change b() — question still pending  ({})",
+            &root[..8],
+            &closer[..8]
+        )),
+        "{stdout}"
+    );
+    // The resolved root names the closing resolve in the shared vocabulary.
+    let resolved = diff_section(&stdout, "Resolved on this branch");
+    assert!(
+        resolved.contains(&format!(
+            "closed (wontfix): Won't change b() — question still pending  ({})",
+            &closer[..8]
+        )),
+        "{stdout}"
+    );
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["diff", "main", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let threads = v["threads"].as_array().expect("threads array");
+    assert_eq!(threads.len(), 1, "{stdout}");
+    let t = &threads[0];
+    assert_eq!(t["origin"], root.as_str());
+    assert_eq!(t["closed_by"], closer.as_str());
+    assert_eq!(t["state"]["name"], "closed");
+    assert_eq!(t["state"]["reason"], "wontfix");
+    assert_eq!(t["state"]["pending_question"], true);
+    let listed: Vec<&str> = t["records"]
+        .as_array()
+        .expect("records array")
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    assert!(
+        listed.contains(&question.as_str()) && listed.contains(&root.as_str()),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn test_diff_resolved_after_edit_names_the_resolve() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let root = record_as_ab(dir.path(), &["concern", "a.rs", "needs work"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    let edit = record_as_ab(
+        dir.path(),
+        &["concern", "a.rs", "needs more work", "--supersedes", &root],
+    );
+    let closer = write_as_ab(
+        dir.path(),
+        &["resolve", &edit, "landed the fix", "--reason", "fixed"],
+    );
+
+    let (stdout, stderr, code) = run_qualifier_with_columns(dir.path(), &["diff", "main"], 200);
+    assert_eq!(code, 0, "{stderr}");
+    let resolved = diff_section(&stdout, "Resolved on this branch (1)");
+    assert!(
+        resolved.contains(&format!(
+            "closed (fixed): landed the fix  ({})",
+            &closer[..8]
+        )),
+        "a closed thread must be shown with the resolve that closed it: {stdout}"
+    );
+}
+
+#[test]
+fn test_diff_changed_thread_carries_its_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, new) = diff_changed_setup(dir.path(), "concern", "concern");
+    write_as_ab(
+        dir.path(),
+        &[
+            "reply",
+            &new,
+            "keep or drop?",
+            "--tag",
+            "status:needs-decision",
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier_with_columns(dir.path(), &["diff", "main"], 200);
+    assert_eq!(code, 0, "{stderr}");
+    let changed = diff_section(&stdout, "Changed on this branch");
+    assert!(changed.contains("needs decision"), "{stdout}");
+    let added = diff_section(&stdout, "Added on this branch");
+    assert!(
+        added.contains(&format!("on thread {}, needs decision", &new[..8])),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn test_diff_warns_on_kinds_that_match_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    record_as_ab(dir.path(), &["concern", "a.rs", "base"]);
+    git_commit_all(dir.path(), "baseline");
+    git_checkout_new(dir.path(), "feat");
+    record_as_ab(dir.path(), &["perf-regression", "a.rs", "custom kind"]);
+
+    let (_, stderr, _) = run_qualifier(
+        dir.path(),
+        &["diff", "main", "--fail-on", "blockers", "--kind", "Concern"],
+    );
+    assert!(
+        stderr.contains("qualifier diff: warning: kind 'blockers' matches no known kind"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("qualifier diff: warning: kind 'Concern' matches no known kind"),
+        "{stderr}"
+    );
+
+    // Built-in kinds and custom kinds present on a record are known.
+    let (_, stderr, _) = run_qualifier(
+        dir.path(),
+        &[
+            "diff",
+            "main",
+            "--fail-on",
+            "waiver,perf-regression",
+            "--kind",
+            "concern",
+        ],
+    );
+    assert!(!stderr.contains("warning"), "{stderr}");
+}
+
+#[test]
+fn test_diff_width_without_columns_or_tty_is_80() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    git_commit_all_allow_empty(dir.path());
+    git_checkout_new(dir.path(), "feat");
+    let long = "word ".repeat(40);
+    record_as_ab(dir.path(), &["concern", "a.rs", long.trim()]);
+
+    // Piped stdout is not a terminal, so with COLUMNS unset the width is 80.
+    let output = qualifier_cmd()
+        .args(["diff", "main"])
+        .env_remove("COLUMNS")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let widest = stdout.lines().map(|l| l.chars().count()).max().unwrap();
+    assert_eq!(widest, 80, "{stdout}");
+}
+
+fn git_commit_all_allow_empty(dir: &Path) {
+    let status = Command::new("git")
+        .args(["commit", "-q", "--allow-empty", "-m", "init"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// The human example on the `diff` agents page keeps the layout
+/// `print_record_row` produces: row headers end in the ID, closers and
+/// other detail sit on continuation lines, and nothing exceeds 80 columns.
+#[test]
+fn test_diff_agents_page_example_matches_row_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    let (stdout, _, code) = run_qualifier(dir.path(), &["agents", "diff"]);
+    assert_eq!(code, 0);
+    let section = stdout
+        .split("## Output shape (human)")
+        .nth(1)
+        .expect("human output section");
+    let example = section.split("```").nth(1).expect("fenced example");
+    let mut rows = 0;
+    for line in example.lines() {
+        assert!(line.chars().count() <= 80, "wider than 80: {line:?}");
+        assert!(!line.contains("original:"), "never printed: {line:?}");
+        let marker = line.strip_prefix("  ").and_then(|l| l.chars().next());
+        if matches!(marker, Some('+' | '-' | '*' | '~')) && line.chars().nth(3) == Some(' ') {
+            rows += 1;
+            let id = line.rsplit_once('(').map(|(_, id)| id).unwrap_or("");
+            assert!(
+                id.len() == 9 && id.ends_with(')'),
+                "row header must end with the 8-char ID: {line:?}"
+            );
+        }
+    }
+    assert!(
+        rows >= 4,
+        "example should show a row per section: {example}"
+    );
 }
 
 #[test]
@@ -5513,6 +6201,455 @@ fn test_batch_dry_run_creates_no_directories() {
     );
 }
 
+// --- write path: envelopes, pointers, containment ---
+
+#[test]
+fn test_config_supplies_issuer_and_format_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_init(&repo);
+    let home = dir.path().join("home");
+    let user_cfg = home.join(".config/qualifier");
+    std::fs::create_dir_all(&user_cfg).unwrap();
+    std::fs::write(
+        user_cfg.join("config.toml"),
+        "issuer = \"mailto:user@x\"\nformat = \"json\"\n",
+    )
+    .unwrap();
+    let home_env = ("HOME", home.to_str().unwrap());
+    let record = |extra: &[&str], env: &[(&str, &str)]| {
+        let mut args = vec!["record", "comment", "a.rs", "cfg"];
+        args.extend_from_slice(extra);
+        let mut env = env.to_vec();
+        env.push(home_env);
+        run_qualifier_env(&repo, &args, &env)
+    };
+    let json_issuer = |stdout: &str| -> String {
+        let v: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("expected JSON output ({e}): {stdout}"));
+        v["issuer"].as_str().unwrap().to_string()
+    };
+
+    // User config alone.
+    let (stdout, stderr, code) = record(&[], &[]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(json_issuer(&stdout), "mailto:user@x");
+
+    // Project config overrides user config.
+    std::fs::write(repo.join(".qualifier.toml"), "issuer = \"mailto:proj@x\"\n").unwrap();
+    let (stdout, _, _) = record(&[], &[]);
+    assert_eq!(json_issuer(&stdout), "mailto:proj@x");
+
+    // Environment overrides config files; values are strings.
+    let (stdout, stderr, code) = record(&[], &[("QUALIFIER_ISSUER", "12345")]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(json_issuer(&stdout), "mailto:12345");
+    let (stdout, _, _) = record(&[], &[("QUALIFIER_FORMAT", "human")]);
+    assert!(stdout.starts_with("comment a.rs cfg"), "{stdout}");
+
+    // Flags override everything.
+    let (stdout, _, _) = record(
+        &["--issuer", "mailto:flag@x", "--format", "json"],
+        &[
+            ("QUALIFIER_ISSUER", "mailto:env@x"),
+            ("QUALIFIER_FORMAT", "human"),
+        ],
+    );
+    assert_eq!(json_issuer(&stdout), "mailto:flag@x");
+    let (stdout, _, _) = record(&["--format", "human"], &[]);
+    assert!(stdout.starts_with("comment a.rs cfg"), "{stdout}");
+
+    // A config format default applies to read commands too.
+    let (stdout, stderr, code) = run_qualifier_env(&repo, &["threads"], &[home_env]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.trim_start().starts_with('['), "{stdout}");
+}
+
+#[test]
+fn test_numeric_env_values_do_not_break_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier_env(
+        dir.path(),
+        &["haiku"],
+        &[("QUALIFIER_ISSUER", "12345"), ("QUALIFIER_SESSION", "7")],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let (_, stderr, code) =
+        run_qualifier_env(dir.path(), &["haiku"], &[("QUALIFIER_FORMAT", "jsn")]);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("invalid configuration"), "{stderr}");
+}
+
+#[test]
+fn test_format_typo_is_rejected_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &["record", "comment", "a.rs", "x", "--format", "jsn"],
+    );
+    assert_eq!(code, 2, "clap usage error: {stderr}");
+    assert!(stderr.contains("jsn"), "{stderr}");
+    assert!(!dir.path().join(".qual").exists(), "nothing written");
+    for cmd in ["show", "threads", "ls", "praise", "review"] {
+        let mut args = vec![cmd];
+        if matches!(cmd, "show" | "praise") {
+            args.push("a.rs");
+        }
+        args.extend(["--format", "jsn"]);
+        let (_, stderr, code) = run_qualifier(dir.path(), &args);
+        assert_eq!(code, 2, "{cmd}: {stderr}");
+    }
+}
+
+#[test]
+fn test_extensionless_root_files_are_location_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(dir.path(), &["record", "concern", "Makefile", "mk"]);
+    let (_, stderr, code) = run_qualifier(dir.path(), &["reply", "Makefile", "hi"]);
+    assert_eq!(code, 0, "{stderr}");
+
+    // An all-hex name matching no record ID falls back to the location.
+    write_id(dir.path(), &["record", "concern", "cafe", "hex-named file"]);
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["resolve", "cafe", "done"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("cafe"), "{stdout}");
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["reply", "deadbeef", "hi"]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("./deadbeef"),
+        "hint names ./<name>: {stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_absolute_location_through_symlink_resolves() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    git_init(&repo);
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&repo, &link).unwrap();
+    // src/new.rs does not exist yet: only its parent can be canonicalized.
+    for file in ["src/a.rs", "src/new.rs"] {
+        std::fs::write(repo.join("src/a.rs"), "fn a() {}\n").unwrap();
+        let arg = link.join(file);
+        let (stdout, stderr, code) = run_qualifier(
+            &repo,
+            &[
+                "record",
+                "comment",
+                arg.to_str().unwrap(),
+                "abs",
+                "--format",
+                "json",
+            ],
+        );
+        assert_eq!(code, 0, "{}: {stderr}", arg.display());
+        let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert_eq!(v["subject"], file);
+    }
+    let outside = dir.path().join("elsewhere.rs");
+    let (_, stderr, code) = run_qualifier(
+        &repo,
+        &["record", "comment", outside.to_str().unwrap(), "x"],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+}
+
+#[test]
+fn test_writes_into_qualignored_directory_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".qualignore"), "examples/\n").unwrap();
+    let examples = dir.path().join("examples");
+    let line = "{\"kind\":\"concern\",\"location\":\"examples/a.rs\",\"message\":\"m\"}\n";
+    let body = r#"{"kind":"concern","summary":"m"}"#;
+    let attempts: [(&[&str], Option<&str>); 3] = [
+        (&["record", "concern", "examples/a.rs", "m"], None),
+        (&["record", "--stdin"], Some(line)),
+        (
+            &["emit", "annotation", "examples/a.rs", "--body", body],
+            None,
+        ),
+    ];
+    for (args, input) in attempts {
+        let (_, stderr, code) = match input {
+            Some(input) => run_qualifier_stdin(dir.path(), args, input),
+            None => run_qualifier(dir.path(), args),
+        };
+        assert_ne!(code, 0, "{args:?} must be refused");
+        assert!(
+            stderr.contains(".qualignore") && stderr.contains("--no-ignore"),
+            "{args:?}: {stderr}"
+        );
+        assert!(!examples.join(".qual").exists(), "{args:?} wrote anyway");
+    }
+    for (args, input) in attempts {
+        let mut args = args.to_vec();
+        args.push("--no-ignore");
+        let (_, stderr, code) = match input {
+            Some(input) => run_qualifier_stdin(dir.path(), &args, input),
+            None => run_qualifier(dir.path(), &args),
+        };
+        assert_eq!(code, 0, "{args:?} with --no-ignore: {stderr}");
+    }
+    let qual = std::fs::read_to_string(examples.join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 3);
+}
+
+#[test]
+fn test_emit_subject_is_root_relative_like_record() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let (_, stderr, code) = run_qualifier(
+        &src,
+        &[
+            "emit",
+            "annotation",
+            "a.rs",
+            "--body",
+            r#"{"kind":"comment","summary":"e"}"#,
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let qual = std::fs::read_to_string(src.join(".qual")).unwrap();
+    assert!(qual.contains("\"subject\":\"src/a.rs\""), "{qual}");
+    assert!(!src.join("src").exists(), "no CWD-relative src/src/.qual");
+
+    let (_, stderr, code) = run_qualifier(
+        &src,
+        &[
+            "emit",
+            "annotation",
+            "../../out.rs",
+            "--body",
+            r#"{"kind":"comment","summary":"e"}"#,
+        ],
+    );
+    assert_ne!(code, 0);
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+}
+
+#[test]
+fn test_emit_stdin_is_all_or_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let good = envelope_line("lib/b.rs", r#"{"kind":"concern","summary":"ok"}"#);
+    let dangling = envelope_line(
+        "lib/b.rs",
+        &format!(
+            r#"{{"kind":"comment","summary":"re","references":"{}"}}"#,
+            "0".repeat(64)
+        ),
+    );
+    let input = format!("{good}not json\n{dangling}");
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["emit", "--stdin"], &input);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("stdin line 2:"), "{stderr}");
+    assert!(
+        stderr.contains("stdin line 3:") && stderr.contains("no record with ID"),
+        "every bad line is reported: {stderr}"
+    );
+    assert!(
+        !dir.path().join("lib/.qual").exists(),
+        "nothing written when any line fails"
+    );
+
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["emit", "--stdin"], &good);
+    assert_eq!(code, 0, "{stderr}");
+    let qual = std::fs::read_to_string(dir.path().join("lib/.qual")).unwrap();
+    assert_eq!(qual.lines().count(), 1);
+}
+
+#[test]
+fn test_record_stdin_closed_stdout_still_writes_whole_batch() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let input: String = (1..=20)
+        .map(|i| {
+            format!("{{\"kind\":\"concern\",\"location\":\"a.rs:{i}\",\"message\":\"m{i}\"}}\n")
+        })
+        .collect();
+    let mut child = qualifier_cmd()
+        .args(["record", "--stdin"])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn qualifier");
+    // Close the reading end before any output is produced.
+    drop(child.stdout.take());
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let qual = std::fs::read_to_string(dir.path().join(".qual")).unwrap();
+    assert_eq!(qual.lines().count(), 20, "every planned record is written");
+}
+
+#[test]
+fn test_record_stdin_overrides_reject_unknown_keys_and_bad_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","suggestedfix":"lost"}"#,
+            "suggestedfix",
+        ),
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","supersede":"x"}"#,
+            "supersede",
+        ),
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","tags":["ok",3]}"#,
+            "tags",
+        ),
+        (
+            r#"{"kind":"concern","location":"a.rs","message":"m","span":42}"#,
+            "span",
+        ),
+    ];
+    for (line, key) in cases {
+        let (_, stderr, code) = run_qualifier_stdin(
+            dir.path(),
+            &["record", "--stdin", "--dry-run"],
+            &format!("{line}\n"),
+        );
+        assert_ne!(code, 0, "{line} must be rejected");
+        assert!(stderr.contains(key), "error must name '{key}': {stderr}");
+    }
+}
+
+#[test]
+fn test_supersedes_across_subjects_is_rejected_on_single_record_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let orig = write_id(dir.path(), &["record", "concern", "src/a.rs:1", "orig"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "lib/b.rs:1",
+            "replaces",
+            "--supersedes",
+            &orig,
+        ],
+    );
+    assert_ne!(code, 0, "record --supersedes across subjects must fail");
+    assert!(stderr.contains("cross-subject"), "{stderr}");
+
+    let a_reply = write_id(dir.path(), &["reply", &orig[..8], "on a"]);
+    let b = write_id(dir.path(), &["record", "concern", "lib/b.rs", "b"]);
+    let (_, stderr, code) = run_qualifier(
+        dir.path(),
+        &["reply", &b[..8], "moved", "--supersedes", &a_reply],
+    );
+    assert_ne!(code, 0, "reply --supersedes across subjects must fail");
+    assert!(stderr.contains("cross-subject"), "{stderr}");
+    let lib = std::fs::read_to_string(dir.path().join("lib/.qual")).unwrap();
+    assert!(!lib.contains("replaces") && !lib.contains("moved"), "{lib}");
+}
+
+#[test]
+fn test_existing_cross_subject_record_does_not_block_unrelated_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write_id(dir.path(), &["record", "concern", "src/a.rs:1", "a"]);
+    // A cross-subject supersession already on disk (written by another tool).
+    let bad = envelope_line(
+        "lib/b.rs",
+        &format!(r#"{{"kind":"concern","summary":"bad","supersedes":"{a}"}}"#),
+    )
+    .replace("\"id\":\"\"", &format!("\"id\":\"{}\"", "b".repeat(64)));
+    std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+    std::fs::write(dir.path().join("lib/.qual"), bad).unwrap();
+    let a2 = write_id(dir.path(), &["record", "concern", "src/a.rs:2", "a2"]);
+    let line = format!(
+        "{{\"kind\":\"concern\",\"location\":\"src/a.rs:2\",\"message\":\"a2 again\",\"supersedes\":\"{a2}\"}}\n"
+    );
+    let (_, stderr, code) = run_qualifier_stdin(dir.path(), &["record", "--stdin"], &line);
+    assert_eq!(code, 0, "{stderr}");
+}
+
+/// A record envelope line for `record --stdin` / `emit --stdin`.
+fn envelope_line(subject: &str, body: &str) -> String {
+    format!(
+        "{{\"metabox\":\"1\",\"subject\":\"{subject}\",\"issuer\":\"mailto:t@x\",\
+         \"created_at\":\"2026-01-01T00:00:00Z\",\"id\":\"\",\"body\":{body}}}\n"
+    )
+}
+
+#[test]
+fn test_record_stdin_envelope_subject_outside_root_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_init(&repo);
+    for subject in ["../escaped.rs", "/tmp/escaped.rs"] {
+        let input = envelope_line(subject, r#"{"kind":"concern","summary":"x"}"#);
+        let (_, stderr, code) = run_qualifier_stdin(&repo, &["record", "--stdin"], &input);
+        assert_ne!(code, 0, "{subject} must be rejected");
+        assert!(stderr.contains("outside the project root"), "{stderr}");
+    }
+    let (_, stderr, code) = run_qualifier(
+        &repo,
+        &["record", "concern", "a.rs", "x", "--file", "../out.qual"],
+    );
+    assert_ne!(code, 0, "--file above the root must be rejected");
+    assert!(stderr.contains("outside the project root"), "{stderr}");
+    assert!(
+        !dir.path().join(".qual").exists(),
+        "nothing written above root"
+    );
+    assert!(
+        !dir.path().join("out.qual").exists(),
+        "nothing written above root"
+    );
+}
+
+#[test]
+fn test_record_stdin_envelope_subject_is_normalized() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    let input = envelope_line("./src/../src/a.rs", r#"{"kind":"concern","summary":"x"}"#);
+    let (stdout, stderr, code) = run_qualifier_stdin(
+        &dir.path().join("src"),
+        &["record", "--stdin", "--format", "json"],
+        &input,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let v: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(
+        v["subject"], "src/a.rs",
+        "envelope subjects are root-relative"
+    );
+    assert!(dir.path().join("src/.qual").exists());
+}
+
+#[test]
+fn test_record_stdin_envelope_pointers_must_be_live() {
+    let dir = tempfile::tempdir().unwrap();
+    let zeros = "0".repeat(64);
+    for key in ["references", "supersedes"] {
+        let body = format!(r#"{{"kind":"concern","summary":"x","{key}":"{zeros}"}}"#);
+        let input = envelope_line("a.rs", &body);
+        let (_, stderr, code) =
+            run_qualifier_stdin(dir.path(), &["record", "--stdin", "--dry-run"], &input);
+        assert_ne!(code, 0, "dangling {key} must be rejected");
+        assert!(stderr.contains("no record with ID"), "{stderr}");
+    }
+}
+
 #[test]
 fn test_location_target_skips_resolve_records() {
     let dir = tempfile::tempdir().unwrap();
@@ -5690,10 +6827,7 @@ fn test_threads_all_includes_closed() {
     write_id(dir.path(), &["resolve", &b[..8], "fixed"]);
     let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--all"]);
     assert_eq!(code, 0);
-    assert!(
-        stdout.contains("b leaks") && stdout.contains("(closed)"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("b leaks — closed: fixed"), "{stdout}");
 }
 
 #[test]
@@ -6003,7 +7137,518 @@ fn test_show_marks_non_human_issuer_type() {
             .unwrap()
             .to_string()
     };
-    assert!(line("from an agent").contains("test (ai)"), "{stdout}");
-    assert!(!line("from a person").contains('('), "{stdout}");
-    assert!(!line("unspecified").contains('('), "{stdout}");
+    assert!(line("from an agent").contains("(test, ai, "), "{stdout}");
+    assert!(!line("from a person").contains("human"), "{stdout}");
+    assert!(line("from a person").contains("(test, "), "{stdout}");
+    assert!(line("unspecified").contains("(test, "), "{stdout}");
+    assert!(!line("unspecified").contains(", ai"), "{stdout}");
+}
+
+// --- thread state and the shared thread renderer ---
+
+/// The repro from GitHub issue #17: a concern, a reply asking an open
+/// question, and a wontfix resolve that answers it.
+fn closed_with_answer(dir: &Path) -> (String, String, String) {
+    std::fs::write(dir.join("lib.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+    let root = write_id(dir, &["record", "concern", "lib.rs:1", "a() rounds wrong"]);
+    let reply = write_id(
+        dir,
+        &[
+            "reply",
+            &root,
+            "Partly fixed. Open question for the maintainer: also change b()?",
+        ],
+    );
+    let closer = write_id(
+        dir,
+        &[
+            "resolve",
+            &root,
+            "Won't change b(): maintainer decided to keep it as is.",
+            "--reason",
+            "wontfix",
+        ],
+    );
+    (root, reply, closer)
+}
+
+const ANSWER: &str = "— closed (wontfix): Won't change b(): maintainer decided to keep it as is.";
+
+#[test]
+fn test_threads_all_renders_closed_thread_with_its_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    closed_with_answer(dir.path());
+    let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--all"]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 1, "a closed thread is one line: {stdout}");
+    assert!(lines[0].contains("a() rounds wrong"), "{stdout}");
+    assert!(lines[0].ends_with(ANSWER), "{stdout}");
+    assert!(!stdout.contains("Open question"), "{stdout}");
+}
+
+#[test]
+fn test_threads_by_id_expands_closed_thread_with_resolve_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, reply, closer) = closed_with_answer(dir.path());
+    let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--all", &root[..8]]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "{stdout}");
+    assert!(lines[0].ends_with(ANSWER), "{stdout}");
+    assert!(lines[1].contains(&reply[..8]), "{stdout}");
+    assert!(lines[2].contains(&closer[..8]), "{stdout}");
+    assert!(lines[2].contains("resolve (wontfix)"), "{stdout}");
+}
+
+#[test]
+fn test_show_and_praise_render_closed_thread_with_its_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    closed_with_answer(dir.path());
+    for cmd in ["show", "praise"] {
+        let (stdout, stderr, code) = run_qualifier(dir.path(), &[cmd, "lib.rs"]);
+        assert_eq!(code, 0, "{cmd}: {stderr}");
+        let line = stdout
+            .lines()
+            .find(|l| l.contains("a() rounds wrong"))
+            .unwrap_or_else(|| panic!("{cmd}: root line missing: {stdout}"));
+        assert!(
+            line.contains("— closed (wontfix) by test: Won't change b()"),
+            "{cmd}: {stdout}"
+        );
+        assert!(
+            !stdout.contains("Open question"),
+            "{cmd}: a reply on a closed thread never appears on its own: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn test_closed_thread_with_unanswered_question_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_id(dir.path(), &["record", "concern", "lib.rs", "pick one"]);
+    write_id(
+        dir.path(),
+        &[
+            "reply",
+            &root,
+            "Needs a decision: A or B?",
+            "--tag",
+            "status:needs-decision",
+        ],
+    );
+    write_id(dir.path(), &["resolve", &root, "moved on"]);
+    let (stdout, _, _) = run_qualifier(dir.path(), &["threads", "--all"]);
+    assert!(
+        stdout.contains("pick one — closed: moved on — question still pending"),
+        "{stdout}"
+    );
+    let threads = threads_json(dir.path(), &["--all"]);
+    assert_eq!(threads[0]["state"]["name"], "closed");
+    assert_eq!(threads[0]["state"]["pending_question"], true);
+    assert_eq!(threads[0]["state"]["reason"], serde_json::Value::Null);
+}
+
+#[test]
+fn test_open_thread_states_in_human_and_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = write_id(dir.path(), &["record", "concern", "a.rs", "plain"]);
+    let asked = write_id(dir.path(), &["record", "concern", "b.rs", "asked"]);
+    write_id(
+        dir.path(),
+        &[
+            "reply",
+            &asked,
+            "A or B?",
+            "--tag",
+            "status:needs-decision:mailto:owner@example.com",
+        ],
+    );
+    let settled = write_id(dir.path(), &["record", "concern", "c.rs", "settled"]);
+    write_id(
+        dir.path(),
+        &["reply", &settled, "Decided: A", "--tag", "status:decided"],
+    );
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["threads"]);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|l| l.contains(needle))
+            .unwrap()
+            .to_string()
+    };
+    assert!(line("plain").ends_with("plain"), "{stdout}");
+    assert!(
+        line("asked").ends_with("asked — needs decision from owner"),
+        "{stdout}"
+    );
+    assert!(line("settled").ends_with("settled — decided"), "{stdout}");
+
+    let threads = threads_json(dir.path(), &[]);
+    let state = |id: &str| threads.iter().find(|t| t["origin"] == id).unwrap()["state"].clone();
+    assert_eq!(state(&plain), serde_json::json!({"name": "open"}));
+    assert_eq!(
+        state(&asked),
+        serde_json::json!({"name": "needs-decision", "addressee": "mailto:owner@example.com"})
+    );
+    assert_eq!(state(&settled), serde_json::json!({"name": "decided"}));
+}
+
+#[test]
+fn test_threads_json_closed_state_names_closer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, _, closer) = closed_with_answer(dir.path());
+    let threads = threads_json(dir.path(), &["--all"]);
+    assert_eq!(threads[0]["origin"], root.as_str());
+    assert_eq!(
+        threads[0]["state"],
+        serde_json::json!({
+            "name": "closed",
+            "reason": "wontfix",
+            "closed_by": closer,
+            "pending_question": false,
+        })
+    );
+}
+
+#[test]
+fn test_show_json_keeps_closed_threads_answer_and_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, reply, closer) = closed_with_answer(dir.path());
+    let open = write_id(dir.path(), &["record", "comment", "lib.rs", "still open"]);
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", "lib.rs", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let ids: Vec<&str> = v["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    for id in [&root, &reply, &closer, &open] {
+        assert!(ids.contains(&id.as_str()), "{id} missing: {stdout}");
+    }
+    let threads = v["threads"].as_array().unwrap();
+    assert_eq!(threads.len(), 2, "{stdout}");
+    assert_eq!(threads[0]["root"], open.as_str(), "open threads first");
+    assert_eq!(threads[0]["state"]["name"], "open");
+    assert_eq!(threads[1]["root"], root.as_str());
+    assert_eq!(threads[1]["closed_by"], closer.as_str());
+    assert_eq!(threads[1]["state"]["name"], "closed");
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["praise", "lib.rs", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["threads"].as_array().unwrap().len(), 2, "{stdout}");
+    let kinds: Vec<&str> = v["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"resolve"), "{stdout}");
+}
+
+#[test]
+fn test_threads_kind_warns_on_kind_matching_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(dir.path(), &["record", "blocker", "a.rs", "broken"]);
+    write_id(dir.path(), &["record", "nit", "a.rs", "custom kind"]);
+
+    let (stdout, stderr, code) =
+        run_qualifier(dir.path(), &["threads", "--kind", "blockers,nit,concern"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stderr.contains("qualifier threads: warning: kind 'blockers' matches no known kind"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("'nit'"),
+        "a custom kind in use is fine: {stderr}"
+    );
+    assert!(
+        !stderr.contains("'concern'"),
+        "built-in kinds never warn: {stderr}"
+    );
+    assert!(stdout.contains("custom kind"), "{stdout}");
+
+    let (_, stderr, _) = run_qualifier(dir.path(), &["threads", "--kind", "blocker"]);
+    assert!(!stderr.contains("warning"), "{stderr}");
+}
+
+// --- Custom body fields ---
+
+#[test]
+fn test_compact_keeps_custom_body_fields_and_their_id() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "fn x() {}\n").unwrap();
+    let custom: qualifier::annotation::Record = serde_json::from_str(
+        r#"{"metabox":"1","type":"annotation","subject":"x.rs","issuer":"mailto:t@t.com","created_at":"2026-02-24T10:00:00Z","id":"","body":{"kind":"concern","score":-20,"summary":"custom field"}}"#,
+    )
+    .unwrap();
+    let custom = qualifier::annotation::finalize_record(custom);
+    let custom_line = serde_json::to_string(&custom).unwrap();
+    assert!(custom_line.contains(r#""score":-20"#), "{custom_line}");
+    std::fs::write(dir.path().join("x.rs.qual"), format!("{custom_line}\n")).unwrap();
+
+    // Give compact a superseded record to prune so it rewrites the file.
+    let first = write_id(dir.path(), &["record", "comment", "x.rs", "first"]);
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "x.rs",
+            "second",
+            "--supersedes",
+            &first,
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "x.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("pruned"), "{stdout}");
+
+    let after = std::fs::read_to_string(dir.path().join("x.rs.qual")).unwrap();
+    assert!(
+        after.lines().any(|l| l == custom_line),
+        "custom record must survive byte-for-byte:\n{after}"
+    );
+}
+
+#[test]
+fn test_compact_keeps_created_at_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "fn x() {}\n").unwrap();
+    let foreign: qualifier::annotation::Record = serde_json::from_str(
+        r#"{"metabox":"1","type":"annotation","subject":"x.rs","issuer":"mailto:t@t.com","created_at":"2026-02-24T10:00:00.5+00:00","id":"","body":{"kind":"concern","summary":"other tool"}}"#,
+    )
+    .unwrap();
+    let foreign_line =
+        serde_json::to_string(&qualifier::annotation::finalize_record(foreign)).unwrap();
+    std::fs::write(dir.path().join("x.rs.qual"), format!("{foreign_line}\n")).unwrap();
+    let first = write_id(dir.path(), &["record", "comment", "x.rs", "first"]);
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "x.rs",
+            "second",
+            "--supersedes",
+            &first,
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "x.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let after = std::fs::read_to_string(dir.path().join("x.rs.qual")).unwrap();
+    assert!(
+        after.lines().any(|l| l == foreign_line),
+        "created_at must not be re-encoded:\n{after}"
+    );
+    // Records qualifier writes use the canonical form.
+    let written = after.lines().last().unwrap();
+    let v: serde_json::Value = serde_json::from_str(written).unwrap();
+    let ts = v["created_at"].as_str().unwrap();
+    assert!(ts.ends_with('Z') && !ts.contains('+'), "{ts}");
+}
+
+// --- compact scope and thread structure ---
+
+/// Threads built from every `.qual` file under `dir`.
+fn open_thread_summaries(dir: &Path) -> Vec<String> {
+    let files = qualifier::qual_file::discover(dir, false).unwrap();
+    let records: Vec<_> = files.into_iter().flat_map(|qf| qf.records).collect();
+    qualifier::threads::build_threads(&records)
+        .into_iter()
+        .filter(|t| t.open)
+        .map(|t| t.root.as_annotation().unwrap().body.summary.clone())
+        .collect()
+}
+
+#[test]
+fn test_compact_keeps_resolved_thread_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "a\nb\nc\n").unwrap();
+    let c = write_id(dir.path(), &["record", "concern", "x.rs:2", "a concern"]);
+    write_id(dir.path(), &["reply", &c, "a reply comment"]);
+    write_id(dir.path(), &["resolve", &c, "fixed"]);
+    assert!(open_thread_summaries(dir.path()).is_empty());
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "x.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(
+        open_thread_summaries(dir.path()).is_empty(),
+        "compact must not reopen the resolved thread"
+    );
+}
+
+/// `src/a.rs` (a praise and its edit) and `src/b.rs` (an open blocker),
+/// both in the directory-level `src/.qual`.
+fn shared_dir_project(dir: &Path) -> String {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(dir.join("src/b.rs"), "fn b() {}\n").unwrap();
+    let first = write_id(dir, &["record", "praise", "src/a.rs", "tidy"]);
+    write_id(
+        dir,
+        &[
+            "record",
+            "praise",
+            "src/a.rs",
+            "tidy and fast",
+            "--supersedes",
+            &first,
+        ],
+    );
+    write_id(dir, &["record", "blocker", "src/b.rs", "b is broken"])
+}
+
+#[test]
+fn test_compact_artifact_snapshot_leaves_other_subjects() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = shared_dir_project(dir.path());
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "src/a.rs", "--snapshot"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("3 -> 2 records (1 epoch)"), "{stdout}");
+
+    let qual = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+    assert!(
+        qual.contains(&blocker),
+        "b.rs blocker must survive:\n{qual}"
+    );
+    assert_eq!(open_thread_summaries(dir.path()), vec!["b is broken"]);
+    let records = qualifier::qual_file::parse_str(&qual).unwrap();
+    let epoch = records.iter().find_map(|r| r.as_epoch()).unwrap();
+    assert_eq!(epoch.subject, "src/a.rs");
+    assert_eq!(
+        epoch.body.refs.len(),
+        1,
+        "superseded records are pruned first"
+    );
+}
+
+#[test]
+fn test_compact_artifact_prune_leaves_other_subjects() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_dir_project(dir.path());
+    let old = write_id(dir.path(), &["record", "concern", "src/b.rs", "old"]);
+    write_id(
+        dir.path(),
+        &["record", "concern", "src/b.rs", "new", "--supersedes", &old],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "src/a.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("(1 superseded, pruned)"), "{stdout}");
+    let qual = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+    assert!(qual.contains(&format!("\"id\":\"{old}\"")), "{qual}");
+}
+
+#[test]
+fn test_compact_snapshot_refuses_to_fold_open_blocker_without_force() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_dir_project(dir.path());
+    let before = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+
+    let (_, stderr, code) = run_qualifier(dir.path(), &["compact", "src/b.rs", "--snapshot"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("b is broken"), "{stderr}");
+    assert!(stderr.contains("--force"), "{stderr}");
+    let (_, stderr, code) = run_qualifier(dir.path(), &["compact", "--all", "--snapshot"]);
+    assert_ne!(code, 0, "{stderr}");
+    let after = std::fs::read_to_string(dir.path().join("src/.qual")).unwrap();
+    assert_eq!(before, after, "a refused snapshot writes nothing");
+
+    let (stdout, stderr, code) = run_qualifier(
+        dir.path(),
+        &["compact", "src/b.rs", "--snapshot", "--force"],
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(open_thread_summaries(dir.path()), vec!["tidy and fast"]);
+}
+
+#[test]
+fn test_compact_artifact_covers_every_qual_file_holding_it() {
+    let dir = tempfile::tempdir().unwrap();
+    shared_dir_project(dir.path());
+    let old = write_id(
+        dir.path(),
+        &[
+            "record",
+            "praise",
+            "src/a.rs",
+            "1:1 old",
+            "--file",
+            "src/a.rs.qual",
+        ],
+    );
+    write_id(
+        dir.path(),
+        &[
+            "record",
+            "praise",
+            "src/a.rs",
+            "1:1 new",
+            "--supersedes",
+            &old,
+            "--file",
+            "src/a.rs.qual",
+        ],
+    );
+
+    let (stdout, stderr, code) = run_qualifier(dir.path(), &["compact", "src/a.rs"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(
+        stdout.matches("(1 superseded, pruned)").count(),
+        2,
+        "both files compacted: {stdout}"
+    );
+}
+
+#[test]
+fn test_record_reversed_span_is_an_error_not_a_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "1\n2\n3\n4\n5\n6\n").unwrap();
+    for location in ["x.rs:5:2", "x.rs"] {
+        let mut args = vec!["record", "concern", location, "reversed"];
+        if location == "x.rs" {
+            args.extend(["--span", "3.9:3.4"]);
+        }
+        let (_, stderr, code) = run_qualifier(dir.path(), &args);
+        assert_eq!(code, 1, "{location}: {stderr}");
+        assert!(stderr.contains("must not precede"), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    }
+    assert!(!dir.path().join(".qual").exists());
+}
+
+#[test]
+fn test_malformed_sibling_qual_warns_on_read_and_blocks_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "fn x() {}\n").unwrap();
+    write_id(dir.path(), &["record", "concern", "x.rs", "still visible"]);
+    std::fs::create_dir_all(dir.path().join("other")).unwrap();
+    let bad = r#"{"metabox":"1","type":"annotation","subject":"other/y.rs","issuer":"mailto:t@t.com","created_at":"2026-01-01T00:00:00Z","id":"","body":{"kind":"concern"}}"#;
+    std::fs::write(dir.path().join("other/.qual"), format!("{bad}\n")).unwrap();
+
+    for args in [&["threads", "x.rs"][..], &["show", "x.rs"][..], &["ls"][..]] {
+        let (stdout, stderr, code) = run_qualifier(dir.path(), args);
+        assert_eq!(code, 0, "{args:?}: {stdout}{stderr}");
+        assert!(
+            stderr.contains("other/.qual:1:") && stderr.contains("summary"),
+            "{args:?} should name the bad line: {stderr}"
+        );
+    }
+    let (stdout, _, _) = run_qualifier(dir.path(), &["show", "x.rs"]);
+    assert!(stdout.contains("still visible"), "{stdout}");
+
+    // A rewrite of the malformed file must fail rather than drop the line.
+    let (_, stderr, code) = run_qualifier(dir.path(), &["compact", "--all"]);
+    assert_ne!(code, 0, "{stderr}");
+    assert!(stderr.contains("other/.qual:1:"), "{stderr}");
+    let after = std::fs::read_to_string(dir.path().join("other/.qual")).unwrap();
+    assert_eq!(after, format!("{bad}\n"));
 }

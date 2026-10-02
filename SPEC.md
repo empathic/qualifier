@@ -1,6 +1,6 @@
 # Qualifier Specification
 
-**Version:** 0.5.0
+**Version:** 0.6.0
 **Status:** Draft
 **Authors:** Alex Kesling
 
@@ -141,7 +141,7 @@ Every record uses the [Metabox](METABOX.md) envelope format with these fields:
 | `subject`      | string   | yes      | Qualified name of the target artifact |
 | `issuer`       | string   | yes      | Who or what created this record (URI) |
 | `issuer_type`  | string   | no       | Issuer classification: `human`, `ai`, `tool`, `unknown` |
-| `created_at`   | string   | yes      | RFC 3339 timestamp |
+| `created_at`   | string   | yes      | RFC 3339 timestamp, hashed exactly as written (§2.8.1 rule 9) |
 | `id`           | string   | yes      | Content-addressed BLAKE3 hash (see 2.8) |
 | `body`         | object   | yes      | Type-specific payload — see §3 for body schemas by type |
 
@@ -257,9 +257,9 @@ since the annotation was written.
 5. Encode as lowercase hex.
 
 **When computed:** The CLI auto-computes `content_hash` when creating span-
-addressed annotations (via `flag`, `suggest`, `comment`, `approve`, `reject`,
-`attest --span`, etc.) if the subject file exists and the span is within
-bounds. If the file does not exist or the span extends beyond EOF, `content_hash`
+addressed annotations (`record` with a span, and `record --stdin`
+overrides lines; `reply` and `resolve` write no span) if the subject file
+exists and the span is within bounds. If the file does not exist or the span extends beyond EOF, `content_hash`
 is omitted.
 
 **Relationship to `ref`:** The `ref` field pins an annotation to a VCS
@@ -381,13 +381,15 @@ top SHOULD respect these signs:
 
 The format itself does not carry a numeric score. Tools MAY add custom
 body fields (e.g., a `score` integer) and define their own evaluation
-semantics on top of the kind polarity — see Appendix A for one possible
+semantics on top of the kind polarity — see §4 for one possible
 shape.
 
 #### 2.7.2 Custom Kinds
 
 Any string is a valid `kind`. Implementations SHOULD detect likely typos
-(edit distance <= 2 from a built-in kind) and warn the user.
+(edit distance <= 2 from a built-in kind, `resolve` included) and warn the
+user. The reference CLI rejects them: `qualifier record resovle …` fails
+with `unknown kind 'resovle', did you mean 'resolve'?`.
 
 ### 2.8 Record IDs & Canonical Form
 
@@ -413,9 +415,19 @@ obey the following rules:
    `metabox`, `type`, `subject`, `issuer`, `issuer_type`, `created_at`, `id`,
    `body`. Optional envelope fields (`issuer_type`) are omitted when absent.
 
-3. **Body field order.** Body fields MUST appear in lexicographic
-   (alphabetical) order. Nested objects (like `span`) also have their fields
-   in lexicographic order.
+3. **Body field order.** The body's top-level keys MUST appear in
+   lexicographic (alphabetical) order. Custom body fields that the record
+   type does not define (see §4) are part of the body: implementations
+   MUST preserve them when rewriting a record, and they are hashed sorted
+   together with the defined fields, never appended after them.
+
+   This rule does not reorder keys inside nested values. A `span` keeps
+   the order `start`, `end`, `content_hash`, and a position the order
+   `line`, `col`, as in §2.4. Free-form JSON values (the values of custom
+   fields, and the bodies of record types the implementation does not
+   know) are serialized with their keys in lexicographic order at every
+   level. Whether nested keys of defined fields will also be sorted is an
+   open question; it would change the ID of every span-addressed record.
 
 4. **Absent optional fields.** Optional fields whose value is absent (null,
    None, etc.) MUST be omitted entirely. `tags` MUST be omitted when the
@@ -432,6 +444,21 @@ obey the following rules:
 
 8. **Number encoding.** Integers serialize as bare decimal with no leading
    zeros, no decimal point, no exponent. Negative values use a leading `-`.
+
+9. **Timestamps.** `created_at` is hashed exactly as it is written in the
+   record. Implementations MUST NOT re-encode it (normalize the offset,
+   add or drop fractional digits) when hashing or rewriting a record, so a
+   record keeps its ID wherever it is copied. Any valid RFC 3339 timestamp
+   is accepted. Records an implementation creates SHOULD use the
+   **canonical timestamp form**: UTC with a `Z` suffix and 0, 3, 6 or 9
+   fractional-second digits, the fewest that represent the instant exactly
+   (`2026-02-24T10:00:00Z`, `2026-02-24T10:00:00.500Z`,
+   `2026-02-24T10:00:00.123456Z`). Qualifier writes only this form.
+
+Records of types the implementation does not know (§2.5) are hashed the
+same way: envelope fields in the order of rule 2 (any other top-level
+fields after them, in lexicographic order), `metabox` materialized, `id`
+set to `""`.
 
 See the [Metabox specification](METABOX.md) for the full MCF definition.
 
@@ -479,8 +506,8 @@ record's `id`.
 
 **Resolve pattern:** A `resolve`-kind annotation supersedes its target,
 withdrawing the target from the active set. This is the canonical way to
-close an issue — the superseded record is no longer surfaced and the
-resolve record stands as the visible tombstone.
+close an issue: the target's thread is closed, and the resolve record is
+its answer (`closed_by`, §7).
 
 ### 2.10 The `.qual` File Format
 
@@ -544,9 +571,9 @@ the original and the referencing record remain active.
 - Cross-file commentary: "see also the related concern on lexer.rs".
 
 **Threading semantics:** Records referencing the same parent form a thread.
-Implementations SHOULD display these as threaded conversations with
-tree-drawing characters (`├──`, `└──`). Reply depth is unbounded — a reply
-to a reply is a valid thread.
+Implementations SHOULD display these as threaded conversations, with each
+reply under the record it answers (the reference CLI indents replies; see
+§6.6). Reply depth is unbounded — a reply to a reply is a valid thread.
 
 **Example:**
 
@@ -562,8 +589,8 @@ to a reply is a valid thread.
 {"metabox":"1","type":"annotation","subject":"src/parser.rs","issuer":"mailto:alice@example.com","created_at":"2026-03-01T11:00:00Z","id":"c3d4e5f6...","body":{"kind":"resolve","summary":"Resolved","supersedes":"a1b2c3d4..."}}
 ```
 
-After the resolve, the original concern's `-10` is withdrawn from scoring.
-The reply remains visible in the thread for context.
+After the resolve, the original concern leaves the active set; the reply
+remains visible in the thread for context.
 
 ### 2.12 Reserved Tag Namespaces
 
@@ -616,10 +643,22 @@ reclaiming space.
 
 A compaction rewrites a `.qual` file by:
 
-1. **Pruning** all superseded records. If record B supersedes A, only B is
-   retained. The entire chain collapses to its tip.
-2. **Optionally snapshotting.** When `--snapshot` is passed, all surviving
-   records for each subject are replaced by a single epoch record.
+1. **Pruning** superseded records. If record B supersedes A, only B is
+   retained, and the entire chain collapses to its tip. A superseded record
+   is kept when a retained record names it in `references`; every record
+   that supersedes a kept record is then kept too. Pruning therefore never
+   changes how the remaining records group into threads (§2.11): a
+   resolved thread with replies keeps its root, and its replies do not
+   become threads of their own.
+2. **Optionally snapshotting.** When `--snapshot` is passed, superseded
+   records are pruned and the surviving annotation and epoch records for
+   each subject are replaced by a single epoch record whose `refs` lists
+   those surviving records. A subject whose only record is already an
+   epoch is left unchanged.
+
+Compacting one subject (`qualifier compact <artifact>`) rewrites only that
+subject's records, in every `.qual` file that holds them; records of other
+subjects in the same file are written back unchanged.
 
 #### 3.3.1 Compaction Rules
 
@@ -629,6 +668,8 @@ A compaction rewrites a `.qual` file by:
 - After compaction, the file is a valid `.qual` file. No special reader
   support is needed.
 - `qualifier compact --dry-run` MUST be supported.
+- A snapshot that would fold an open `blocker` or `concern` thread into an
+  epoch MUST be refused unless the user forces it (`--force`).
 
 ### 3.4 Dependency (`type: "dependency"`)
 
@@ -897,8 +938,23 @@ project root and normalized (`.` and `..` folded, `/` separators, the root
 itself is `.`). An argument that leaves the project root is an error. Every
 write lands in a `.qual` file under the project root, laid out as in
 §2.10; an explicit `--file` path stays relative to the current directory.
+A write into a `.qual` file that the ignore rules hide is refused unless
+`--no-ignore` is given (§10.1).
+
+**Exit codes.** Commands exit 0 on success and 1 on an error, which is
+printed on stderr as `qualifier: <message>`. Command-line usage errors
+(an unknown flag, an invalid `--format` value) and an unknown
+`qualifier agents` topic exit 2. `qualifier diff --fail-on` and
+`--fail-on-drift` exit 1 after printing the diff (§6.13).
 
 ### 6.1 Core Commands
+
+**Setup and agent guide:**
+
+```
+qualifier init [--yes] [--dry-run]              Bootstrap VCS merge config and agent directives
+qualifier agents [topic]                        Self-contained guide for AI coding agents
+```
 
 **Write commands:**
 
@@ -918,6 +974,8 @@ qualifier ls [--kind <k>]                 List subjects by kind
 qualifier praise <artifact>               Show who annotated an artifact and why
                                           (also available as the `blame` alias)
 qualifier review [subject]                Check freshness of annotations
+qualifier diff [ref]                      Records added, changed, resolved, or
+                                          drifted since a git ref
 ```
 
 **Maintain commands:**
@@ -958,7 +1016,9 @@ characters) of a record that exists in the project and is live: not
 superseded, and not closed by a `resolve`. A prefix or location is
 rejected. A superseded target fails, printing the full ID of the live
 record at the tip of its chain; a closed target fails, printing the full ID
-of the closing `resolve` record. Full IDs are available from
+of the closing `resolve` record. An ID that matches no record is an
+error. A `--supersedes` target must have the same subject as the new
+record (§2.9). Full IDs are available from
 `qualifier threads --format json` (`root.id`, `closed_by.id`),
 `qualifier show --format json`, or the `id:` line that
 `record`/`reply`/`resolve` print.
@@ -1002,9 +1062,11 @@ new record and is one of:
 - An overrides object: `{"kind":"...","location":"...","message":"...", ...}`
   with optional `detail`, `ref`, `tags`, `issuer`, `issuer_type`,
   `span`, `supersedes`, `references`, `suggested_fix`. `location` is
-  required.
-- A complete record (envelope + body), accepted for forward-compat. Its
-  pointers are stored as given.
+  required. Any other key, or a value of the wrong type, fails the line.
+- A complete record (envelope + body), accepted for forward-compat and
+  recognized by having both `subject` and `body` keys. Its `subject` is
+  relative to the project root and must stay inside it; it is normalized
+  like a location.
 
 There are no reply or resolve line shapes. A reply is an overrides line
 whose `references` is the target's ID; a resolve is an overrides line with
@@ -1015,7 +1077,7 @@ whose `references` is the target's ID; a resolve is an overrides line with
 {"kind":"resolve","location":"src/auth.rs","supersedes":"<id>","message":"Fixed","tags":["reason:fixed"]}
 ```
 
-`supersedes` and `references` on an overrides line follow the same rule as
+`supersedes` and `references` on either line shape follow the same rule as
 the `--supersedes`/`--references` flags: the full ID of a live record,
 which may be on disk or on an earlier line of the same batch. Only
 complete-envelope lines have IDs known in advance (an overrides line is
@@ -1045,9 +1107,11 @@ Sugar over "kind=comment + references=`<target-id>`". The default kind is
 
 `<target>` is either:
 
-- An **id-prefix** (≥ 4 characters). A prefix matching more than one
-  record exits non-zero with the same disambiguation list, one
-  `[id-prefix] kind location "summary"` line per candidate; or
+- An **id-prefix**: 4 or more lowercase hex characters. A prefix
+  matching more than one record exits non-zero with a disambiguation
+  list, one `[id-prefix] kind location "summary"` line per candidate. A
+  hex target that matches no ID is tried as a location, and any other
+  target (such as `Makefile` or `README`) is a location; or
 - A **`<location>`** (e.g., `src/auth.rs:42`). A location resolves to the
   most-recent active record at that subject and span; a `resolve` record is
   never a location target. If multiple active
@@ -1089,14 +1153,14 @@ field.
 qualifier emit <type> <subject> --body '<JSON>'
 ```
 
-A raw, script-oriented write for novel or uncommon record types. The body
-is passed through unchanged into the record's `body` field. For unknown
-types the record round-trips via `Record::Unknown` (preserving the body
-verbatim). For `--type annotation`, the body is validated against
-`AnnotationBody`.
+A raw, script-oriented write for novel or uncommon record types. The
+body's fields and values are kept as given in the record's `body` field,
+serialized in canonical key order (§2.8.1). For unknown types the record
+round-trips via `Record::Unknown`. When `<type>` is `annotation`, the body
+is validated against `AnnotationBody`.
 
 ```
-qualifier emit license src/lib.rs --body '{"spdx":"MIT"}' \
+qualifier emit license src/lib.rs --body '{"spdx_id":"MIT"}' \
   --issuer "https://ci.example.com"
 
 qualifier emit https://example.com/lint/v1 src/parser.rs \
@@ -1123,38 +1187,73 @@ qualifier reply src/parser.rs:42 "Good catch, fixed in latest commit"
 # Close it
 qualifier resolve a1b2
 
-# The original concern is no longer surfaced
+# The concern now shows as a closed thread, with the resolve as its answer
 qualifier show src/parser.rs
 ```
 
 ### 6.6 `qualifier show`
 
 ```
+qualifier show <artifact> [--all] [--pretty] [--type <TYPE>]
+               [--format human|json] [--no-ignore]
+```
+
+Shows the records on one artifact, grouped into threads (§7,
+`qualifier::threads`) and rendered by the same thread renderer as
+`threads` and `praise`:
+
+```
 qualifier show src/parser.rs
 
   src/parser.rs
 
-  Records (4):
-    concern  "Panics on malformed input"    alice  2026-02-24  a1b2c3d4
-    ├── comment  "Good catch, fixed"        bob    2026-02-25  b2c3d4e5
-    └── resolve  "Resolved"                 alice  2026-02-25  c3d4e5f6
-    praise   "Excellent property test coverage"  bob  2026-02-24  e5f6a7b8
+  Open threads (2):
+    [c1acc3f5] praise     src/parser.rs  Excellent property test coverage  (bob, 2026-10-01)
+
+    [e5daa3cd] suggestion src/parser.rs:10:12  Consider fuzzing  (alice, ai, 2026-10-01) — needs decision
+        [f9156cb5] comment    Worth it for parse()  (carol, 2026-10-01)
+
+  Closed threads (1):
+    [274357ca] concern    src/parser.rs:42  Panics on malformed input  (alice, 2026-10-01) — closed (fixed) by alice: Resolved
 ```
 
-When annotations have spans, the line range is displayed. Use
-`--line <n>` to filter to annotations overlapping a specific line.
+An open thread prints its root, with its state when it is waiting on or
+has reached a decision, then one indented line per live reply. A closed
+thread prints one line that carries its closing `resolve` (reason, closer,
+and summary). Records that are not annotations are listed under "Other
+records". Each line ends with the issuer, the issuer type when it is set
+and not `human`, and the date.
 
-Human output shows the issuer type after the issuer name when it is set and not `human` (e.g. `alex (ai)`).
+- `--all` also shows edit history, superseded replies, and superseded
+  records.
+- `--pretty` prints the source lines around each span
+  (compiler-diagnostic style); with `--format json` it adds a `context`
+  field to each record.
+- `--type <TYPE>` keeps only records whose envelope `type` matches
+  (`annotation`, `epoch`, `dependency`, or a custom type URI).
+- `--format json` prints `{subject, records, threads}`: the records, and
+  one `{origin, root, state, closed_by}` entry per thread, where `state` is
+  the thread state of §6.12.
 
-`--all` shows all records including resolved/superseded ones (default hides
-them). `--pretty` forces colored output when piped.
+To see the threads on one line range, use `qualifier threads <path>:<line>`.
+
+An artifact with no records is not an error: `show` prints
+`No records found for '<artifact>'.` (or an empty `records` list in JSON)
+and exits 0.
 
 ### 6.7 `qualifier ls`
 
 ```
-qualifier ls --kind blocker
-qualifier ls --unqualified
+qualifier ls                    # every subject with live records
+qualifier ls --kind blocker     # subjects with a live blocker
 ```
+
+Lists each subject that has live records, with a count. Superseded
+records and `resolve` records are not counted. With `--kind`, only
+subjects with a live record of that kind are listed, and the count is the
+number of such records. JSON output is an array of
+`{subject, annotation_count, kinds}`, where `kinds` lists the kind (or,
+for other record types, the envelope type) of each of the subject's live records except `resolve`s.
 
 ### 6.8 `qualifier compact`
 
@@ -1166,13 +1265,23 @@ qualifier compact --all                      # compact every .qual file
 qualifier compact --all --dry-run            # preview repo-wide compaction
 ```
 
+Implements §3.3. `qualifier compact <artifact>` compacts only that
+artifact's records, in every `.qual` file that holds them; other subjects'
+records are written back unchanged. `--all` compacts every discovered
+`.qual` file. `--snapshot` prunes first and refuses to fold an open
+`blocker` or `concern` thread into an epoch unless `--force` is given.
+Each file reports its record count before and after, and with
+`--snapshot` the number of epochs written. `compact` re-reads each file
+strictly before rewriting it and fails on a malformed line rather than
+drop it. It has no `--format` flag.
+
 ### 6.9 `qualifier review`
 
 Check the freshness of span-addressed annotations against current file content.
 
 ```
 qualifier review                          # check all annotations
-qualifier review src/parser.rs            # check annotations for one subject
+qualifier review src/parser.rs            # one file, or everything under a directory
 qualifier review --format json            # machine-readable output
 qualifier review --no-ignore              # bypass ignore rules
 ```
@@ -1187,11 +1296,16 @@ qualifier review --no-ignore              # bypass ignore rules
 3 annotations checked: 1 fresh, 1 drifted, 1 missing
 ```
 
-Only active (non-superseded) annotations with spans that have a `content_hash`
-are checked. Annotations without spans or without `content_hash` are skipped.
+The subject argument is relative to the current directory and matches that
+file or anything under that directory. Only active (non-superseded)
+annotations with spans that have a `content_hash` are checked. Annotations
+without spans or without `content_hash` are skipped; when there is nothing
+to check, `review` says so and exits 0.
 
 **JSON output** includes `status` (`fresh`, `drifted`, `missing`) and `detail`
-with expected/actual hashes for drifted annotations or a reason for missing ones.
+with expected/actual hashes for drifted annotations or a reason for missing ones:
+the file is missing or unreadable, is not UTF-8, the span runs past the end
+of the file, or the span ends before it starts.
 
 ### 6.10 Configuration
 
@@ -1201,7 +1315,7 @@ Qualifier uses layered configuration. Precedence (highest wins):
 |----------|--------|
 | 1 (highest) | CLI flags |
 | 2 | Environment variables |
-| 3 | Project config (`.qualifier.toml`) |
+| 3 | Project config (`.qualifier.toml` at the project root) |
 | 4 | User config (`~/.config/qualifier/config.toml`) |
 | 5 (lowest) | Built-in defaults |
 
@@ -1211,6 +1325,13 @@ Qualifier uses layered configuration. Precedence (highest wins):
 |-------------|----------------|----------------------|---------|
 | `issuer`    | `--issuer`     | `QUALIFIER_ISSUER`   | VCS identity (see 8.4) |
 | `format`    | `--format`     | `QUALIFIER_FORMAT`   | `human` |
+
+`issuer` is the default issuer of every write command (§8.4). `format`
+(`human` or `json`) is the default `--format` of every command that has
+the flag. Environment variables are read as strings, and empty ones count
+as unset. A malformed config file, or a `format` value other than `human`
+or `json`, fails every command with `qualifier: invalid configuration: …`
+(exit 1).
 
 ### 6.11 `qualifier praise`
 
@@ -1223,6 +1344,11 @@ the underlying VCS blame command for the subject's `.qual` file.
 qualifier praise src/parser.rs
 qualifier praise src/parser.rs --vcs
 ```
+
+Without `--vcs`, `praise` lists the artifact's threads with the thread
+renderer of §6.6, under a `<subject> — N threads (M open)` header. An
+artifact with no records prints `No records found for '<artifact>'.` (or
+an empty `records` list in JSON) and exits 0.
 
 ### 6.12 `qualifier threads`
 
@@ -1252,9 +1378,26 @@ thread matching any argument is listed:
 
 `--tag` matches tags on the root, a live reply, or — under `--all` — the
 `closed_by` resolve; `ns:*` matches a namespace; repeated `--tag` flags
-must all match. JSON output is a single
-array of `{origin, open, root, closed_by, history, replies: [{active,
-record}], latest_at}` with full IDs.
+must all match. A `--kind` that is neither built in nor carried by any
+record prints `qualifier threads: warning: kind '<k>' matches no known
+kind` on stderr.
+
+Each thread has a **state**, shared by `threads`, `show`, and `praise`:
+`open`; `needs-decision` (open, latest `status:*` tag is
+`status:needs-decision`, optionally with an addressee); `decided` (open,
+latest `status:*` tag is `status:decided`); or `closed` (with the closing
+resolve's `reason:*` value, and `pending_question` when the thread closed
+while its latest `status:*` tag was still `status:needs-decision`). In
+human output a closed thread is one line carrying its answer, for
+example `[274357ca] concern    src/parser.rs:42  Panics on malformed input
+— closed (fixed): Resolved`, so truncated output keeps each outcome; a
+closed thread selected by ID (under `--all`) also prints its replies and closing resolve.
+
+JSON output is a single array of `{origin, open, state, root, closed_by,
+history, replies: [{active, record}], latest_at}` with full IDs, where
+`state` is `{"name": ...}` plus `addressee` for `needs-decision` and
+`reason`, `closed_by`, and `pending_question` for `closed`. JSON is the
+complete view; a closed thread's answer is its `closed_by` record.
 
 `--status needs-decision|decided|deferred` matches the thread's latest
 `status:*` tag by `created_at` (an addressee suffix such as
@@ -1267,11 +1410,103 @@ threads waiting on a decision — and nothing when both counts are zero.
 On the base branch, or outside git, the first line counts project-wide and
 ends with `(project-wide)`.
 
+### 6.13 `qualifier diff`
+
+```
+qualifier diff [REF] [--from-tip] [--fail-on K[,K]] [--fail-on-drift]
+               [--kind K[,K]] [--issuer-type TYPE] [--subjects-only]
+               [--format human|json] [--no-ignore]
+```
+
+Compares the live annotation records in the working tree against the
+`.qual` files committed at a git ref (default `main`). Git only.
+
+**Comparison point.** By default the comparison commit is the merge base
+of `HEAD` and `REF`, so records that landed on `REF` after the branch
+forked count as old, which is what a pull request introduces. `--from-tip`
+compares against the tip of `REF`. When `HEAD` and `REF` share no merge
+base, the tip is used and a hint is printed on stderr. The human header
+and the JSON `comparison` field name the comparison used: `merge-base`,
+`tip`, or `fallback-tip`.
+
+**Buckets.** Only annotation records are reported.
+
+- **Added** — live records whose ID is not present at the ref.
+- **Changed** — threads open on both sides whose root was edited or
+  re-anchored (superseded without being resolved). Matched by thread
+  origin (§7), so several edits in a row pair with the root at the ref.
+  Each entry shows the new root and what it was at the ref. These records
+  appear here instead of under Added and Resolved.
+- **Resolved** — records live at the ref that are no longer live, with
+  every record that superseded them (more than one after merging branches
+  that each closed it), or marked removed when nothing superseded them.
+- **Drifted** — records present on both sides whose span `content_hash`
+  no longer matches the file in the working tree. Records added on this
+  branch are not checked.
+
+`--kind` filters every bucket (a Changed entry matches on its old or new
+kind); `--issuer-type` filters by issuer type; `--subjects-only` prints
+only the affected subjects, one per line. A `--kind` or `--fail-on` kind
+that is neither built in nor carried by any record on either side prints
+`qualifier diff: warning: kind '<k>' matches no known kind` on stderr and
+the command still runs.
+
+The working tree's ignore rules (§10.1) apply to both sides, so a `.qual`
+file that is ignored now is not read at the ref either; `--no-ignore`
+reads every `.qual` file on both sides.
+
+**Exit codes.** The diff is printed first. Then `diff` exits 1 when
+`--fail-on` is given and Added holds a record of a listed kind, or a
+Changed entry's kind moved into the list (`concern` to `blocker`;
+rewording or re-anchoring an existing blocker does not count), or when
+`--fail-on-drift` is given and Drifted is non-empty. Otherwise it exits 0.
+
+**JSON output:**
+
+```json
+{
+  "ref": "main",
+  "base": "<full SHA of the comparison commit>",
+  "from_tip": false,
+  "comparison": "merge-base",
+  "added":    [<record>],
+  "changed":  [{"record": <new root>, "previous": <root at the ref>}],
+  "resolved": [{"record": <record at the ref>, "closer": <newest closer or null>, "closers": [<every closer, oldest first>]}],
+  "drifted":  [{"record": <record>, "expected": "<hash>", "actual": "<hash>"}]
+}
+```
+
+`qualifier agents diff` shows the human layout.
+
+### 6.14 `qualifier init`
+
+Bootstraps a project: configures union merges for `.qual` files (git:
+`*.qual merge=union` in `.gitattributes`; other VCSes get the §8.2
+instructions) and adds a one-line directive pointing AI coding agents at
+`qualifier agents` to the agent-instruction files it finds (`AGENTS.md`,
+`CLAUDE.md`, and similar), offering to create `AGENTS.md` when there is
+none. Each step is skipped when already configured. `--yes` accepts every
+step at its default; `--dry-run` reports what would change.
+
+### 6.15 `qualifier agents`
+
+Prints a self-contained guide for AI coding agents, following
+[AGENTS-CLI 0.1](AGENTS-CLI.md). With no argument it prints an orientation
+page and a topic index; `qualifier agents <topic>` prints one topic. An
+unknown topic prints `qualifier agents: no such topic '<topic>'.
+Available: <topics>` on stderr and exits 2.
+
 ## 7. Library API
 
 The `qualifier` crate exposes its library API from `src/lib.rs`. Library
-consumers add `qualifier = { version = "0.4", default-features = false }` to
-avoid pulling in CLI dependencies.
+consumers add `qualifier = { version = "0.9", default-features = false }` to
+avoid pulling in CLI dependencies (keep the version at the current minor
+release; pre-1.0, each minor release may change this API).
+
+This section lists the **complete supported library surface**. Items not
+listed here, including the `qualifier::cli` module (the binary's
+implementation, built with the default `cli` feature), are not part of the
+API and may change in any release.
 
 ```rust
 // qualifier::annotation — record types and core logic
@@ -1281,7 +1516,7 @@ pub enum Record {
     Annotation(Box<Annotation>),
     Epoch(Epoch),
     Dependency(DependencyRecord),
-    Unknown(serde_json::Value),  // forward compatibility
+    Unknown(serde_json::Value),  // forward compatibility; serialized in envelope order
 }
 
 impl Record {
@@ -1293,7 +1528,10 @@ impl Record {
     pub fn issuer_type(&self) -> Option<&IssuerType>;
     pub fn as_annotation(&self) -> Option<&Annotation>;
     pub fn as_epoch(&self) -> Option<&Epoch>;
+    pub fn record_type(&self) -> &str;          // envelope `type`; "" if absent
 }
+// Record, Annotation, Epoch, DependencyRecord and the body types implement
+// Serialize/Deserialize; a .qual line is `serde_json::from_str::<Record>`.
 
 pub struct Annotation {
     pub metabox: String,                    // always "1"
@@ -1301,7 +1539,7 @@ pub struct Annotation {
     pub subject: String,
     pub issuer: String,
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,              // hashed as written (§2.8.1 rule 9)
     pub id: String,
     pub body: AnnotationBody,
 }
@@ -1316,7 +1554,11 @@ pub struct AnnotationBody {
     pub summary: String,
     pub supersedes: Option<String>,
     pub tags: Vec<String>,
+    pub extra: ExtraFields,             // custom body fields, preserved and hashed
 }
+
+/// Body fields a record type does not define, keyed by name.
+pub type ExtraFields = BTreeMap<String, serde_json::Value>;
 
 pub struct Epoch {
     pub metabox: String,                    // always "1"
@@ -1324,7 +1566,7 @@ pub struct Epoch {
     pub subject: String,
     pub issuer: String,
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub id: String,
     pub body: EpochBody,
 }
@@ -1333,6 +1575,7 @@ pub struct EpochBody {
     pub refs: Vec<String>,
     pub span: Option<Span>,
     pub summary: String,
+    pub extra: ExtraFields,
 }
 
 pub struct DependencyRecord {
@@ -1341,20 +1584,41 @@ pub struct DependencyRecord {
     pub subject: String,
     pub issuer: String,
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub id: String,
     pub body: DependencyBody,
 }
 
 pub struct DependencyBody {
     pub depends_on: Vec<String>,
+    pub extra: ExtraFields,
 }
+
+/// RFC 3339 timestamp that keeps the text it was read from. Derefs to
+/// DateTime<Utc>; ordered by instant, then text.
+pub struct Timestamp { /* private */ }
+impl Timestamp {
+    pub fn now() -> Timestamp;                         // canonical form
+    pub fn parse(text: &str) -> Result<Timestamp, chrono::ParseError>;
+    pub fn canonical(instant: DateTime<Utc>) -> String; // UTC, Z, 0/3/6/9 digits
+    pub fn as_str(&self) -> &str;                       // as written
+    pub fn instant(&self) -> DateTime<Utc>;
+}
+impl From<DateTime<Utc>> for Timestamp;                // canonical form
+// Timestamp also implements Deref<Target = DateTime<Utc>>, Display and
+// FromStr (as written), and Serialize/Deserialize (as written).
 
 pub struct Span {
     pub start: Position,
     pub end: Option<Position>,          // normalized to Some(start) before hashing
     pub content_hash: Option<String>,   // BLAKE3 of spanned lines
 }
+impl Span {
+    pub fn end_or_start(&self) -> &Position;
+    pub fn normalize(&mut self);        // materialize end = start
+}
+/// Parse CLI span syntax: "42", "42:58", "42.5:58.80".
+pub fn parse_span(s: &str) -> Result<Span, String>;
 
 pub struct Position {
     pub line: u32,               // 1-indexed
@@ -1362,33 +1626,56 @@ pub struct Position {
 }
 
 pub enum Kind { Pass, Fail, Blocker, Concern, Comment, Resolve, Praise, Suggestion, Waiver, Custom(String) }
+impl Kind { pub const BUILT_IN: &'static [Kind]; }   // every variant but Custom
 pub enum IssuerType { Human, Ai, Tool, Unknown }
+// Kind and IssuerType implement Display and FromStr (snake_case names).
 
 pub fn generate_id(annotation: &Annotation) -> String;
 pub fn generate_epoch_id(epoch: &Epoch) -> String;
 pub fn generate_dependency_id(dep: &DependencyRecord) -> String;
+pub fn generate_unknown_id(value: &serde_json::Value) -> String; // custom record types
 pub fn generate_record_id(record: &Record) -> String;
 pub fn validate(annotation: &Annotation) -> Vec<String>;
+pub fn check_supersession_cycles(records: &[Record]) -> Result<()>;      // Err(Error::Cycle)
+pub fn validate_supersession_targets(records: &[Record]) -> Result<()>;  // cross-subject
 pub fn finalize(annotation: Annotation) -> Annotation;
 pub fn finalize_epoch(epoch: Epoch) -> Epoch;
 pub fn finalize_record(record: Record) -> Record;
 
 // qualifier::qual_file
 pub struct QualFile { pub path: PathBuf, pub subject: String, pub records: Vec<Record> }
-pub fn parse(path: &Path) -> Result<QualFile>;
+pub fn parse(path: &Path) -> Result<QualFile>;                     // strict: first bad line is an error
+pub fn parse_lenient(path: &Path) -> Result<(QualFile, Vec<ParseIssue>)>; // skips bad lines
+pub struct ParseIssue { pub path: PathBuf, pub line: usize, pub message: String } // Display: "file:line: message"
+pub fn parse_str(content: &str) -> Result<Vec<Record>>;            // strict, in memory
 pub fn append(path: &Path, record: &Record) -> Result<()>;
-pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>;
+pub fn write_all(path: &Path, records: &[Record]) -> Result<()>;    // rewrite a whole file
+pub fn find_project_root(start: &Path) -> Option<PathBuf>;          // nearest VCS root
+pub fn discover(root: &Path, respect_ignore: bool) -> Result<Vec<QualFile>>; // lenient; warns on stderr
 
 // qualifier::content_hash — span freshness checking
-pub fn compute_span_hash(file_path: &Path, span: &Span) -> Option<String>;
+pub fn compute_span_hash(file_path: &Path, span: &Span) -> Result<String, SpanHashError>;
+pub enum SpanHashError { NotFound, Io(String), NotUtf8, OutOfRange { start, end, lines }, Reversed { start, end } } // Display + Error
 pub enum FreshnessStatus { Fresh, Drifted { expected, actual }, Missing { reason }, NoHash }
 pub fn check_freshness(file_path: &Path, span: &Span) -> FreshnessStatus;
 
 // qualifier::compact
-pub struct CompactResult { pub before: usize, pub after: usize, pub pruned: usize }
+pub struct CompactResult { pub before: usize, pub after: usize, pub pruned: usize, pub epochs: usize }
 pub fn filter_superseded(records: &[Record]) -> Vec<&Record>;
 pub fn prune(qual_file: &QualFile) -> (QualFile, CompactResult);
+pub fn prune_subject(qual_file: &QualFile, subject: &str) -> (QualFile, CompactResult);
 pub fn snapshot(qual_file: &QualFile) -> (QualFile, CompactResult);
+pub fn snapshot_subject(qual_file: &QualFile, subject: &str) -> (QualFile, CompactResult);
+
+// qualifier (crate root)
+pub enum Error {
+    Io(std::io::Error),
+    Json(serde_json::Error),
+    Cycle { context: String, detail: String },
+    Validation(String),
+    AlreadyReported(i32),   // failure already printed on stderr; the binary exits with this status
+}
+pub type Result<T> = std::result::Result<T, Error>;
 
 // qualifier::threads — group annotations into conversations
 pub struct Thread<'a> {
@@ -1402,6 +1689,50 @@ pub struct Thread<'a> {
 }
 pub struct ThreadEntry<'a> { pub record: &'a Record, pub active: bool }
 pub fn build_threads(records: &[Record]) -> Vec<Thread<'_>>;
+
+impl<'a> Thread<'a> {
+    pub fn records(&self) -> impl Iterator<Item = &'a Record>;       // root, history, replies, closed_by
+    pub fn live_records(&self) -> impl Iterator<Item = &'a Record>;  // root, live replies, closed_by
+    pub fn latest_status(&self) -> Option<(&'a str, Option<&'a str>)>; // newest status:* value, addressee
+    pub fn without_superseded_replies(self) -> Self;
+    pub fn state(&self) -> ThreadState<'a>;
+}
+
+/// Where a thread stands (§6.12).
+pub enum ThreadState<'a> {
+    Open,
+    NeedsDecision { addressee: Option<&'a str> },
+    Decided,
+    Closed { reason: Option<&'a str>, closer: &'a Record, pending_question: bool },
+}
+impl ThreadState<'_> {
+    pub fn name(&self) -> &'static str;          // "open", "needs-decision", "decided", "closed"
+    pub fn to_json(&self) -> serde_json::Value;  // the `state` object of threads JSON
+}
+
+/// Threads with any record on `subject`, open first; drops superseded replies unless `all`.
+pub fn threads_touching<'a>(records: &'a [Record], subject: &str, all: bool) -> Vec<Thread<'a>>;
+/// `<command>: warning: kind 'X' matches no known kind` for each requested
+/// custom kind that no record carries.
+pub fn unknown_kind_warnings<'r>(command: &str, requested: &[Kind],
+    records: impl IntoIterator<Item = &'r Record>) -> Vec<String>;
+
+/// The human thread renderer shared by `threads`, `show`, and `praise`.
+pub struct ThreadRenderer<'f> {
+    pub all: bool,             // also print edit history and superseded replies
+    pub expand_closed: bool,   // print a closed thread's replies and closing resolve
+    pub attribution: bool,     // append (issuer, issuer type, date) to each line
+    pub continuation: Option<&'f Continuation<'f>>, // extra lines under a record
+}
+pub type Continuation<'f> = dyn Fn(&Record) -> Vec<String> + 'f;
+impl ThreadRenderer<'_> { pub fn render(&self, t: &Thread<'_>) -> Vec<String>; }
+
+pub fn thread_json(t: &Thread<'_>) -> serde_json::Result<serde_json::Value>; // one element of threads JSON
+pub fn thread_summary_json(t: &Thread<'_>) -> serde_json::Value;            // {origin, root, state, closed_by}
+pub fn kind_label(r: &Record) -> String;   // kind, or envelope type for non-annotations
+pub fn location(r: &Record) -> String;     // subject, subject:line, or subject:start:end
+pub fn short_id(id: &str) -> &str;         // first 8 characters
+pub fn short_issuer(issuer: &str) -> &str; // mailto:alice@example.com -> alice
 ```
 
 A thread starts at an origin annotation. Records join it through
@@ -1453,25 +1784,28 @@ Delegates to the underlying VCS blame/annotate command:
 ### 8.4 Issuer Defaults
 
 Each value resolves in order: explicit flag, `QUALIFIER_*` environment
-variable, detected agent harness, then the fallback below. Empty variables
-count as unset.
+variable, the `issuer` key of the config files (§6.10; issuer only),
+detected agent harness, then the fallback below. Empty variables count as
+unset. Harness detection never sets the issuer.
 
-| value | flag | variable | harness (Claude Code: `CLAUDECODE=1`) | fallback |
-|---|---|---|---|---|
-| issuer | `--issuer` | `QUALIFIER_ISSUER` | — | `git config user.email`, then `hg config ui.username`, then `mailto:$USER@localhost` |
-| issuer type | `--issuer-type` | `QUALIFIER_ISSUER_TYPE` | `ai` | none |
-| session tag | — | `QUALIFIER_SESSION` | `claude-code:$CLAUDE_CODE_SESSION_ID` | none |
+| value | flag | variable | config | harness (Claude Code: `CLAUDECODE=1`) | fallback |
+|---|---|---|---|---|---|
+| issuer | `--issuer` | `QUALIFIER_ISSUER` | `issuer` | — | `git config user.email`, then `hg config ui.username`, then `mailto:$USER@localhost` |
+| issuer type | `--issuer-type` | `QUALIFIER_ISSUER_TYPE` | — | `ai` | none |
+| session tag | — | `QUALIFIER_SESSION` | — | `claude-code:$CLAUDE_CODE_SESSION_ID` | none |
 
 When a session is known, `record`, `reply`, and `resolve` add the tag
 `session:<value>`. `emit` applies the issuer defaults but writes bodies
-verbatim. A human running `qualifier` inside an agent harness is detected
+as given. A human running `qualifier` inside an agent harness is detected
 as the agent; pass `--issuer-type human` to override.
 
 ## 9. Agent Integration
 
 Qualifier is designed to be used by AI coding agents. Key affordances:
 
-- **Structured output:** `--format json` on `show` and `ls` commands.
+- **Structured output:** `--format json` on every read command and on
+  `record`, `reply`, and `resolve`; set `format = "json"` in config or
+  `QUALIFIER_FORMAT=json` to make it the default (§6.10).
 - **Batch annotation:** `qualifier record --stdin` reads JSONL from stdin
   (overrides objects or full records). For non-annotation record types,
   `qualifier emit --stdin` accepts complete records. A batch reply or
@@ -1492,8 +1826,12 @@ Qualifier is designed to be used by AI coding agents. Key affordances:
 - **Threading:** The `references` field enables agents to thread follow-up
   observations to prior signals, creating navigable conversation histories.
 - **Thread queries:** `qualifier threads --format json` lists every open
-  thread with its live replies; `--status needs-decision` lists threads
-  waiting on a human.
+  thread with its live replies and its `state`; `--all` adds closed threads,
+  whose answer is the `closed_by` record; `--status needs-decision` lists
+  threads waiting on a human.
+- **Branch review:** `qualifier diff --format json` lists what a branch
+  added, changed, resolved, and drifted (§6.13); `--fail-on blocker`
+  gates CI.
 - **Provenance:** records written inside a detected agent harness default to
   `issuer_type: ai` and carry a `session:` tag (§8.4).
 - **Conventions:** `qualifier agents conventions` defines the `status:`,
@@ -1513,31 +1851,46 @@ The project root is determined by searching upward for VCS markers (`.git`,
 
 ### 10.1 Ignore Rules
 
-By default, qualifier respects ignore rules from two sources during file
-discovery:
+By default, qualifier respects ignore rules from three sources during file
+discovery, under every VCS (§10), not only in git repositories:
 
 1. **`.gitignore`** — Standard Git ignore files, including:
    - `.gitignore` files at any level of the tree
-   - `.git/info/exclude` (per-repo excludes)
+   - `.git/info/exclude` (per-repo excludes, in git repositories)
    - The global gitignore file (e.g., `~/.config/git/ignore`)
    - `.gitignore` files in parent directories above the project root
      (matching Git's own behavior in monorepos)
 
-2. **`.qualignore`** — A qualifier-specific ignore file using the same
+2. **`.ignore`** — Generic ignore files in `.gitignore` syntax, as read by
+   tools such as ripgrep.
+
+3. **`.qualignore`** — A qualifier-specific ignore file using the same
    syntax as `.gitignore`. Place a `.qualignore` file anywhere in the tree
    to exclude paths from qualifier's discovery walk. Useful for ignoring
    vendored code, generated files, or example directories that have `.qual`
    files you want qualifier to skip without affecting Git.
 
-Paths matched by either source are excluded from all discovery commands:
-`show`, `ls`, `compact`, `review`, and `praise`/`blame`.
+Paths matched by any source are excluded from every command that discovers
+`.qual` files: `show`, `threads`, `ls`, `praise`/`blame`, `review`, `diff`
+(on both sides of the comparison), `compact`, and the ID-prefix and
+`--supersedes`/`--references` lookups of the write commands.
+
+Writes are checked against the same rules: `record`, `reply`, `resolve`,
+and `emit` refuse to write into a `.qual` file that discovery would skip,
+naming the rule that hides it, since no command would read the record.
+Pass `--no-ignore` to write it anyway.
+
+Discovery reads each `.qual` file leniently: a line that is not a valid
+record is skipped with a `warning: skipping <file>:<line>: <reason>` on
+stderr, and the other records still load. `compact` re-reads the files it
+rewrites strictly and fails on such a line rather than drop it.
 
 ### 10.2 `--no-ignore`
 
 Pass `--no-ignore` to any discovery command to bypass all ignore rules.
 This forces qualifier to walk every directory except VCS metadata
 directories (§10.3) and discover all `.qual` files regardless of
-`.gitignore` or `.qualignore` entries.
+`.gitignore`, `.ignore`, or `.qualignore` entries.
 
 ### 10.3 Hidden Directories
 
@@ -1562,42 +1915,50 @@ qualifier/
 ├── Cargo.toml
 ├── SPEC.md                    # This document
 ├── METABOX.md                 # Metabox envelope specification
+├── AGENTS-CLI.md              # AGENTS-CLI protocol (qualifier agents)
 └── src/
-    ├── lib.rs                 # Public library API
-    ├── annotation.rs         # Record types, body structs, Kind, IssuerType, validation
+    ├── lib.rs                 # Public library API (§7)
+    ├── annotation.rs          # Record types, body structs, Kind, IssuerType, IDs, validation
     ├── content_hash.rs        # Span content hashing and freshness checking
     ├── qual_file.rs           # .qual file parsing, appending, discovery
     ├── compact.rs             # Compaction: prune and snapshot, supersession filtering
+    ├── threads.rs             # Thread assembly, thread state, thread rendering
     ├── bin/
     │   └── qualifier.rs       # Binary entry point
-    └── cli/                   # CLI module (behind "cli" feature)
-        ├── mod.rs
-        ├── config.rs
-        ├── output.rs
-        ├── span_context.rs
+    └── cli/                   # CLI module (behind "cli" feature; not library API)
+        ├── mod.rs             # Argument parsing, grouped --help, dispatch
+        ├── config.rs          # .qualifier.toml / user config / QUALIFIER_* (§6.10)
+        ├── output.rs          # --format human|json
+        ├── provenance.rs      # Issuer, issuer type, and session defaults (§8.4)
+        ├── span_context.rs    # Source context around spans
+        ├── targets.rs         # Location and ID-prefix resolution, write paths
         └── commands/
             ├── mod.rs
+            ├── init.rs           # qualifier init
+            ├── agents/           # qualifier agents (mod.rs + pages/*.md topics)
             ├── record.rs         # qualifier record (unified annotation write)
             ├── reply.rs          # qualifier reply (id-prefix or location)
             ├── resolve.rs        # qualifier resolve (id-prefix or location)
             ├── emit.rs           # qualifier emit (raw record write)
-            ├── freshness.rs      # qualifier review (freshness checking)
             ├── show.rs
+            ├── threads.rs
             ├── ls.rs
-            ├── compact.rs
             ├── praise.rs         # qualifier praise (alias: blame)
+            ├── freshness.rs      # qualifier review (freshness checking)
+            ├── diff.rs           # qualifier diff
+            ├── compact.rs
             └── haiku.rs
 ```
 
 ```toml
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:comfy-table", "dep:figment"]
+cli = ["dep:clap", "dep:comfy-table", "dep:figment", "dep:gix", "dep:globset", "dep:rand", "dep:terminal_size"]
 ```
 
 ## 12. Future Considerations (Out of Scope)
 
-These are explicitly **not** part of v0.3 but are anticipated:
+These are explicitly **not** part of the current release but are anticipated:
 
 - **First-class scoring layer:** A built-in implementation of the example
   scoring model in §4 (`qualifier score`, `qualifier check`, dependency

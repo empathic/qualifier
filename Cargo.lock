@@ -956,7 +956,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39eb0623e15e4cb83c02ce6a959e48fadd1ae3b715b36b5acc01816e01388c82"
 dependencies = [
  "bstr",
- "hashbrown 0.15.5",
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -1913,7 +1913,7 @@ dependencies = [
 
 [[package]]
 name = "qualifier"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -1927,6 +1927,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "terminal_size",
  "thiserror",
  "toml",
 ]
@@ -2211,6 +2212,16 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.1",
  "once_cell",
+ "rustix",
+ "windows-sys",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
  "rustix",
  "windows-sys",
 ]

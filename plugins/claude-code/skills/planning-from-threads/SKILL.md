@@ -1,7 +1,7 @@
 ---
 name: planning-from-threads
 description: Use when writing an implementation plan from a spec or from open qualifier threads — every plan task names the thread IDs it addresses, and ordering constraints are recorded as references rather than only in prose
-allowed-tools: Bash(qualifier:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ensure-qualifier.sh exec:*)
 ---
 
 # Planning from threads

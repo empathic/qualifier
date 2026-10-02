@@ -3,6 +3,7 @@ use clap::Args as ClapArgs;
 use std::path::Path;
 
 use crate::annotation::{self, Annotation, AnnotationBody, Kind, Record};
+use crate::cli::output::Format;
 use crate::cli::provenance;
 use crate::cli::targets;
 
@@ -78,7 +79,7 @@ pub(crate) fn build_resolve(target: &Record, input: ResolveInput) -> crate::Resu
         subject: target.subject().to_string(),
         issuer: provenance::issuer(input.issuer.as_deref()),
         issuer_type: provenance::issuer_type(input.issuer_type.as_deref())?,
-        created_at: Utc::now(),
+        created_at: Utc::now().into(),
         id: String::new(),
         body: AnnotationBody {
             detail: None,
@@ -90,6 +91,7 @@ pub(crate) fn build_resolve(target: &Record, input: ResolveInput) -> crate::Resu
             summary: input.message.unwrap_or_else(|| "Resolved".into()),
             supersedes: Some(target.id().to_string()),
             tags: provenance::with_session_tag(tags),
+            extra: Default::default(),
         },
     });
     let errors = annotation::validate(&att);
@@ -101,15 +103,18 @@ pub(crate) fn build_resolve(target: &Record, input: ResolveInput) -> crate::Resu
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Target — either an id-prefix (≥4 chars) or a `<location>`
-    /// (e.g., `src/auth.rs:42`). A location resolves to the most-recent
-    /// active record there; ambiguity is reported with a candidate list.
+    /// Target — either an id-prefix (≥4 lowercase hex chars) or a
+    /// `<location>` (e.g., `src/auth.rs:42`, `Makefile`). A location
+    /// resolves to the most-recent active record there; ambiguity is
+    /// reported with a candidate list. A hex target that matches no ID is
+    /// tried as a location.
     pub target: String,
 
     /// Resolution message (defaults to "Resolved")
     pub message: Option<String>,
 
-    /// Issuer identity URI (defaults to QUALIFIER_ISSUER, then detected agent harness, then VCS user email)
+    /// Issuer identity URI (defaults to QUALIFIER_ISSUER, then `issuer` in
+    /// .qualifier.toml or the user config, then the VCS user email).
     #[arg(long)]
     pub issuer: Option<String>,
 
@@ -125,9 +130,15 @@ pub struct Args {
     #[arg(long)]
     pub file: Option<String>,
 
+    /// Write even when the target `.qual` file is hidden by `.gitignore`,
+    /// `.ignore` or `.qualignore` (read commands will skip it), and see
+    /// ignored files when resolving the target.
+    #[arg(long)]
+    pub no_ignore: bool,
+
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Classification tags (repeatable)
     #[arg(long = "tag")]
@@ -141,7 +152,7 @@ pub struct Args {
 
 pub fn run(args: Args) -> crate::Result<()> {
     let locator = targets::Locator::from_cwd()?;
-    let all_qual_files = targets::discover_project(true)?;
+    let all_qual_files = targets::discover_project(!args.no_ignore)?;
     let target = targets::resolve_target(&args.target, &all_qual_files, &locator)?;
 
     let att = build_resolve(
@@ -156,12 +167,15 @@ pub fn run(args: Args) -> crate::Result<()> {
         },
     )?;
 
-    let qual_path = locator.write_path(&att.subject, args.file.as_deref().map(Path::new));
+    let qual_path = locator.write_path(&att.subject, args.file.as_deref().map(Path::new))?;
+    if !args.no_ignore {
+        locator.check_not_ignored(&qual_path)?;
+    }
     let record = Record::Annotation(Box::new(att.clone()));
-    targets::preflight_supersession(&qual_path, &record)?;
+    targets::check_pointers(&record, &all_qual_files, "--")?;
     targets::append(&qual_path, &record)?;
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         println!("{}", serde_json::to_string(&record)?);
     } else {
         println!("{} {} {}", att.body.kind, att.subject, att.body.summary);

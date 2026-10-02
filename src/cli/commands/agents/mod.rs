@@ -37,10 +37,12 @@ pub fn run(args: Args) -> crate::Result<()> {
                 print!("{}", page.body);
                 Ok(())
             } else {
-                Err(crate::Error::Validation(format!(
-                    "no such topic '{name}'. Available: {}",
+                // AGENTS-CLI rule 4: this exact message, and exit status 2.
+                eprintln!(
+                    "qualifier agents: no such topic '{name}'. Available: {}",
                     topic_names()
-                )))
+                );
+                Err(crate::Error::AlreadyReported(2))
             }
         }
     }

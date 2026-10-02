@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 // ─── Span types ─────────────────────────────────────────────────────────────
@@ -103,7 +103,8 @@ fn parse_position(s: &str) -> Result<Position, String> {
 /// - `"src/parser.rs"` → `("src/parser.rs", None)`
 /// - `"src/parser.rs:42"` → `("src/parser.rs", Some(Span{start: line 42}))`
 /// - `"src/parser.rs:15:28"` → `("src/parser.rs", Some(Span{start: line 15, end: line 28}))`
-pub fn parse_location(s: &str) -> (String, Option<Span>) {
+#[cfg_attr(not(feature = "cli"), allow(dead_code))]
+pub(crate) fn parse_location(s: &str) -> (String, Option<Span>) {
     let parts: Vec<&str> = s.rsplitn(3, ':').collect();
     match parts.len() {
         3 => {
@@ -146,6 +147,102 @@ pub fn parse_location(s: &str) -> (String, Option<Span>) {
     }
 }
 
+// ─── Timestamp ──────────────────────────────────────────────────────────────
+
+/// An RFC 3339 `created_at` timestamp that keeps the exact text it was
+/// read from.
+///
+/// Record IDs hash `created_at` as written, so a record keeps its ID when
+/// it is rewritten and when another tool wrote it in a different (valid)
+/// RFC 3339 form. Timestamps qualifier creates use the canonical form
+/// (see [`Timestamp::canonical`]). Ordering and equality compare the
+/// instant first, then the text.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Timestamp {
+    instant: DateTime<Utc>,
+    text: String,
+}
+
+impl Timestamp {
+    /// The current time, in canonical form.
+    pub fn now() -> Self {
+        Utc::now().into()
+    }
+
+    /// Parse an RFC 3339 timestamp, keeping `text` as written.
+    pub fn parse(text: &str) -> Result<Self, chrono::ParseError> {
+        let instant = DateTime::parse_from_rfc3339(text)?.with_timezone(&Utc);
+        Ok(Timestamp {
+            instant,
+            text: text.to_string(),
+        })
+    }
+
+    /// The canonical text of an instant: RFC 3339 in UTC with a `Z`
+    /// suffix and 0, 3, 6 or 9 fractional-second digits (the fewest that
+    /// represent it exactly), e.g. `2026-02-24T10:00:00Z`,
+    /// `2026-02-24T10:00:00.500Z`, `2026-02-24T10:00:00.123456Z`.
+    pub fn canonical(instant: DateTime<Utc>) -> String {
+        instant.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    }
+
+    /// The timestamp text exactly as written.
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The instant this timestamp denotes.
+    pub fn instant(&self) -> DateTime<Utc> {
+        self.instant
+    }
+}
+
+impl From<DateTime<Utc>> for Timestamp {
+    fn from(instant: DateTime<Utc>) -> Self {
+        Timestamp {
+            text: Timestamp::canonical(instant),
+            instant,
+        }
+    }
+}
+
+impl std::ops::Deref for Timestamp {
+    type Target = DateTime<Utc>;
+
+    fn deref(&self) -> &DateTime<Utc> {
+        &self.instant
+    }
+}
+
+impl fmt::Display for Timestamp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::str::FromStr for Timestamp {
+    type Err = chrono::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Timestamp::parse(s)
+    }
+}
+
+impl Serialize for Timestamp {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text)
+    }
+}
+
+impl<'de> Deserialize<'de> for Timestamp {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Timestamp::parse(&text).map_err(|e| {
+            serde::de::Error::custom(format!("invalid RFC 3339 timestamp {text:?}: {e}"))
+        })
+    }
+}
+
 // ─── Kind enum ──────────────────────────────────────────────────────────────
 
 /// The type of an annotation.
@@ -163,6 +260,21 @@ pub enum Kind {
     Waiver,
     #[serde(untagged)]
     Custom(String),
+}
+
+impl Kind {
+    /// Every built-in kind (all variants but `Custom`), in declaration order.
+    pub const BUILT_IN: &'static [Kind] = &[
+        Kind::Pass,
+        Kind::Fail,
+        Kind::Blocker,
+        Kind::Concern,
+        Kind::Comment,
+        Kind::Resolve,
+        Kind::Praise,
+        Kind::Suggestion,
+        Kind::Waiver,
+    ];
 }
 
 impl fmt::Display for Kind {
@@ -238,42 +350,169 @@ impl std::str::FromStr for IssuerType {
     }
 }
 
-// ─── Body structs (fields alphabetical for MCF) ─────────────────────────────
+// ─── Body structs ───────────────────────────────────────────────────────────
+//
+// Bodies serialize with their top-level keys in lexicographic order (MCF),
+// merging the defined fields with any custom fields in `extra`. Values keep
+// their own serialization, so `span` keeps its start, end, content_hash order.
 
-/// Annotation body fields. Field order is alphabetical (MCF canonical form).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Body fields a record carries beyond the ones its type defines, keyed by
+/// name. They are preserved on rewrite and included in the record ID.
+pub type ExtraFields = BTreeMap<String, serde_json::Value>;
+
+/// One top-level body value, borrowed for serialization.
+enum BodyValue<'a> {
+    Str(&'a str),
+    Kind(&'a Kind),
+    Span(&'a Span),
+    List(&'a [String]),
+    Json(&'a serde_json::Value),
+}
+
+impl Serialize for BodyValue<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            BodyValue::Str(s) => s.serialize(serializer),
+            BodyValue::Kind(k) => k.serialize(serializer),
+            BodyValue::Span(s) => s.serialize(serializer),
+            BodyValue::List(l) => l.serialize(serializer),
+            BodyValue::Json(v) => v.serialize(serializer),
+        }
+    }
+}
+
+/// Serialize a body as a map whose keys are in lexicographic order.
+///
+/// `fields` holds the defined fields that are present; `names` lists every
+/// defined field name, so a custom field can never shadow one.
+fn serialize_body<'a, S: Serializer>(
+    serializer: S,
+    names: &[&str],
+    mut fields: Vec<(&'a str, BodyValue<'a>)>,
+    extra: &'a ExtraFields,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap;
+    fields.extend(
+        extra
+            .iter()
+            .filter(|(k, _)| !names.contains(&k.as_str()))
+            .map(|(k, v)| (k.as_str(), BodyValue::Json(v))),
+    );
+    fields.sort_by(|a, b| a.0.cmp(b.0));
+    let mut map = serializer.serialize_map(Some(fields.len()))?;
+    for (key, value) in &fields {
+        map.serialize_entry(key, value)?;
+    }
+    map.end()
+}
+
+/// Annotation body fields.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct AnnotationBody {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub detail: Option<String>,
     pub kind: Kind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub r#ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub references: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub span: Option<Span>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub suggested_fix: Option<String>,
     pub summary: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub supersedes: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub tags: Vec<String>,
+    /// Custom body fields (see [`ExtraFields`]).
+    #[serde(flatten)]
+    pub extra: ExtraFields,
 }
 
-/// Epoch body fields. Field order is alphabetical (MCF canonical form).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl Serialize for AnnotationBody {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        const NAMES: &[&str] = &[
+            "detail",
+            "kind",
+            "ref",
+            "references",
+            "span",
+            "suggested_fix",
+            "summary",
+            "supersedes",
+            "tags",
+        ];
+        let mut fields = vec![
+            ("kind", BodyValue::Kind(&self.kind)),
+            ("summary", BodyValue::Str(&self.summary)),
+        ];
+        let optional = [
+            ("detail", &self.detail),
+            ("ref", &self.r#ref),
+            ("references", &self.references),
+            ("suggested_fix", &self.suggested_fix),
+            ("supersedes", &self.supersedes),
+        ];
+        for (name, value) in optional {
+            if let Some(v) = value {
+                fields.push((name, BodyValue::Str(v)));
+            }
+        }
+        if let Some(span) = &self.span {
+            fields.push(("span", BodyValue::Span(span)));
+        }
+        if !self.tags.is_empty() {
+            fields.push(("tags", BodyValue::List(&self.tags)));
+        }
+        serialize_body(serializer, NAMES, fields, &self.extra)
+    }
+}
+
+/// Epoch body fields.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct EpochBody {
     pub refs: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub span: Option<Span>,
     pub summary: String,
+    /// Custom body fields (see [`ExtraFields`]).
+    #[serde(flatten)]
+    pub extra: ExtraFields,
 }
 
-/// Dependency body fields. Field order is alphabetical (MCF canonical form).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl Serialize for EpochBody {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut fields = vec![
+            ("refs", BodyValue::List(&self.refs)),
+            ("summary", BodyValue::Str(&self.summary)),
+        ];
+        if let Some(span) = &self.span {
+            fields.push(("span", BodyValue::Span(span)));
+        }
+        serialize_body(
+            serializer,
+            &["refs", "span", "summary"],
+            fields,
+            &self.extra,
+        )
+    }
+}
+
+/// Dependency body fields.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct DependencyBody {
     pub depends_on: Vec<String>,
+    /// Custom body fields (see [`ExtraFields`]).
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
+impl Serialize for DependencyBody {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let fields = vec![("depends_on", BodyValue::List(&self.depends_on))];
+        serialize_body(serializer, &["depends_on"], fields, &self.extra)
+    }
 }
 
 // ─── Annotation struct ──────────────────────────────────────────────────────
@@ -310,8 +549,8 @@ pub struct Annotation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer_type: Option<IssuerType>,
 
-    /// When this annotation was created (RFC 3339).
-    pub created_at: DateTime<Utc>,
+    /// When this annotation was created (RFC 3339, hashed as written).
+    pub created_at: Timestamp,
 
     /// Content-addressed record ID (BLAKE3).
     pub id: String,
@@ -334,7 +573,7 @@ pub struct Epoch {
     pub issuer: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub id: String,
     pub body: EpochBody,
 }
@@ -352,7 +591,7 @@ pub struct DependencyRecord {
     pub issuer: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer_type: Option<IssuerType>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub id: String,
     pub body: DependencyBody,
 }
@@ -374,8 +613,45 @@ impl Serialize for Record {
             Record::Annotation(a) => a.serialize(serializer),
             Record::Epoch(e) => e.serialize(serializer),
             Record::Dependency(d) => d.serialize(serializer),
-            Record::Unknown(v) => v.serialize(serializer),
+            Record::Unknown(v) => UnknownView(v).serialize(serializer),
         }
+    }
+}
+
+/// Envelope fields in Metabox order.
+const ENVELOPE_ORDER: [&str; 8] = [
+    "metabox",
+    "type",
+    "subject",
+    "issuer",
+    "issuer_type",
+    "created_at",
+    "id",
+    "body",
+];
+
+/// Serializes a record of a type this crate does not know with its
+/// envelope fields in Metabox order, followed by any other top-level
+/// fields in lexicographic order. Values serialize as stored.
+struct UnknownView<'a>(&'a serde_json::Value);
+
+impl Serialize for UnknownView<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let Some(fields) = self.0.as_object() else {
+            return self.0.serialize(serializer);
+        };
+        let envelope = ENVELOPE_ORDER
+            .iter()
+            .filter_map(|k| fields.get_key_value(*k));
+        let rest = fields
+            .iter()
+            .filter(|(k, _)| !ENVELOPE_ORDER.contains(&k.as_str()));
+        let mut map = serializer.serialize_map(Some(fields.len()))?;
+        for (key, value) in envelope.chain(rest) {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
     }
 }
 
@@ -506,7 +782,7 @@ struct AnnotationCanonicalView<'a> {
     issuer: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     issuer_type: Option<&'a IssuerType>,
-    created_at: &'a DateTime<Utc>,
+    created_at: &'a Timestamp,
     id: &'a str,
     body: &'a AnnotationBody,
 }
@@ -520,7 +796,7 @@ struct EpochCanonicalView<'a> {
     issuer: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     issuer_type: Option<&'a IssuerType>,
-    created_at: &'a DateTime<Utc>,
+    created_at: &'a Timestamp,
     id: &'a str,
     body: &'a EpochBody,
 }
@@ -534,7 +810,7 @@ struct DependencyCanonicalView<'a> {
     issuer: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     issuer_type: Option<&'a IssuerType>,
-    created_at: &'a DateTime<Utc>,
+    created_at: &'a Timestamp,
     id: &'a str,
     body: &'a DependencyBody,
 }
@@ -590,13 +866,28 @@ pub fn generate_dependency_id(dep: &DependencyRecord) -> String {
     blake3::hash(canonical.as_bytes()).to_hex().to_string()
 }
 
+/// Generate a deterministic ID for a record of a type this crate does not
+/// know: the BLAKE3 hash of its envelope-ordered serialization with `id`
+/// set to `""` and `metabox` materialized.
+pub fn generate_unknown_id(value: &serde_json::Value) -> String {
+    let mut value = value.clone();
+    if let Some(fields) = value.as_object_mut() {
+        fields
+            .entry("metabox")
+            .or_insert_with(|| serde_json::Value::String("1".into()));
+        fields.insert("id".into(), serde_json::Value::String(String::new()));
+    }
+    let canonical = serde_json::to_string(&UnknownView(&value)).expect("record must serialize");
+    blake3::hash(canonical.as_bytes()).to_hex().to_string()
+}
+
 /// Generate a deterministic ID for any record type.
 pub fn generate_record_id(record: &Record) -> String {
     match record {
         Record::Annotation(a) => generate_id(a),
         Record::Epoch(e) => generate_epoch_id(e),
         Record::Dependency(d) => generate_dependency_id(d),
-        Record::Unknown(_) => String::new(),
+        Record::Unknown(v) => generate_unknown_id(v),
     }
 }
 
@@ -645,18 +936,8 @@ pub fn validate(annotation: &Annotation) -> Vec<String> {
         }
 
         // Warn about potentially misspelled custom kinds
-        let known = [
-            "pass",
-            "fail",
-            "blocker",
-            "concern",
-            "comment",
-            "praise",
-            "suggestion",
-            "waiver",
-        ];
-        for k in &known {
-            if is_likely_typo(custom, k) {
+        for k in Kind::BUILT_IN.iter().map(Kind::to_string) {
+            if is_likely_typo(custom, &k) {
                 errors.push(format!("unknown kind '{}', did you mean '{}'?", custom, k));
                 break;
             }
@@ -685,6 +966,25 @@ pub fn validate(annotation: &Annotation) -> Vec<String> {
             && col == 0
         {
             errors.push("span.start.col must be >= 1 (1-indexed)".into());
+        }
+        if let Some(ref end) = span.end {
+            if end.col == Some(0) {
+                errors.push("span.end.col must be >= 1 (1-indexed)".into());
+            }
+            if end.line < span.start.line {
+                errors.push(format!(
+                    "span end (line {}) must not precede span start (line {})",
+                    end.line, span.start.line
+                ));
+            } else if end.line == span.start.line
+                && let (Some(start_col), Some(end_col)) = (span.start.col, end.col)
+                && end_col < start_col
+            {
+                errors.push(format!(
+                    "span end (column {end_col}) must not precede span start (column {start_col}) on line {}",
+                    end.line
+                ));
+            }
         }
     }
 
@@ -723,64 +1023,75 @@ fn is_likely_typo(a: &str, b: &str) -> bool {
 
 /// Check a slice of records for supersession cycles.
 /// Returns Err with cycle details if a cycle is found.
+///
+/// Runs in time linear in the number of records: each record is walked at
+/// most once across all chains.
 pub fn check_supersession_cycles(records: &[Record]) -> crate::Result<()> {
-    let id_set: HashSet<&str> = records.iter().map(|r| r.id()).collect();
+    let next: HashMap<&str, &str> = records
+        .iter()
+        .filter_map(|r| r.supersedes().map(|target| (r.id(), target)))
+        .collect();
+    let ids: HashSet<&str> = records.iter().map(|r| r.id()).collect();
 
+    // Records whose chain is known to end without a cycle.
+    let mut done: HashSet<&str> = HashSet::new();
     for record in records {
-        if let Some(target) = record.supersedes() {
-            // Walk the chain from this record
-            let mut visited = HashSet::new();
-            visited.insert(record.id());
-            let mut current = target;
-
-            loop {
-                if visited.contains(current) {
-                    return Err(crate::Error::Cycle {
-                        context: "supersession".into(),
-                        detail: format!("cycle detected involving record {}", current),
-                    });
-                }
-
-                // Find the record with this ID
-                if !id_set.contains(current) {
-                    break; // target not in this file — that's fine
-                }
-
-                visited.insert(current);
-
-                // Find next link in chain
-                match records.iter().find(|r| r.id() == current) {
-                    Some(next) => match next.supersedes() {
-                        Some(next_target) => current = next_target,
-                        None => break,
-                    },
-                    None => break,
-                }
+        let mut path: Vec<&str> = Vec::new();
+        let mut on_path: HashSet<&str> = HashSet::new();
+        let mut current = record.id();
+        loop {
+            if done.contains(current) {
+                break;
+            }
+            if !on_path.insert(current) {
+                return Err(crate::Error::Cycle {
+                    context: "supersession".into(),
+                    detail: format!("cycle detected involving record {}", current),
+                });
+            }
+            path.push(current);
+            // A target outside this slice ends the chain.
+            match next.get(current) {
+                Some(&target) if ids.contains(target) => current = target,
+                _ => break,
             }
         }
+        done.extend(path);
     }
 
     Ok(())
 }
 
-/// Validate that supersession references target the same subject.
+/// Validate that every supersession reference targets a record in `records`
+/// with the same subject.
 ///
-/// Returns an error if any cross-subject supersession is found.
+/// Returns an error if a `supersedes` target is not in `records`, or if a
+/// record supersedes one with a different subject.
 pub fn validate_supersession_targets(records: &[Record]) -> crate::Result<()> {
     let by_id: std::collections::HashMap<&str, &Record> =
         records.iter().map(|r| (r.id(), r)).collect();
 
     for record in records {
-        if let Some(target_id) = record.supersedes()
-            && let Some(target) = by_id.get(target_id)
-            && record.subject() != target.subject()
-        {
+        let Some(target_id) = record.supersedes() else {
+            continue;
+        };
+        let short_id = &record.id()[..8.min(record.id().len())];
+        let short_target = &target_id[..target_id.len().min(8)];
+        let Some(target) = by_id.get(target_id) else {
+            return Err(crate::Error::Validation(format!(
+                "record {} (subject '{}') supersedes {}, which was not found",
+                short_id,
+                record.subject(),
+                short_target
+            )));
+        };
+        if record.subject() != target.subject() {
             return Err(crate::Error::Validation(format!(
                 "record {} (subject '{}') supersedes {} (subject '{}') \
                  — cross-subject supersession is not allowed",
-                &record.id()[..8.min(record.id().len())],
+                short_id,
                 record.subject(),
-                &target_id[..target_id.len().min(8)],
+                short_target,
                 target.subject()
             )));
         }
@@ -828,7 +1139,16 @@ pub fn finalize_record(record: Record) -> Record {
             d.id = generate_dependency_id(&d);
             Record::Dependency(d)
         }
-        other => other,
+        Record::Unknown(mut v) => {
+            let id = generate_unknown_id(&v);
+            if let Some(fields) = v.as_object_mut() {
+                fields
+                    .entry("metabox")
+                    .or_insert_with(|| serde_json::Value::String("1".into()));
+                fields.insert("id".into(), serde_json::Value::String(id));
+            }
+            Record::Unknown(v)
+        }
     }
 }
 
@@ -848,7 +1168,8 @@ mod tests {
             issuer_type: None,
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -860,6 +1181,7 @@ mod tests {
                 summary: "Panics on malformed input".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         att.id = generate_id(&att);
@@ -900,7 +1222,7 @@ mod tests {
             subject: String::new(),
             issuer: String::new(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -912,6 +1234,7 @@ mod tests {
                 summary: String::new(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         let errors = validate(&att);
@@ -937,7 +1260,7 @@ mod tests {
             subject: "test".into(),
             issuer: "mailto:bot@localhost".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: "will be replaced".into(),
             body: AnnotationBody {
                 detail: None,
@@ -949,6 +1272,7 @@ mod tests {
                 summary: "good".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         let finalized = finalize(att);
@@ -964,7 +1288,7 @@ mod tests {
             subject: "test.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -983,6 +1307,7 @@ mod tests {
                 summary: "issue".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         let finalized = finalize(att);
@@ -1008,7 +1333,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1020,6 +1345,7 @@ mod tests {
                 summary: "issue".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1029,7 +1355,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1048,6 +1374,7 @@ mod tests {
                 summary: "issue".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1063,7 +1390,7 @@ mod tests {
             subject: "x".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: "aaa".into(),
             body: AnnotationBody {
                 detail: None,
@@ -1075,6 +1402,7 @@ mod tests {
                 summary: "a".into(),
                 supersedes: Some("bbb".into()),
                 tags: vec![],
+                extra: Default::default(),
             },
         }));
         let b = Record::Annotation(Box::new(Annotation {
@@ -1083,7 +1411,7 @@ mod tests {
             subject: "x".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: "bbb".into(),
             body: AnnotationBody {
                 detail: None,
@@ -1095,6 +1423,7 @@ mod tests {
                 summary: "b".into(),
                 supersedes: Some("aaa".into()),
                 tags: vec![],
+                extra: Default::default(),
             },
         }));
 
@@ -1102,18 +1431,87 @@ mod tests {
     }
 
     #[test]
+    fn test_supersession_cycle_check_long_chain_is_linear() {
+        let base = sample_annotation();
+        let link = |i: usize| -> Record {
+            let mut att = base.clone();
+            att.id = format!("id{i}");
+            att.body.supersedes = (i > 0).then(|| format!("id{}", i - 1));
+            Record::Annotation(Box::new(att))
+        };
+        let mut chain: Vec<Record> = (0..50_000).map(link).collect();
+        assert!(check_supersession_cycles(&chain).is_ok());
+
+        // Closing the loop anywhere is still caught.
+        if let Record::Annotation(first) = &mut chain[0] {
+            first.body.supersedes = Some("id49999".into());
+        }
+        assert!(check_supersession_cycles(&chain).is_err());
+
+        // A self-supersession is a cycle.
+        let mut own = base.clone();
+        own.body.supersedes = Some(own.id.clone());
+        assert!(check_supersession_cycles(&[Record::Annotation(Box::new(own))]).is_err());
+    }
+
+    fn with_span(start: (u32, Option<u32>), end: (u32, Option<u32>)) -> Annotation {
+        let mut att = sample_annotation();
+        att.body.span = Some(Span {
+            start: Position {
+                line: start.0,
+                col: start.1,
+            },
+            end: Some(Position {
+                line: end.0,
+                col: end.1,
+            }),
+            content_hash: None,
+        });
+        att.id = generate_id(&att);
+        att
+    }
+
+    #[test]
+    fn test_validate_rejects_reversed_span() {
+        let errors = validate(&with_span((5, None), (2, None)));
+        assert!(
+            errors.iter().any(|e| e.contains("must not precede")),
+            "{errors:?}"
+        );
+        let errors = validate(&with_span((3, Some(9)), (3, Some(4))));
+        assert!(errors.iter().any(|e| e.contains("column 4")), "{errors:?}");
+        let errors = validate(&with_span((3, Some(1)), (4, Some(0))));
+        assert!(
+            errors.iter().any(|e| e.contains("span.end.col")),
+            "{errors:?}"
+        );
+        assert!(validate(&with_span((3, Some(9)), (4, Some(1)))).is_empty());
+        assert!(validate(&with_span((3, None), (3, None))).is_empty());
+    }
+
+    #[test]
+    fn test_kind_built_in_lists_every_variant() {
+        // Adding a variant breaks this match; add it to Kind::BUILT_IN too.
+        let count = |k: &Kind| match k {
+            Kind::Pass
+            | Kind::Fail
+            | Kind::Blocker
+            | Kind::Concern
+            | Kind::Comment
+            | Kind::Resolve
+            | Kind::Praise
+            | Kind::Suggestion
+            | Kind::Waiver => 1,
+            Kind::Custom(_) => 0,
+        };
+        assert_eq!(Kind::BUILT_IN.iter().map(count).sum::<usize>(), 9);
+        let names: HashSet<String> = Kind::BUILT_IN.iter().map(Kind::to_string).collect();
+        assert_eq!(names.len(), 9);
+    }
+
+    #[test]
     fn test_kind_roundtrip() {
-        let kinds = vec![
-            Kind::Pass,
-            Kind::Fail,
-            Kind::Blocker,
-            Kind::Concern,
-            Kind::Comment,
-            Kind::Praise,
-            Kind::Suggestion,
-            Kind::Waiver,
-        ];
-        for kind in &kinds {
+        for kind in Kind::BUILT_IN {
             let s = kind.to_string();
             let parsed: Kind = s.parse().unwrap();
             assert_eq!(&parsed, kind);
@@ -1169,7 +1567,7 @@ mod tests {
             subject: "foo.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1181,6 +1579,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         })));
         let a_id = a.id().to_string();
@@ -1190,7 +1589,7 @@ mod tests {
             subject: "bar.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1202,6 +1601,7 @@ mod tests {
                 summary: "updated".into(),
                 supersedes: Some(a_id),
                 tags: vec![],
+                extra: Default::default(),
             },
         })));
         let result = validate_supersession_targets(&[a, b]);
@@ -1217,7 +1617,7 @@ mod tests {
             subject: "foo.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1229,6 +1629,7 @@ mod tests {
                 summary: "bad".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         })));
         let a_id = a.id().to_string();
@@ -1238,7 +1639,7 @@ mod tests {
             subject: "foo.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1250,6 +1651,7 @@ mod tests {
                 summary: "fixed".into(),
                 supersedes: Some(a_id),
                 tags: vec![],
+                extra: Default::default(),
             },
         })));
         let result = validate_supersession_targets(&[a, b]);
@@ -1273,7 +1675,7 @@ mod tests {
             subject: "test.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1285,6 +1687,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
         assert_eq!(att.metabox, "1");
@@ -1303,7 +1706,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1315,6 +1718,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1324,7 +1728,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: Some(IssuerType::Human),
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1336,6 +1740,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1345,7 +1750,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1357,6 +1762,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1374,7 +1780,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1386,6 +1792,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         att.id = generate_id(&att);
@@ -1409,7 +1816,8 @@ mod tests {
             issuer_type: Some(IssuerType::Human),
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1421,6 +1829,7 @@ mod tests {
                 summary: "great".into(),
                 supersedes: None,
                 tags: vec!["quality".into()],
+                extra: Default::default(),
             },
         });
 
@@ -1445,7 +1854,8 @@ mod tests {
             issuer_type: None,
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1457,6 +1867,7 @@ mod tests {
                 summary: "ok".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
         let record = Record::Annotation(Box::new(att.clone()));
@@ -1484,12 +1895,14 @@ mod tests {
             issuer_type: Some(IssuerType::Tool),
             created_at: DateTime::parse_from_rfc3339("2026-02-24T10:00:00Z")
                 .unwrap()
-                .with_timezone(&Utc),
+                .with_timezone(&Utc)
+                .into(),
             id: String::new(),
             body: EpochBody {
                 refs: vec!["aaa".into(), "bbb".into()],
                 span: None,
                 summary: "Compacted from 3 records".into(),
+                extra: Default::default(),
             },
         });
 
@@ -1624,7 +2037,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1636,6 +2049,7 @@ mod tests {
                 summary: "note".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1645,7 +2059,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: now,
+            created_at: now.into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1657,6 +2071,7 @@ mod tests {
                 summary: "note".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         });
 
@@ -1671,7 +2086,7 @@ mod tests {
             subject: "x.rs".into(),
             issuer: "mailto:test@test.com".into(),
             issuer_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now().into(),
             id: String::new(),
             body: AnnotationBody {
                 detail: None,
@@ -1683,6 +2098,7 @@ mod tests {
                 summary: "self-ref".into(),
                 supersedes: None,
                 tags: vec![],
+                extra: Default::default(),
             },
         };
         att.id = generate_id(&att);

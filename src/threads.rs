@@ -9,12 +9,17 @@
 //! the newest such tip; otherwise it is closed by the newest resolve tip,
 //! and the root is whatever non-resolve chain member that resolve targets,
 //! falling back to the newest non-resolve chain member.
+//!
+//! [`Thread::state`] gives every read command one answer to "where does
+//! this thread stand" ([`ThreadState`]), and [`ThreadRenderer`] is the one
+//! human rendering of a thread, so no command prints a record without its
+//! thread's state.
 
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 
-use crate::annotation::{Kind, Record};
+use crate::annotation::{IssuerType, Kind, Record};
 use crate::compact::filter_superseded;
 
 /// One conversation: a root annotation, its edits, replies, and closure.
@@ -206,7 +211,7 @@ fn origin_of<'a>(r: &'a Record, by_id: &HashMap<&'a str, &'a Record>) -> &'a str
 
 fn created_at(r: &Record) -> DateTime<Utc> {
     r.as_annotation()
-        .map(|a| a.created_at)
+        .map(|a| *a.created_at)
         .unwrap_or(DateTime::<Utc>::MIN_UTC)
 }
 
@@ -214,4 +219,463 @@ fn span_line(r: &Record) -> u32 {
     r.as_annotation()
         .and_then(|a| a.body.span.as_ref())
         .map_or(0, |s| s.start.line)
+}
+
+// ─── Thread state ───────────────────────────────────────────────────────────
+
+/// Where a thread stands. Every read command derives a thread's state from
+/// [`Thread::state`] so they agree on what is open, waiting, or settled.
+#[derive(Debug, Clone, Copy)]
+pub enum ThreadState<'a> {
+    /// Open, with no `status:*` tag, or a latest one of `status:deferred`.
+    Open,
+    /// Open and waiting on a human judgment call: the latest `status:*`
+    /// tag is `status:needs-decision`, optionally addressed with
+    /// `status:needs-decision:<issuer>`.
+    NeedsDecision { addressee: Option<&'a str> },
+    /// Open, with a latest `status:*` tag of `status:decided`: the call has
+    /// been made and the thread awaits the change that carries it out.
+    Decided,
+    /// Closed by the `resolve` record `closer`.
+    Closed {
+        /// The closer's `reason:*` tag value (`fixed`, `wontfix`, ...).
+        reason: Option<&'a str>,
+        closer: &'a Record,
+        /// The thread closed while its latest `status:*` tag (over the
+        /// root, live replies, and the closer) was still
+        /// `status:needs-decision`: a question was left unanswered.
+        pending_question: bool,
+    },
+}
+
+impl ThreadState<'_> {
+    /// Stable machine name: `open`, `needs-decision`, `decided`, `closed`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::NeedsDecision { .. } => "needs-decision",
+            Self::Decided => "decided",
+            Self::Closed { .. } => "closed",
+        }
+    }
+
+    /// JSON form: `{"name": ...}`, plus `addressee` for `needs-decision`
+    /// and `reason`, `closed_by` (the closer's ID), and `pending_question`
+    /// for `closed`.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Open | Self::Decided => serde_json::json!({ "name": self.name() }),
+            Self::NeedsDecision { addressee } => {
+                serde_json::json!({ "name": self.name(), "addressee": addressee })
+            }
+            Self::Closed {
+                reason,
+                closer,
+                pending_question,
+            } => serde_json::json!({
+                "name": self.name(),
+                "reason": reason,
+                "closed_by": closer.id(),
+                "pending_question": pending_question,
+            }),
+        }
+    }
+}
+
+impl ThreadState<'_> {
+    /// The human wording of the state, shared by every read command:
+    /// `open`, `needs decision`, `needs decision from alice`, `decided`, or
+    /// `closed (wontfix): Won't change b()`, ending in
+    /// `— question still pending` when the thread closed on an unanswered
+    /// `status:needs-decision`. With `attribution`, a closed thread names
+    /// who closed it: `closed (wontfix) by alice: ...`.
+    pub fn describe(&self, attribution: bool) -> String {
+        match self {
+            Self::Open => "open".into(),
+            Self::NeedsDecision { addressee: None } => "needs decision".into(),
+            Self::NeedsDecision { addressee: Some(a) } => {
+                format!("needs decision from {}", short_issuer(a))
+            }
+            Self::Decided => "decided".into(),
+            Self::Closed {
+                reason,
+                closer,
+                pending_question,
+            } => {
+                let reason = reason.map(|r| format!(" ({r})")).unwrap_or_default();
+                let by = match closer.as_annotation() {
+                    Some(a) if attribution => format!(" by {}", short_issuer(&a.issuer)),
+                    _ => String::new(),
+                };
+                let pending = if *pending_question {
+                    " — question still pending"
+                } else {
+                    ""
+                };
+                format!("closed{reason}{by}: {}{pending}", summary(closer))
+            }
+        }
+    }
+}
+
+impl<'a> Thread<'a> {
+    /// Every record in the thread: root, history, replies (as currently
+    /// held), and the closing resolve.
+    pub fn records(&self) -> impl Iterator<Item = &'a Record> + '_ {
+        std::iter::once(self.root)
+            .chain(self.history.iter().copied())
+            .chain(self.replies.iter().map(|e| e.record))
+            .chain(self.closed_by)
+    }
+
+    /// The records that make up the thread as it stands now: the root,
+    /// live replies, and the closing resolve. Edit history and superseded
+    /// replies are left out.
+    pub fn live_records(&self) -> impl Iterator<Item = &'a Record> + '_ {
+        std::iter::once(self.root)
+            .chain(self.replies.iter().filter(|e| e.active).map(|e| e.record))
+            .chain(self.closed_by)
+    }
+
+    /// The newest `status:*` tag (by `created_at`) on the root, a live
+    /// reply, or the closing resolve, split into its value and optional
+    /// addressee: `status:needs-decision:mailto:a@b` gives
+    /// `("needs-decision", Some("mailto:a@b"))`.
+    pub fn latest_status(&self) -> Option<(&'a str, Option<&'a str>)> {
+        self.live_records()
+            .filter_map(|r| r.as_annotation())
+            .filter_map(|a| {
+                a.body
+                    .tags
+                    .iter()
+                    .find_map(|tag| tag.strip_prefix("status:"))
+                    .map(|s| (*a.created_at, s))
+            })
+            .max_by_key(|(at, _)| *at)
+            .map(|(_, s)| match s.split_once(':') {
+                Some((value, addressee)) => (value, Some(addressee)),
+                None => (s, None),
+            })
+    }
+
+    /// The thread without its superseded replies (the default, non-`--all`
+    /// view of every read command).
+    pub fn without_superseded_replies(self) -> Self {
+        Thread {
+            replies: self.replies.into_iter().filter(|e| e.active).collect(),
+            ..self
+        }
+    }
+
+    /// The thread's current state.
+    pub fn state(&self) -> ThreadState<'a> {
+        let status = self.latest_status();
+        if let Some(closer) = self.closed_by.filter(|_| !self.open) {
+            let reason = closer.as_annotation().and_then(|a| {
+                a.body
+                    .tags
+                    .iter()
+                    .find_map(|tag| tag.strip_prefix("reason:"))
+            });
+            return ThreadState::Closed {
+                reason,
+                closer,
+                pending_question: status.is_some_and(|(s, _)| s == "needs-decision"),
+            };
+        }
+        match status {
+            Some(("needs-decision", addressee)) => ThreadState::NeedsDecision { addressee },
+            Some(("decided", _)) => ThreadState::Decided,
+            _ => ThreadState::Open,
+        }
+    }
+}
+
+/// The threads with any record on `subject` (a thread rooted elsewhere is
+/// included when one of its replies is on `subject`): open threads first,
+/// each group ordered by root subject, root span start line, then when the
+/// thread began. Unless `all`, superseded replies are dropped.
+pub fn threads_touching<'a>(records: &'a [Record], subject: &str, all: bool) -> Vec<Thread<'a>> {
+    let mut selected: Vec<Thread<'a>> = build_threads(records)
+        .into_iter()
+        .filter(|t| t.records().any(|r| r.subject() == subject))
+        .map(|t| {
+            if all {
+                t
+            } else {
+                t.without_superseded_replies()
+            }
+        })
+        .collect();
+    let began = |t: &Thread<'a>| {
+        t.records()
+            .find(|r| r.id() == t.origin)
+            .map_or(DateTime::<Utc>::MIN_UTC, created_at)
+    };
+    selected.sort_by(|a, b| {
+        b.open
+            .cmp(&a.open)
+            .then_with(|| a.root.subject().cmp(b.root.subject()))
+            .then_with(|| span_line(a.root).cmp(&span_line(b.root)))
+            .then_with(|| began(a).cmp(&began(b)))
+            .then_with(|| a.origin.cmp(b.origin))
+    });
+    selected
+}
+
+// ─── Kind filters ───────────────────────────────────────────────────────────
+
+/// Parse a comma-separated kind filter (`--kind`, `--fail-on`), trimming
+/// each entry and dropping blanks. Unknown names become [`Kind::Custom`];
+/// [`unknown_kind_warnings`] reports the ones that can never match.
+pub fn parse_kind_list(list: &str) -> Vec<Kind> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(|k| match k.parse::<Kind>() {
+            Ok(kind) => kind,
+            Err(never) => match never {},
+        })
+        .collect()
+}
+
+/// Warnings for kind filters (`--kind`, `--fail-on`) that can never match:
+/// one `<command>: warning: kind 'X' matches no known kind` per requested
+/// kind that is neither a built-in [`Kind`] nor the kind of any record in
+/// `records`. Custom kinds stay legal; this catches typos such as
+/// `blockers` that would otherwise match nothing silently.
+pub fn unknown_kind_warnings<'r>(
+    command: &str,
+    requested: &[Kind],
+    records: impl IntoIterator<Item = &'r Record>,
+) -> Vec<String> {
+    let custom: Vec<&Kind> = requested
+        .iter()
+        .filter(|k| matches!(k, Kind::Custom(_)))
+        .collect();
+    if custom.is_empty() {
+        return Vec::new();
+    }
+    let used: Vec<&Kind> = records.into_iter().filter_map(|r| r.kind()).collect();
+    let mut unknown: Vec<&Kind> = Vec::new();
+    for k in custom {
+        if !used.contains(&k) && !unknown.contains(&k) {
+            unknown.push(k);
+        }
+    }
+    unknown
+        .into_iter()
+        .map(|k| format!("{command}: warning: kind '{k}' matches no known kind"))
+        .collect()
+}
+
+// ─── Rendering ──────────────────────────────────────────────────────────────
+
+/// The first eight characters of a record ID.
+pub fn short_id(id: &str) -> &str {
+    &id[..id.len().min(8)]
+}
+
+/// A short display name for an issuer URI: `mailto:alice@example.com`
+/// becomes `alice`; any other URI is returned unchanged.
+pub fn short_issuer(issuer: &str) -> &str {
+    issuer
+        .strip_prefix("mailto:")
+        .and_then(|e| e.split('@').next())
+        .unwrap_or(issuer)
+}
+
+/// The one human renderer for threads, shared by `threads`, `show`, and
+/// `praise`. It never prints a record without its thread's state:
+///
+/// - An open thread prints its root line, carrying the state when it is
+///   waiting on or has reached a decision, then one indented line per
+///   live reply.
+/// - A closed thread prints one line that carries its answer:
+///   `[31ef1c78] concern    lib.rs:1  a() rounds wrong — closed (wontfix): Won't change b()`,
+///   ending in `— question still pending` when it closed on an unanswered
+///   `status:needs-decision`. Truncating output with `head`/`tail` keeps
+///   each closed thread's outcome. With [`ThreadRenderer::expand_closed`],
+///   its replies and the closing resolve follow that line.
+pub struct ThreadRenderer<'f> {
+    /// Also print edit history and superseded replies, marked
+    /// `(superseded)` (the `--all` view).
+    pub all: bool,
+    /// Print the replies and closing resolve of closed threads (used when a
+    /// thread is asked for by ID).
+    pub expand_closed: bool,
+    /// Append `(issuer, date)` to each record line, with the issuer type
+    /// between them when it is not `human`, and name who closed a closed
+    /// thread.
+    pub attribution: bool,
+    /// Extra lines printed under a record (span context, detail), indented
+    /// one step further than the record. Not called for the one-line form
+    /// of a closed thread.
+    pub continuation: Option<&'f Continuation<'f>>,
+}
+
+/// Produces the extra lines printed under one record; see
+/// [`ThreadRenderer::continuation`].
+pub type Continuation<'f> = dyn Fn(&Record) -> Vec<String> + 'f;
+
+const REPLY_INDENT: &str = "    ";
+
+impl ThreadRenderer<'_> {
+    /// Render `t` as lines without trailing newlines. The root line starts
+    /// at column 0; replies are indented by four spaces.
+    pub fn render(&self, t: &Thread<'_>) -> Vec<String> {
+        let state = t.state();
+        let mut out = vec![format!(
+            "[{}] {:<10} {}  {}{}{}",
+            short_id(t.root.id()),
+            kind_label(t.root),
+            location(t.root),
+            summary(t.root),
+            self.attribution_suffix(t.root),
+            self.state_suffix(&state),
+        )];
+        let closed = matches!(state, ThreadState::Closed { .. });
+        if closed && !self.expand_closed {
+            return out;
+        }
+        self.push_continuation(&mut out, t.root, "");
+        if self.all {
+            for r in &t.history {
+                out.push(format!(
+                    "{REPLY_INDENT}[{}] {:<10} {}{} (superseded)",
+                    short_id(r.id()),
+                    kind_label(r),
+                    summary(r),
+                    self.attribution_suffix(r),
+                ));
+            }
+        }
+        for e in t.replies.iter().filter(|e| self.all || e.active) {
+            let superseded = if e.active { "" } else { " (superseded)" };
+            out.push(format!(
+                "{REPLY_INDENT}[{}] {:<10} {}{}{superseded}",
+                short_id(e.record.id()),
+                kind_label(e.record),
+                summary(e.record),
+                self.attribution_suffix(e.record),
+            ));
+            self.push_continuation(&mut out, e.record, REPLY_INDENT);
+        }
+        if let ThreadState::Closed { reason, closer, .. } = state {
+            let label = match reason {
+                Some(r) => format!("resolve ({r})"),
+                None => "resolve".to_string(),
+            };
+            out.push(format!(
+                "{REPLY_INDENT}[{}] {:<10} {}{}",
+                short_id(closer.id()),
+                label,
+                summary(closer),
+                self.attribution_suffix(closer),
+            ));
+        }
+        out
+    }
+
+    fn push_continuation(&self, out: &mut Vec<String>, r: &Record, indent: &str) {
+        if let Some(f) = self.continuation {
+            out.extend(
+                f(r).into_iter()
+                    .map(|l| format!("{indent}{REPLY_INDENT}{l}")),
+            );
+        }
+    }
+
+    fn attribution_suffix(&self, r: &Record) -> String {
+        if !self.attribution {
+            return String::new();
+        }
+        let Some(a) = r.as_annotation() else {
+            return String::new();
+        };
+        let date = a.created_at.format("%Y-%m-%d");
+        match &a.issuer_type {
+            Some(t) if *t != IssuerType::Human => {
+                format!("  ({}, {t}, {date})", short_issuer(&a.issuer))
+            }
+            _ => format!("  ({}, {date})", short_issuer(&a.issuer)),
+        }
+    }
+
+    fn state_suffix(&self, state: &ThreadState<'_>) -> String {
+        match state {
+            ThreadState::Open => String::new(),
+            _ => format!(" — {}", state.describe(self.attribution)),
+        }
+    }
+}
+
+/// A record's kind, or its envelope type for non-annotations.
+pub fn kind_label(r: &Record) -> String {
+    r.kind()
+        .map(|k| k.to_string())
+        .unwrap_or_else(|| r.record_type().to_string())
+}
+
+fn summary(r: &Record) -> &str {
+    r.as_annotation()
+        .map(|a| a.body.summary.as_str())
+        .unwrap_or("")
+}
+
+/// `subject`, `subject:line`, or `subject:start:end` for a record's span.
+pub fn location(r: &Record) -> String {
+    match r.as_annotation().and_then(|a| a.body.span.as_ref()) {
+        Some(s) => match &s.end {
+            Some(e) if e.line != s.start.line => {
+                format!("{}:{}:{}", r.subject(), s.start.line, e.line)
+            }
+            _ => format!("{}:{}", r.subject(), s.start.line),
+        },
+        None => r.subject().to_string(),
+    }
+}
+
+/// The JSON object for one thread, as `qualifier threads --format json`
+/// prints it: `origin`, `open`, `state` ([`ThreadState::to_json`]),
+/// `root`, `closed_by`, `history`, `replies` (`{active, record}`), and
+/// `latest_at`.
+pub fn thread_json(t: &Thread<'_>) -> serde_json::Result<serde_json::Value> {
+    let replies = t
+        .replies
+        .iter()
+        .map(|e| -> serde_json::Result<serde_json::Value> {
+            Ok(serde_json::json!({
+                "active": e.active,
+                "record": serde_json::to_value(e.record)?,
+            }))
+        })
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    let history = t
+        .history
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    Ok(serde_json::json!({
+        "origin": t.origin,
+        "open": t.open,
+        "state": t.state().to_json(),
+        "root": serde_json::to_value(t.root)?,
+        "closed_by": t.closed_by.map(serde_json::to_value).transpose()?,
+        "history": history,
+        "replies": replies,
+        "latest_at": t.latest_at.to_rfc3339(),
+    }))
+}
+
+/// A compact per-thread summary for commands whose JSON is a record list
+/// (`show`, `praise`): `origin`, the live `root` ID, `state`, and the
+/// `closed_by` ID.
+pub fn thread_summary_json(t: &Thread<'_>) -> serde_json::Value {
+    serde_json::json!({
+        "origin": t.origin,
+        "root": t.root.id(),
+        "state": t.state().to_json(),
+        "closed_by": t.closed_by.map(|r| r.id()),
+    })
 }

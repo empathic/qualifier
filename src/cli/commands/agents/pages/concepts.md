@@ -126,20 +126,28 @@ https://ci.example.com        # CI job or tool with a URL
 urn:qualifier:compact         # reserved for the compact command
 ```
 
-`record`, `reply`, and `resolve` resolve `issuer`, `issuer_type`, and the
-`session:` tag in the same precedence order, each falling through to the
-next source when the previous one is unset. Empty environment variables
-count as unset.
+`record`, `reply`, `resolve`, and `emit` resolve `issuer`, `issuer_type`,
+and the `session:` tag in the same precedence order, each falling through
+to the next source when the previous one is unset. Empty environment
+variables count as unset.
 
 1. **Explicit flag** — `--issuer`, `--issuer-type`.
 2. **`QUALIFIER_*` environment variables** — `QUALIFIER_ISSUER`,
-   `QUALIFIER_ISSUER_TYPE`, `QUALIFIER_SESSION`.
-3. **Detected agent harness** — currently Claude Code: `CLAUDECODE=1`
-   implies `issuer_type: ai` and the tag
-   `session:claude-code:<CLAUDE_CODE_SESSION_ID>`.
-4. **VCS identity** (issuer only) — `git config user.email`, then
+   `QUALIFIER_ISSUER_TYPE`, `QUALIFIER_SESSION`. Values are taken as
+   strings.
+3. **Config file** (issuer only) — `issuer = "..."` in the project's
+   `.qualifier.toml`, else in `~/.config/qualifier/config.toml`.
+4. **Detected agent harness** (issuer type and session only) — currently
+   Claude Code: `CLAUDECODE=1` implies `issuer_type: ai` and the tag
+   `session:claude-code:<CLAUDE_CODE_SESSION_ID>`. The harness never sets
+   the issuer.
+5. **VCS identity** (issuer only) — `git config user.email`, then
    `hg config ui.username`, then `mailto:$USER@localhost`. There is no
    fallback for issuer type or session; they are simply omitted.
+
+The same config files can set `format = "json"` (or `QUALIFIER_FORMAT`)
+to change the default of every command's `--format` flag; an explicit
+`--format` still wins.
 
 As an agent running inside a detected harness (e.g. Claude Code), you can
 leave `--issuer` and `--issuer-type` unset — the defaults already mark the

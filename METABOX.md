@@ -9,7 +9,8 @@
 ## Abstract
 
 Metabox is a minimal envelope format for content-addressed records. It defines
-eight fixed fields that answer "who said what, when" plus a `body` object for
+up to eight fixed top-level fields: seven that answer "who said what, when"
+(one of them, `issuer_type`, optional) plus a `body` object for
 domain-specific payload. Records are JSONL, IDs are BLAKE3 hashes of a
 canonical form.
 
@@ -19,8 +20,8 @@ that benefits from content addressing and a uniform envelope.
 
 ## 1. Envelope Fields
 
-Every Metabox record is a JSON object with exactly eight top-level fields, in
-this canonical order:
+Every Metabox record is a JSON object with up to eight top-level fields (seven
+required, `issuer_type` optional), in this canonical order:
 
 | #   | Field          | Type   | Required | Description                                    |
 | --- | -------------- | ------ | -------- | ---------------------------------------------- |
@@ -33,8 +34,8 @@ this canonical order:
 | 7   | `id`           | string | yes      | Content-addressed BLAKE3 hash (see section 3). |
 | 8   | `body`         | object | yes      | Type-specific payload.                         |
 
-Seven fields are required. `issuer_type` is optional. All eight are present in
-the canonical field order.
+Seven fields are required. `issuer_type` is optional and omitted when not set.
+Fields that are present appear in the canonical order.
 
 ### 1.1 `metabox`
 
@@ -84,7 +85,8 @@ uniform across all record types.
 
 ### 1.6 `created_at`
 
-An RFC 3339 timestamp indicating when the record was created.
+An RFC 3339 timestamp indicating when the record was created. It is hashed
+exactly as written (section 3.7).
 
 ### 1.7 `id`
 
@@ -131,8 +133,8 @@ obey the following rules:
 Before serialization:
 
 - `id` MUST be set to `""` (the empty string).
-- All eight envelope fields MUST be present (optional fields use their absent
-  representation: `issuer_type` is omitted when not set).
+- The seven required envelope fields MUST be present; `issuer_type` is
+  omitted when not set.
 - `body` MUST be present (empty `{}` if the type has no fields).
 
 ### 3.2 Field Order
@@ -140,8 +142,15 @@ Before serialization:
 1. **Envelope fields** appear in the fixed order defined in section 1:
    `metabox`, `type`, `subject`, `issuer`, `issuer_type`, `created_at`, `id`,
    `body`. Optional envelope fields (`issuer_type`) are omitted when absent.
-2. **Body fields** are sorted lexicographically by key. Sorting is recursive:
-   nested objects also have their keys sorted lexicographically.
+2. **Body fields** are sorted lexicographically by key. Fields the body type
+   defines and any other (custom) fields are sorted together.
+
+This ordering rule covers the body's top-level keys. The key order inside a
+nested object is set by the body type's specification; Metabox does not yet
+define a general rule for it. Qualifier serializes its `span` object as
+`start`, `end`, `content_hash` and each position as `line`, `col`, and
+serializes free-form JSON values (custom field values, and the bodies of
+types it does not know) with keys in lexicographic order at every level.
 
 ### 3.3 Absent Optional Body Fields
 
@@ -163,6 +172,17 @@ escapes beyond what JSON requires.
 
 Integers serialize as bare decimal with no leading zeros, no decimal point, no
 exponent. Negative values use a leading `-`.
+
+### 3.7 Timestamps
+
+`created_at` is hashed exactly as it is written in the record.
+Implementations MUST NOT re-encode it (normalize the offset, add or drop
+fractional digits) when hashing or rewriting a record, so a record keeps
+its ID wherever it is copied. Any valid RFC 3339 timestamp is accepted.
+Records an implementation creates SHOULD use the canonical form: UTC with
+a `Z` suffix and 0, 3, 6, or 9 fractional-second digits, the fewest that
+represent the instant exactly (`2026-02-24T10:00:00Z`,
+`2026-02-24T10:00:00.500Z`).
 
 ## 4. Content Addressing
 

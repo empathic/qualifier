@@ -4,11 +4,13 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use clap::Args as ClapArgs;
+
+use crate::cli::output::Format;
 use globset::{GlobBuilder, GlobMatcher};
 
 use crate::annotation::{IssuerType, Kind, Record, Span};
-use crate::cli::targets::{self, short_id};
-use crate::threads::{self, Thread};
+use crate::cli::targets;
+use crate::threads::{self, Thread, ThreadRenderer};
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -38,8 +40,8 @@ pub struct Args {
     pub issuer_type: Option<String>,
 
     /// Output format (human, json)
-    #[arg(long, default_value = "human")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = Format::Human)]
+    pub format: Format,
 
     /// Don't respect .gitignore / .qualignore
     #[arg(long)]
@@ -72,6 +74,11 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     let locator = targets::Locator::from_cwd()?;
     let mut filter = Filter::from_args(&args, &locator)?;
+    if let Some(kinds) = &filter.kinds {
+        for warning in threads::unknown_kind_warnings("qualifier threads", kinds, &records) {
+            eprintln!("{warning}");
+        }
+    }
     if let Some(base) = args.changed_since.as_deref() {
         filter.changed = Some(changed_files(&repo_root()?, base)?);
     }
@@ -79,13 +86,19 @@ pub fn run(args: Args) -> crate::Result<()> {
     let selected: Vec<Thread<'_>> = all
         .into_iter()
         .filter(|t| filter.matches(t))
-        .map(|t| if args.all { t } else { live_replies_only(t) })
+        .map(|t| {
+            if args.all {
+                t
+            } else {
+                t.without_superseded_replies()
+            }
+        })
         .collect();
 
-    if args.format == "json" {
+    if args.format == Format::Json {
         print_json(&selected)
     } else {
-        print_human(&selected, args.all);
+        print_human(&selected, args.all, &filter);
         Ok(())
     }
 }
@@ -107,11 +120,7 @@ impl Filter {
             .iter()
             .map(|l| LocationFilter::parse(l, locator))
             .collect::<crate::Result<Vec<_>>>()?;
-        let kinds = args.kind.as_deref().map(|s| {
-            s.split(',')
-                .map(|k| k.trim().parse::<Kind>().unwrap())
-                .collect()
-        });
+        let kinds = args.kind.as_deref().map(threads::parse_kind_list);
         let issuer_type = args
             .issuer_type
             .as_deref()
@@ -126,6 +135,14 @@ impl Filter {
             status: args.status.clone(),
             changed: None,
         })
+    }
+
+    /// True when an ID-prefix argument selected `t`: the thread was asked
+    /// for by ID, so a closed one (listed under `--all`) is shown in full.
+    fn names_by_id(&self, t: &Thread<'_>) -> bool {
+        self.locations
+            .iter()
+            .any(|l| matches!(l, LocationFilter::Id(_)) && l.matches(t))
     }
 
     fn matches(&self, t: &Thread<'_>) -> bool {
@@ -192,7 +209,7 @@ impl LocationFilter {
         let root = t.root;
         match self {
             Self::Glob(m) => m.is_match(root.subject()),
-            Self::Id(prefix) => thread_records(t).any(|r| r.id().starts_with(prefix.as_str())),
+            Self::Id(prefix) => t.records().any(|r| r.id().starts_with(prefix.as_str())),
             Self::Path { subject, span } => {
                 let rs = root.subject().trim_end_matches('/');
                 let everything = subject.is_empty() || subject == ".";
@@ -216,14 +233,6 @@ impl LocationFilter {
     }
 }
 
-/// Every record in the thread: root, history, replies, and closing resolve.
-fn thread_records<'a>(t: &Thread<'a>) -> impl Iterator<Item = &'a Record> {
-    std::iter::once(t.root)
-        .chain(t.history.iter().copied())
-        .chain(t.replies.iter().map(|e| e.record))
-        .chain(t.closed_by)
-}
-
 /// Tags on the root, every live reply, and the closing resolve (only
 /// closed threads have one, and those are listed only under `--all`).
 fn thread_tags<'a>(t: &Thread<'a>) -> impl Iterator<Item = &'a str> {
@@ -242,21 +251,9 @@ fn tag_matches(pattern: &str, tag: &str) -> bool {
     }
 }
 
-/// The thread's latest `status:*` value (addressee suffix dropped), by
-/// `created_at`, over the root and live replies.
+/// The thread's latest `status:*` value, addressee dropped.
 fn latest_status<'a>(t: &Thread<'a>) -> Option<&'a str> {
-    std::iter::once(t.root)
-        .chain(t.replies.iter().filter(|e| e.active).map(|e| e.record))
-        .filter_map(|r| r.as_annotation())
-        .filter_map(|a| {
-            a.body
-                .tags
-                .iter()
-                .find_map(|tag| tag.strip_prefix("status:"))
-                .map(|s| (a.created_at, s))
-        })
-        .max_by_key(|(at, _)| *at)
-        .map(|(_, s)| s.split(':').next().unwrap_or(s))
+    t.latest_status().map(|(status, _)| status)
 }
 
 fn touches(files: &HashSet<String>, subject: &str) -> bool {
@@ -379,65 +376,16 @@ fn print_summary(all: &[Thread<'_>], explicit_base: Option<&str>) {
     }
 }
 
-fn live_replies_only(t: Thread<'_>) -> Thread<'_> {
-    Thread {
-        replies: t.replies.into_iter().filter(|e| e.active).collect(),
-        ..t
-    }
-}
-
-fn kind_label(r: &Record) -> String {
-    r.kind()
-        .map(|k| k.to_string())
-        .unwrap_or_else(|| r.record_type().to_string())
-}
-
-fn summary(r: &Record) -> &str {
-    r.as_annotation()
-        .map(|a| a.body.summary.as_str())
-        .unwrap_or("")
-}
-
-fn location(r: &Record) -> String {
-    match r.as_annotation().and_then(|a| a.body.span.as_ref()) {
-        Some(s) => match &s.end {
-            Some(e) if e.line != s.start.line => {
-                format!("{}:{}:{}", r.subject(), s.start.line, e.line)
-            }
-            _ => format!("{}:{}", r.subject(), s.start.line),
-        },
-        None => r.subject().to_string(),
-    }
-}
-
-fn print_human(threads: &[Thread<'_>], all: bool) {
+fn print_human(threads: &[Thread<'_>], all: bool, filter: &Filter) {
     for t in threads {
-        let closed = if t.open { "" } else { " (closed)" };
-        println!(
-            "[{}] {:<10} {}  {}{closed}",
-            short_id(t.root.id()),
-            kind_label(t.root),
-            location(t.root),
-            summary(t.root),
-        );
-        if all {
-            for r in &t.history {
-                println!(
-                    "    [{}] {:<10} {} (superseded)",
-                    short_id(r.id()),
-                    kind_label(r),
-                    summary(r),
-                );
-            }
-        }
-        for e in &t.replies {
-            let superseded = if e.active { "" } else { " (superseded)" };
-            println!(
-                "    [{}] {:<10} {}{superseded}",
-                short_id(e.record.id()),
-                kind_label(e.record),
-                summary(e.record),
-            );
+        let renderer = ThreadRenderer {
+            all,
+            expand_closed: filter.names_by_id(t),
+            attribution: false,
+            continuation: None,
+        };
+        for line in renderer.render(t) {
+            println!("{line}");
         }
     }
     let open = threads.iter().filter(|t| t.open).count();
@@ -448,35 +396,8 @@ fn print_human(threads: &[Thread<'_>], all: bool) {
 fn print_json(threads: &[Thread<'_>]) -> crate::Result<()> {
     let values = threads
         .iter()
-        .map(thread_json)
-        .collect::<crate::Result<Vec<_>>>()?;
+        .map(threads::thread_json)
+        .collect::<serde_json::Result<Vec<_>>>()?;
     println!("{}", serde_json::to_string(&values)?);
     Ok(())
-}
-
-fn thread_json(t: &Thread<'_>) -> crate::Result<serde_json::Value> {
-    let replies = t
-        .replies
-        .iter()
-        .map(|e| -> crate::Result<serde_json::Value> {
-            Ok(serde_json::json!({
-                "active": e.active,
-                "record": serde_json::to_value(e.record)?,
-            }))
-        })
-        .collect::<crate::Result<Vec<_>>>()?;
-    let history = t
-        .history
-        .iter()
-        .map(serde_json::to_value)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(serde_json::json!({
-        "origin": t.origin,
-        "open": t.open,
-        "root": serde_json::to_value(t.root)?,
-        "closed_by": t.closed_by.map(serde_json::to_value).transpose()?,
-        "history": history,
-        "replies": replies,
-        "latest_at": t.latest_at.to_rfc3339(),
-    }))
 }
