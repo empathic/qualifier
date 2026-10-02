@@ -116,55 +116,6 @@ pub fn write_all(path: &Path, records: &[Record]) -> crate::Result<()> {
     Ok(())
 }
 
-/// Resolve which `.qual` file should receive an annotation for the given subject.
-///
-/// Resolution order:
-/// 1. If `explicit_path` is provided, use it unconditionally (`--file` override).
-/// 2. If `{subject}.qual` exists, use it (backwards compat with 1:1 layout).
-/// 3. Otherwise, use `{parent_dir}/.qual` (recommended directory-level layout).
-///
-/// Creates parent directories if needed.
-#[cfg_attr(not(feature = "cli"), allow(dead_code))]
-pub(crate) fn resolve_qual_path(
-    subject: &str,
-    explicit_path: Option<&Path>,
-) -> crate::Result<PathBuf> {
-    if let Some(p) = explicit_path {
-        if let Some(parent) = p.parent()
-            && !parent.as_os_str().is_empty()
-            && !parent.exists()
-        {
-            fs::create_dir_all(parent)?;
-        }
-        return Ok(p.to_path_buf());
-    }
-
-    // 1. Check for existing 1:1 file
-    let one_to_one = PathBuf::from(format!("{subject}.qual"));
-    if one_to_one.exists() {
-        return Ok(one_to_one);
-    }
-
-    // 2. Default to directory-level .qual
-    let subject_path = Path::new(subject);
-    let parent = subject_path.parent().unwrap_or(Path::new("."));
-    let dir_qual = if parent.as_os_str().is_empty() {
-        PathBuf::from(".qual")
-    } else {
-        parent.join(".qual")
-    };
-
-    // Create parent directories if needed
-    if let Some(dir) = dir_qual.parent()
-        && !dir.as_os_str().is_empty()
-        && !dir.exists()
-    {
-        fs::create_dir_all(dir)?;
-    }
-
-    Ok(dir_qual)
-}
-
 /// Find all records for a given subject across all discovered `.qual` files.
 #[cfg_attr(not(feature = "cli"), allow(dead_code))]
 pub(crate) fn find_records_for<'a>(subject: &str, qual_files: &'a [QualFile]) -> Vec<&'a Record> {
@@ -519,59 +470,6 @@ mod tests {
 
         fs::create_dir_all(dir.path().join(".git")).unwrap();
         assert_eq!(detect_vcs(dir.path()), Some("git"));
-    }
-
-    #[test]
-    fn test_resolve_qual_path_prefers_existing_1to1() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("foo.rs.qual"), "").unwrap();
-
-        let subject = dir.path().join("src/foo.rs");
-        let path = resolve_qual_path(subject.to_str().unwrap(), None).unwrap();
-        assert_eq!(path, PathBuf::from(format!("{}.qual", subject.display())));
-    }
-
-    #[test]
-    fn test_resolve_qual_path_defaults_to_dir_qual() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-
-        // No existing 1:1 file → should resolve to directory .qual
-        let subject = dir.path().join("src/foo.rs");
-        let path = resolve_qual_path(subject.to_str().unwrap(), None).unwrap();
-        assert_eq!(path, src.join(".qual"));
-    }
-
-    #[test]
-    fn test_resolve_qual_path_root_level_subject() {
-        let dir = tempfile::tempdir().unwrap();
-        let subject = dir.path().join("README.md");
-        let path = resolve_qual_path(subject.to_str().unwrap(), None).unwrap();
-        assert_eq!(path, dir.path().join(".qual"));
-    }
-
-    #[test]
-    fn test_resolve_qual_path_explicit_override() {
-        let dir = tempfile::tempdir().unwrap();
-        let custom = dir.path().join("custom.qual");
-        let subject = dir.path().join("src/foo.rs");
-        let path = resolve_qual_path(subject.to_str().unwrap(), Some(&custom)).unwrap();
-        assert_eq!(path, custom);
-    }
-
-    #[test]
-    fn test_resolve_qual_path_creates_parent_dirs() {
-        let dir = tempfile::tempdir().unwrap();
-        let deep = dir.path().join("src/deep");
-
-        // src/deep/ doesn't exist yet
-        let subject = dir.path().join("src/deep/module.rs");
-        let path = resolve_qual_path(subject.to_str().unwrap(), None).unwrap();
-        assert_eq!(path, deep.join(".qual"));
-        assert!(deep.exists(), "parent dir should be created");
     }
 
     #[test]
