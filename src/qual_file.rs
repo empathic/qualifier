@@ -116,16 +116,6 @@ pub fn write_all(path: &Path, records: &[Record]) -> crate::Result<()> {
     Ok(())
 }
 
-/// Find all records for a given subject across all discovered `.qual` files.
-#[cfg_attr(not(feature = "cli"), allow(dead_code))]
-pub(crate) fn find_records_for<'a>(subject: &str, qual_files: &'a [QualFile]) -> Vec<&'a Record> {
-    qual_files
-        .iter()
-        .flat_map(|qf| qf.records.iter())
-        .filter(|r| r.subject() == subject)
-        .collect()
-}
-
 /// Discover all `.qual` files under a root directory.
 ///
 /// Walks the directory tree recursively, collecting every file whose name
@@ -470,40 +460,5 @@ mod tests {
 
         fs::create_dir_all(dir.path().join(".git")).unwrap();
         assert_eq!(detect_vcs(dir.path()), Some("git"));
-    }
-
-    #[test]
-    fn test_find_records_for_across_files() {
-        let att_a1 = make_annotation("src/a.rs", Kind::Praise, "good");
-        let att_a2 = make_annotation("src/a.rs", Kind::Concern, "meh");
-        let att_b = make_annotation("src/b.rs", Kind::Pass, "ok");
-
-        let qfs = vec![
-            QualFile {
-                path: PathBuf::from("src/.qual"),
-                subject: "src/".into(),
-                records: vec![
-                    Record::Annotation(Box::new(att_a1.clone())),
-                    Record::Annotation(Box::new(att_b.clone())),
-                ],
-            },
-            QualFile {
-                path: PathBuf::from("src/a.rs.qual"),
-                subject: "src/a.rs".into(),
-                records: vec![Record::Annotation(Box::new(att_a2.clone()))],
-            },
-        ];
-
-        let found = find_records_for("src/a.rs", &qfs);
-        assert_eq!(found.len(), 2);
-        assert!(found.iter().any(|r| r.id() == att_a1.id));
-        assert!(found.iter().any(|r| r.id() == att_a2.id));
-
-        let found_b = find_records_for("src/b.rs", &qfs);
-        assert_eq!(found_b.len(), 1);
-        assert_eq!(found_b[0].id(), att_b.id);
-
-        let found_none = find_records_for("src/c.rs", &qfs);
-        assert!(found_none.is_empty());
     }
 }

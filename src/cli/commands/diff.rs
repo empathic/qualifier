@@ -593,6 +593,7 @@ fn print_drifted(entry: &DriftEntry, project_root: &Path) {
     if let Some(ref span) = att.body.span {
         let ctx = span_context::read_span_context(
             &project_root.join(&att.subject),
+            &att.subject,
             span,
             span_context::DEFAULT_CONTEXT_LINES,
         );

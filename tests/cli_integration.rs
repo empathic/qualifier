@@ -144,16 +144,40 @@ fn test_show_json_output() {
 // --- qualifier show nonexistent artifact ---
 
 #[test]
-fn test_show_nonexistent_artifact() {
+fn test_show_and_praise_succeed_on_artifact_without_records() {
     let dir = tempfile::tempdir().unwrap();
-
-    let (_, stderr, code) = run_qualifier(dir.path(), &["show", "nonexistent.rs"]);
-
-    assert_ne!(code, 0, "show nonexistent artifact should fail");
-    assert!(
-        stderr.contains("No .qual file") || stderr.contains("nonexistent"),
-        "error should mention missing qual file: {stderr}"
+    // Another artifact has records; this one has none.
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "concern",
+            "a.rs",
+            "x",
+            "--issuer",
+            "mailto:t@x.com",
+        ],
     );
+
+    for cmd in ["show", "praise"] {
+        let (stdout, stderr, code) = run_qualifier(dir.path(), &[cmd, "nonexistent.rs"]);
+        assert_eq!(code, 0, "{cmd}: an empty result is not an error: {stderr}");
+        assert!(stderr.is_empty(), "{cmd}: {stderr}");
+        assert!(
+            stdout.contains("No records found for 'nonexistent.rs'"),
+            "{cmd}: {stdout}"
+        );
+
+        let (stdout, stderr, code) =
+            run_qualifier(dir.path(), &[cmd, "nonexistent.rs", "--format", "json"]);
+        assert_eq!(code, 0, "{cmd}: {stderr}");
+        let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"subject": "nonexistent.rs", "records": [], "threads": []}),
+            "{cmd}"
+        );
+    }
 }
 
 // --- flexible .qual file layout ---
@@ -414,6 +438,71 @@ fn test_ls_kind_filter() {
     assert!(!stdout.contains("b.rs"), "kind filter should hide praise");
 }
 
+#[test]
+fn test_ls_counts_live_records_and_kind_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let rec = |args: &[&str]| {
+        let mut full = vec!["record"];
+        full.extend_from_slice(args);
+        full.extend_from_slice(&["--issuer", "mailto:t@x.com"]);
+        let (stdout, _, code) = run_qualifier(dir.path(), &full);
+        assert_eq!(code, 0, "{stdout}");
+        stdout
+            .lines()
+            .find_map(|l| l.split("id:").nth(1))
+            .map(|s| s.trim().to_string())
+            .unwrap()
+    };
+    // a.rs: one concern, two comments.
+    rec(&["concern", "a.rs", "c1"]);
+    rec(&["comment", "a.rs", "n1"]);
+    rec(&["comment", "a.rs", "n2"]);
+    // b.rs: a concern that was resolved, plus one live comment.
+    let resolved = rec(&["concern", "b.rs", "old"]);
+    run_qualifier(
+        dir.path(),
+        &["resolve", &resolved, "done", "--issuer", "mailto:t@x.com"],
+    );
+    rec(&["comment", "b.rs", "still here"]);
+
+    let (stdout, _, code) = run_qualifier(dir.path(), &["ls"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("a.rs  (3 annotations)"), "{stdout}");
+    assert!(stdout.contains("b.rs  (1 annotation)"), "{stdout}");
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["ls", "--kind", "concern"]);
+    assert!(stdout.contains("a.rs  (1 annotation)"), "{stdout}");
+    assert!(
+        !stdout.contains("b.rs"),
+        "resolved concern still listed: {stdout}"
+    );
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["ls", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let b = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["subject"] == "b.rs")
+        .unwrap();
+    assert_eq!(b["annotation_count"], 1, "{stdout}");
+    assert_eq!(b["kinds"], serde_json::json!(["comment"]), "{stdout}");
+
+    let (stdout, _, _) =
+        run_qualifier(dir.path(), &["ls", "--kind", "concern", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v[0]["subject"], "a.rs", "{stdout}");
+    assert_eq!(v[0]["annotation_count"], 1, "{stdout}");
+}
+
+#[test]
+fn test_ls_unqualified_flag_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, stderr, code) = run_qualifier(dir.path(), &["ls", "--unqualified"]);
+    assert_eq!(code, 2, "clap rejects the removed flag: {stderr}");
+    assert!(stderr.contains("--unqualified"), "{stderr}");
+}
+
 // --- qualifier praise ---
 
 #[test]
@@ -451,16 +540,20 @@ fn test_praise_shows_records() {
         "should show artifact name: {stdout}"
     );
     assert!(
-        stdout.contains("2 records"),
-        "should show record count: {stdout}"
+        stdout.contains("2 threads (2 open)"),
+        "should show thread count: {stdout}"
     );
     assert!(
-        stdout.contains("alice@example.com"),
-        "should show issuer: {stdout}"
+        stdout.contains("(alice, "),
+        "should show issuer short name: {stdout}"
     );
     assert!(
-        stdout.contains("bob@example.com"),
-        "should show second issuer: {stdout}"
+        stdout.contains("(bob, "),
+        "should show second issuer short name: {stdout}"
+    );
+    assert!(
+        !stdout.contains("mailto:"),
+        "human output shortens issuer URIs: {stdout}"
     );
     assert!(
         stdout.contains("Well structured code"),
@@ -904,6 +997,56 @@ fn test_show_pretty_json() {
     let span_line = lines.iter().find(|l| l["in_span"] == true);
     assert!(span_line.is_some(), "should have an in_span line: {stdout}");
     assert_eq!(span_line.unwrap()["line"], 3);
+}
+
+#[test]
+fn test_show_pretty_prints_root_relative_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/a.rs"), "one\ntwo\nthree\n").unwrap();
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "src/a.rs:2",
+            "look here",
+            "--issuer",
+            "mailto:t@x.com",
+        ],
+    );
+    run_qualifier(
+        dir.path(),
+        &[
+            "record",
+            "comment",
+            "src/gone.rs:2",
+            "missing file",
+            "--issuer",
+            "mailto:t@x.com",
+        ],
+    );
+    let abs = dir.path().display().to_string();
+
+    let (stdout, _, code) = run_qualifier(&dir.path().join("src"), &["show", "a.rs", "--pretty"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(stdout.contains("  src/a.rs:\n"), "{stdout}");
+    assert!(!stdout.contains(&abs), "absolute path leaked: {stdout}");
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["show", "src/gone.rs", "--pretty"]);
+    assert!(
+        stdout.contains("could not read file: src/gone.rs"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains(&abs), "absolute path leaked: {stdout}");
+
+    let (stdout, _, _) = run_qualifier(
+        dir.path(),
+        &["show", "src/a.rs", "--format", "json", "--pretty"],
+    );
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["records"][0]["context"]["path"], "src/a.rs", "{stdout}");
 }
 
 #[test]
@@ -1458,11 +1601,12 @@ fn test_show_threads_replies_under_parent() {
         "reply should be threaded between first ({first}) and second ({second}), got reply at {reply}: {stdout}"
     );
 
-    // Reply line should have a tree-drawing character
-    let reply_line_text = lines[reply];
-    assert!(
-        reply_line_text.contains('\u{2514}') || reply_line_text.contains('\u{251c}'),
-        "reply should have tree branch character: {reply_line_text}"
+    // The reply is indented one step deeper than its root.
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    assert_eq!(
+        indent(lines[reply]),
+        indent(lines[first]) + 4,
+        "reply should be indented under its root: {stdout}"
     );
 }
 
@@ -1515,33 +1659,20 @@ fn test_resolve_basic() {
         "output should show supersedes line: {stdout2}"
     );
 
-    // Show should hide both the original (superseded) and the tombstone by default
+    // Show renders the closed thread as one line that carries its answer.
     let (show_stdout, _, show_code) = run_qualifier(dir.path(), &["show", "lib.rs"]);
     assert_eq!(show_code, 0);
     assert!(
-        !show_stdout.contains("needs improvement"),
-        "superseded record should be hidden from show: {show_stdout}"
+        show_stdout.contains("Closed threads (1)") && !show_stdout.contains("Open threads"),
+        "{show_stdout}"
     );
+    let line = show_stdout
+        .lines()
+        .find(|l| l.contains("needs improvement"))
+        .unwrap_or_else(|| panic!("closed thread line missing: {show_stdout}"));
     assert!(
-        !show_stdout.contains("fixed in PR #42"),
-        "resolve tombstone should be hidden by default: {show_stdout}"
-    );
-    assert!(
-        show_stdout.contains("Records (0)"),
-        "no active records should remain: {show_stdout}"
-    );
-
-    // Show --all should display the tombstone
-    let (show_all_stdout, _, show_all_code) =
-        run_qualifier(dir.path(), &["show", "lib.rs", "--all"]);
-    assert_eq!(show_all_code, 0);
-    assert!(
-        show_all_stdout.contains("resolve"),
-        "tombstone should appear with --all: {show_all_stdout}"
-    );
-    assert!(
-        show_all_stdout.contains("needs improvement"),
-        "superseded record should appear with --all: {show_all_stdout}"
+        line.contains("— closed by test: fixed in PR #42"),
+        "closed thread line carries the resolve: {show_stdout}"
     );
 }
 
@@ -1986,6 +2117,43 @@ fn test_review_finds_annotations_from_subdirectory() {
         stdout.contains("1 fresh"),
         "summary should report 1 fresh from subdir: {stdout}"
     );
+}
+
+#[test]
+fn test_review_subject_is_cwd_relative_and_matches_subtree() {
+    let dir = tempfile::tempdir().unwrap();
+    git_init(dir.path());
+    std::fs::create_dir_all(dir.path().join("src/net")).unwrap();
+    std::fs::write(dir.path().join("src/a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(dir.path().join("src/net/tcp.rs"), "fn t() {}\n").unwrap();
+    std::fs::write(dir.path().join("top.rs"), "fn top() {}\n").unwrap();
+    for loc in ["src/a.rs:1", "src/net/tcp.rs:1", "top.rs:1"] {
+        let (_, stderr, rc) = run_qualifier(
+            dir.path(),
+            &["record", "concern", loc, "x", "--issuer", "mailto:t@x.com"],
+        );
+        assert_eq!(rc, 0, "{stderr}");
+    }
+    let src = dir.path().join("src");
+
+    // From src/, `a.rs` names src/a.rs.
+    let (stdout, _, code) = run_qualifier(&src, &["review", "a.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("FRESH"), "{stdout}");
+    assert!(stdout.contains("src/a.rs:1"), "{stdout}");
+    assert!(stdout.contains("1 annotations checked"), "{stdout}");
+
+    // A directory selects every subject beneath it.
+    let (stdout, _, _) = run_qualifier(&src, &["review", "."]);
+    assert!(stdout.contains("2 annotations checked"), "{stdout}");
+    assert!(!stdout.contains("top.rs"), "{stdout}");
+    let (stdout, _, _) = run_qualifier(dir.path(), &["review", "src/net"]);
+    assert!(stdout.contains("src/net/tcp.rs:1"), "{stdout}");
+    assert!(stdout.contains("1 annotations checked"), "{stdout}");
+
+    // A path outside the project root is an error, not an empty success.
+    let (_, stderr, code) = run_qualifier(&src, &["review", "../../elsewhere.rs"]);
+    assert_ne!(code, 0, "{stderr}");
 }
 
 // --- qualifier emit (raw record write) ---
@@ -6169,10 +6337,7 @@ fn test_threads_all_includes_closed() {
     write_id(dir.path(), &["resolve", &b[..8], "fixed"]);
     let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--all"]);
     assert_eq!(code, 0);
-    assert!(
-        stdout.contains("b leaks") && stdout.contains("(closed)"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("b leaks — closed: fixed"), "{stdout}");
 }
 
 #[test]
@@ -6482,9 +6647,216 @@ fn test_show_marks_non_human_issuer_type() {
             .unwrap()
             .to_string()
     };
-    assert!(line("from an agent").contains("test (ai)"), "{stdout}");
-    assert!(!line("from a person").contains('('), "{stdout}");
-    assert!(!line("unspecified").contains('('), "{stdout}");
+    assert!(line("from an agent").contains("(test, ai, "), "{stdout}");
+    assert!(!line("from a person").contains("human"), "{stdout}");
+    assert!(line("from a person").contains("(test, "), "{stdout}");
+    assert!(line("unspecified").contains("(test, "), "{stdout}");
+    assert!(!line("unspecified").contains(", ai"), "{stdout}");
+}
+
+// --- thread state and the shared thread renderer ---
+
+/// The repro from GitHub issue #17: a concern, a reply asking an open
+/// question, and a wontfix resolve that answers it.
+fn closed_with_answer(dir: &Path) -> (String, String, String) {
+    std::fs::write(dir.join("lib.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+    let root = write_id(dir, &["record", "concern", "lib.rs:1", "a() rounds wrong"]);
+    let reply = write_id(
+        dir,
+        &[
+            "reply",
+            &root,
+            "Partly fixed. Open question for the maintainer: also change b()?",
+        ],
+    );
+    let closer = write_id(
+        dir,
+        &[
+            "resolve",
+            &root,
+            "Won't change b(): maintainer decided to keep it as is.",
+            "--reason",
+            "wontfix",
+        ],
+    );
+    (root, reply, closer)
+}
+
+const ANSWER: &str = "— closed (wontfix): Won't change b(): maintainer decided to keep it as is.";
+
+#[test]
+fn test_threads_all_renders_closed_thread_with_its_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    closed_with_answer(dir.path());
+    let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--all"]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 1, "a closed thread is one line: {stdout}");
+    assert!(lines[0].contains("a() rounds wrong"), "{stdout}");
+    assert!(lines[0].ends_with(ANSWER), "{stdout}");
+    assert!(!stdout.contains("Open question"), "{stdout}");
+}
+
+#[test]
+fn test_threads_by_id_expands_closed_thread_with_resolve_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, reply, closer) = closed_with_answer(dir.path());
+    let (stdout, _, code) = run_qualifier(dir.path(), &["threads", "--all", &root[..8]]);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "{stdout}");
+    assert!(lines[0].ends_with(ANSWER), "{stdout}");
+    assert!(lines[1].contains(&reply[..8]), "{stdout}");
+    assert!(lines[2].contains(&closer[..8]), "{stdout}");
+    assert!(lines[2].contains("resolve (wontfix)"), "{stdout}");
+}
+
+#[test]
+fn test_show_and_praise_render_closed_thread_with_its_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    closed_with_answer(dir.path());
+    for cmd in ["show", "praise"] {
+        let (stdout, stderr, code) = run_qualifier(dir.path(), &[cmd, "lib.rs"]);
+        assert_eq!(code, 0, "{cmd}: {stderr}");
+        let line = stdout
+            .lines()
+            .find(|l| l.contains("a() rounds wrong"))
+            .unwrap_or_else(|| panic!("{cmd}: root line missing: {stdout}"));
+        assert!(
+            line.contains("— closed (wontfix) by test: Won't change b()"),
+            "{cmd}: {stdout}"
+        );
+        assert!(
+            !stdout.contains("Open question"),
+            "{cmd}: a reply on a closed thread never appears on its own: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn test_closed_thread_with_unanswered_question_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_id(dir.path(), &["record", "concern", "lib.rs", "pick one"]);
+    write_id(
+        dir.path(),
+        &[
+            "reply",
+            &root,
+            "Needs a decision: A or B?",
+            "--tag",
+            "status:needs-decision",
+        ],
+    );
+    write_id(dir.path(), &["resolve", &root, "moved on"]);
+    let (stdout, _, _) = run_qualifier(dir.path(), &["threads", "--all"]);
+    assert!(
+        stdout.contains("pick one — closed: moved on — question still pending"),
+        "{stdout}"
+    );
+    let threads = threads_json(dir.path(), &["--all"]);
+    assert_eq!(threads[0]["state"]["name"], "closed");
+    assert_eq!(threads[0]["state"]["pending_question"], true);
+    assert_eq!(threads[0]["state"]["reason"], serde_json::Value::Null);
+}
+
+#[test]
+fn test_open_thread_states_in_human_and_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = write_id(dir.path(), &["record", "concern", "a.rs", "plain"]);
+    let asked = write_id(dir.path(), &["record", "concern", "b.rs", "asked"]);
+    write_id(
+        dir.path(),
+        &[
+            "reply",
+            &asked,
+            "A or B?",
+            "--tag",
+            "status:needs-decision:mailto:owner@example.com",
+        ],
+    );
+    let settled = write_id(dir.path(), &["record", "concern", "c.rs", "settled"]);
+    write_id(
+        dir.path(),
+        &["reply", &settled, "Decided: A", "--tag", "status:decided"],
+    );
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["threads"]);
+    let line = |needle: &str| {
+        stdout
+            .lines()
+            .find(|l| l.contains(needle))
+            .unwrap()
+            .to_string()
+    };
+    assert!(line("plain").ends_with("plain"), "{stdout}");
+    assert!(
+        line("asked").ends_with("asked — needs decision from owner"),
+        "{stdout}"
+    );
+    assert!(line("settled").ends_with("settled — decided"), "{stdout}");
+
+    let threads = threads_json(dir.path(), &[]);
+    let state = |id: &str| threads.iter().find(|t| t["origin"] == id).unwrap()["state"].clone();
+    assert_eq!(state(&plain), serde_json::json!({"name": "open"}));
+    assert_eq!(
+        state(&asked),
+        serde_json::json!({"name": "needs-decision", "addressee": "mailto:owner@example.com"})
+    );
+    assert_eq!(state(&settled), serde_json::json!({"name": "decided"}));
+}
+
+#[test]
+fn test_threads_json_closed_state_names_closer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, _, closer) = closed_with_answer(dir.path());
+    let threads = threads_json(dir.path(), &["--all"]);
+    assert_eq!(threads[0]["origin"], root.as_str());
+    assert_eq!(
+        threads[0]["state"],
+        serde_json::json!({
+            "name": "closed",
+            "reason": "wontfix",
+            "closed_by": closer,
+            "pending_question": false,
+        })
+    );
+}
+
+#[test]
+fn test_show_json_keeps_closed_threads_answer_and_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, reply, closer) = closed_with_answer(dir.path());
+    let open = write_id(dir.path(), &["record", "comment", "lib.rs", "still open"]);
+    let (stdout, _, code) = run_qualifier(dir.path(), &["show", "lib.rs", "--format", "json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let ids: Vec<&str> = v["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    for id in [&root, &reply, &closer, &open] {
+        assert!(ids.contains(&id.as_str()), "{id} missing: {stdout}");
+    }
+    let threads = v["threads"].as_array().unwrap();
+    assert_eq!(threads.len(), 2, "{stdout}");
+    assert_eq!(threads[0]["root"], open.as_str(), "open threads first");
+    assert_eq!(threads[0]["state"]["name"], "open");
+    assert_eq!(threads[1]["root"], root.as_str());
+    assert_eq!(threads[1]["closed_by"], closer.as_str());
+    assert_eq!(threads[1]["state"]["name"], "closed");
+
+    let (stdout, _, _) = run_qualifier(dir.path(), &["praise", "lib.rs", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["threads"].as_array().unwrap().len(), 2, "{stdout}");
+    let kinds: Vec<&str> = v["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"resolve"), "{stdout}");
 }
 
 // --- Custom body fields ---
@@ -6762,4 +7134,31 @@ fn test_malformed_sibling_qual_warns_on_read_and_blocks_rewrite() {
     assert!(stderr.contains("other/.qual:1:"), "{stderr}");
     let after = std::fs::read_to_string(dir.path().join("other/.qual")).unwrap();
     assert_eq!(after, format!("{bad}\n"));
+}
+
+#[test]
+fn test_threads_kind_warns_on_kind_matching_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    write_id(dir.path(), &["record", "blocker", "a.rs", "broken"]);
+    write_id(dir.path(), &["record", "nit", "a.rs", "custom kind"]);
+
+    let (stdout, stderr, code) =
+        run_qualifier(dir.path(), &["threads", "--kind", "blockers,nit,concern"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stderr.contains("qualifier threads: warning: kind 'blockers' matches no known kind"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("'nit'"),
+        "a custom kind in use is fine: {stderr}"
+    );
+    assert!(
+        !stderr.contains("'concern'"),
+        "built-in kinds never warn: {stderr}"
+    );
+    assert!(stdout.contains("custom kind"), "{stdout}");
+
+    let (_, stderr, _) = run_qualifier(dir.path(), &["threads", "--kind", "blocker"]);
+    assert!(!stderr.contains("warning"), "{stderr}");
 }
