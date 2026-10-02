@@ -1437,25 +1437,27 @@ ok "every *-prompt.md is mapped to its dispatching skill; placeholders documente
 # runs against a real qualifier in a fixture repository, so no example can
 # use a flag, key, line shape, or subcommand the CLI rejects.
 #
-# That binary is the checkout's build, but the shipped plugin runs only
-# PINNED_VERSION, so the build must be that version: otherwise the skills
-# pass here against a CLI their users never get. ALLOW_UNPINNED_SKILLS=1
-# turns the mismatch into a warning, for development between a CLI version
-# bump and the plugin release that pins it (see AGENTS.md).
-examples_bin="$EXAMPLES_BIN"
-for candidate in target/debug/qualifier target/release/qualifier; do
-    [ -n "$examples_bin" ] && break
-    [ -x "$candidate" ] && examples_bin="$PWD/$candidate"
-done
-if [ -n "$examples_bin" ]; then
-    built="$("$examples_bin" --version 2>/dev/null || true)"
-    if [ "$built" = "qualifier $PINNED" ]; then
-        ok "the skill-example binary is the pinned release's version ($built)"
-    elif [ "${ALLOW_UNPINNED_SKILLS:-}" = 1 ]; then
-        echo "warning: the skill-example binary reports '$built', not 'qualifier $PINNED' (PINNED_VERSION); allowed by ALLOW_UNPINNED_SKILLS=1"
+# That binary is the checkout's build. The shipped plugin runs only
+# PINNED_VERSION, so the pin must be the newest qualifier release: a pin
+# older than the newest `v*` tag means users run skills against a CLI the
+# plugin has not caught up to, and a pin newer than every tag names a
+# release that does not exist. Between a crate version bump and the
+# release that ships it, the checkout is ahead of the pin; that is
+# expected and passes. CI fetches tags (fetch-depth: 0); without any
+# `v*` tag the check fails under CI and is skipped locally.
+newest_tag="$(git tag --list 'v[0-9]*' 2>/dev/null | sed 's/^v//' | sort -V | tail -n 1)"
+if [ -z "$newest_tag" ]; then
+    if [ -n "${CI:-}" ]; then
+        fail "no v* release tags in this checkout, so PINNED_VERSION ($PINNED) cannot be checked against the newest release; fetch tags (actions/checkout fetch-depth: 0)"
     else
-        fail "the skill-example binary $examples_bin reports '$built', but the plugin pins qualifier $PINNED (PINNED_VERSION in $PLUGIN/scripts/ensure-qualifier.sh). Skills checked against it may not work with the release users run. Set ALLOW_UNPINNED_SKILLS=1 to check them anyway."
+        echo "skip: no v* release tags in this checkout; PINNED_VERSION ($PINNED) not checked against the newest release"
     fi
+elif [ "$PINNED" = "$newest_tag" ]; then
+    ok "PINNED_VERSION ($PINNED) is the newest qualifier release"
+elif [ "$(printf '%s\n%s\n' "$PINNED" "$newest_tag" | sort -V | tail -n 1)" = "$newest_tag" ]; then
+    fail "PINNED_VERSION ($PINNED, $PLUGIN/scripts/ensure-qualifier.sh) is older than the newest qualifier release (v$newest_tag): pin v$newest_tag and its SHA256_* values in a plugin release"
+else
+    fail "PINNED_VERSION ($PINNED, $PLUGIN/scripts/ensure-qualifier.sh) is newer than every qualifier release (newest: v$newest_tag): pin a released version"
 fi
 status=0
 QUALIFIER_BIN="$EXAMPLES_BIN" python3 scripts/check-skill-examples.py || status=$?

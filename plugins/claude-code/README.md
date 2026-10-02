@@ -101,11 +101,12 @@ repository (`scripts/check-skill-examples.py`): `$QUALIFIER_BIN`, else
 `target/debug/qualifier` or `target/release/qualifier`. Placeholders such as
 `<root.id>` are filled from the table in that script; an example that can't
 run is marked on the line before it with `<!-- example: skip — <reason> -->`
-(or `<!-- example: expect-fail -->` for an intended failure). That binary
-must report the version the plugin pins (`PINNED_VERSION`), since that is
-the release users run; between a crate version bump and the plugin
-release that pins it, set `ALLOW_UNPINNED_SKILLS=1` to check the skills
-anyway (the mismatch is then a warning).
+(or `<!-- example: expect-fail -->` for an intended failure). The plugin
+must pin the newest qualifier release: the check fails when
+`PINNED_VERSION` is older than the newest `v*` tag (a release the plugin
+hasn't caught up to) or newer than every tag. The checkout's build may be
+ahead of the pin between a crate version bump and the release that ships
+it.
 
 Any change under `plugins/claude-code/` outside `evals/` and `.qual`
 files needs a version bump in `.claude-plugin/plugin.json` (and the
