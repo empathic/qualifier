@@ -289,8 +289,9 @@ chmod +x "$UNAME_SHIM/uname"
 # W1. pinned-version resolves nothing: it works with an empty PATH.
 out="$(env -i PATH= HOME="$HOME" "$BASH" "$ENSURE" pinned-version)" || fail "pinned-version failed with an empty PATH"
 expected_pin="$(sed -n 's/^PINNED_VERSION="\(.*\)"$/\1/p' "$ENSURE")"
-[ -n "$expected_pin" ] && [ "$out" = "$expected_pin" ] \
-    || fail "pinned-version: expected PINNED_VERSION ($expected_pin), got $out"
+if [ -z "$expected_pin" ] || [ "$out" != "$expected_pin" ]; then
+    fail "pinned-version: expected PINNED_VERSION ($expected_pin), got $out"
+fi
 ok "pinned-version reports PINNED_VERSION with an empty PATH"
 
 # W2. The min-version mode is gone.
